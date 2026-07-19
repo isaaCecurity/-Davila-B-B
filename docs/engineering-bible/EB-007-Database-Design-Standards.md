@@ -894,20 +894,22 @@ Identity SHALL remain separate from business attributes.
 
 # Primary Key Type
 
-BakeFlow SHALL use UUID Version 7 (UUIDv7) as the default primary key format.
+BakeFlow SHALL use UUID Version 4 (UUIDv4) as the default primary key format.
 
 Example:
 
 ```text
-01981d7f-4d7b-7a92-b2c3-c1d81b4e6d21
+f47ac10b-58cc-4372-a567-0e02b2c3d479
 ```
 
-UUIDv7 provides:
+UUIDv4 provides:
 
 - Global uniqueness.
-- Time-ordered generation.
-- Better index locality than UUIDv4.
+- Cryptographically random generation, avoiding predictable or enumerable identifiers.
+- Native compatibility with PostgreSQL's `gen_random_uuid()` and Supabase Auth's default identifier format.
 - Distributed ID generation without collisions.
+
+UUIDv7 MAY be evaluated in a future Architecture Decision Record if time-ordered index locality becomes a measured performance requirement, but SHALL NOT be adopted without explicit governance approval and a corresponding update to this document.
 
 Auto-incrementing integers SHALL NOT be used for authoritative business entities.
 
@@ -1019,7 +1021,7 @@ Primary Keys SHALL be generated:
 - Without database contention.
 - Independently of business workflows.
 
-Applications, services, or the database MAY generate UUIDv7 values provided consistency is maintained.
+Applications, services, or the database MAY generate UUIDv4 values provided consistency is maintained.
 
 ---
 
@@ -1446,7 +1448,7 @@ Example:
 customer_id UUID NOT NULL
 ```
 
-UUID Version 7 SHALL be the platform standard.
+UUID Version 4 SHALL be the platform standard.
 
 ---
 
@@ -1528,7 +1530,7 @@ NUMERIC(p,s)
 Examples:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 for money.
@@ -1676,7 +1678,7 @@ Rapidly evolving classifications SHOULD instead use lookup tables.
 | Description | TEXT |
 | Email | TEXT |
 | Phone | TEXT |
-| Money | NUMERIC(18,2) |
+| Money | NUMERIC(19,4) |
 | Quantity | NUMERIC(18,4) |
 | Percentage | NUMERIC(5,2) |
 | Date | DATE |
@@ -1812,7 +1814,7 @@ updated_at
 Multi-tenant entities SHALL additionally include:
 
 ```text
-bakery_id
+tenant_id
 ```
 
 Branch-owned entities SHALL additionally include:
@@ -2938,7 +2940,7 @@ No business Entity SHALL belong to multiple Bakeries.
 Operational tables SHALL include:
 
 ```text
-bakery_id UUID NOT NULL
+tenant_id UUID NOT NULL
 ```
 
 Examples:
@@ -2955,7 +2957,7 @@ delivery
 expense
 ```
 
-The `bakery_id` SHALL identify the authoritative owner of each record.
+The `tenant_id` SHALL identify the authoritative owner of each record.
 
 ---
 
@@ -3076,19 +3078,19 @@ Administrative access SHALL be explicitly authorized and fully audited.
 Frequently queried tenant-owned tables SHALL include composite indexes beginning with:
 
 ```text
-bakery_id
+tenant_id
 ```
 
 Example:
 
 ```sql
-(bakery_id, created_at)
+(tenant_id, created_at)
 ```
 
 or
 
 ```sql
-(bakery_id, status)
+(tenant_id, status)
 ```
 
 Tenant-first indexing SHALL improve query performance and support Row-Level Security.
@@ -3344,7 +3346,7 @@ Manual population SHALL be avoided where possible.
 customer
 
 id
-bakery_id
+tenant_id
 name
 email
 
@@ -3921,7 +3923,7 @@ Ownership SHALL remain exclusive to the Financial Domain.
 Every monetary value SHALL use:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 Floating-point types SHALL NEVER represent money.

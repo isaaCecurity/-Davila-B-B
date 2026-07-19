@@ -593,7 +593,7 @@ Extensions SHALL undergo architectural review before adoption.
 
 # UUID Generation Strategy
 
-Primary identifiers SHALL use UUID Version 4 unless otherwise specified.
+Primary identifiers SHALL use UUID Version 4, consistent with the platform standard defined in EB-007 (Database Design Standards).
 
 UUID generation SHALL occur using PostgreSQL-supported secure generation functions.
 

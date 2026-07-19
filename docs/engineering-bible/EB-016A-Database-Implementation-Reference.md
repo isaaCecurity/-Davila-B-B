@@ -1364,7 +1364,7 @@ Sequential identifiers SHALL not replace canonical UUIDs.
 
 # UUID Version
 
-The canonical UUID implementation SHALL utilize UUID Version 4 unless future governance approves Version 7.
+The canonical UUID implementation SHALL utilize UUID Version 4, consistent with the platform standard defined in EB-007 (Database Design Standards). Adoption of UUID Version 7 would require an approved Architecture Decision Record and a corresponding update to EB-007, EB-011, and this document.
 
 UUID generation SHALL remain deterministic within PostgreSQL-supported mechanisms.
 

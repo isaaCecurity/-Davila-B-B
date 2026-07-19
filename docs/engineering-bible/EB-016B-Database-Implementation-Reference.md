@@ -357,7 +357,7 @@ Business records SHALL remain recoverable.
 Financial values SHALL use:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 Higher precision MAY be used for calculations where required.
@@ -851,7 +851,7 @@ Business-specific flags SHALL define explicit defaults.
 ## Currency
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 Examples:
@@ -945,7 +945,7 @@ Validation SHALL primarily occur within application services.
 
 ```sql
 CREATE DOMAIN money_amount
-AS NUMERIC(18,2)
+AS NUMERIC(19,4)
 CHECK (VALUE >= 0);
 ```
 

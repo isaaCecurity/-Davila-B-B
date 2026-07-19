@@ -2339,7 +2339,7 @@ Files SHALL use deterministic naming conventions.
 Example:
 
 ```text
-bakery_id/
+tenant_id/
 
 branch_id/
 
@@ -2391,7 +2391,7 @@ size_bytes
 
 uploaded_by
 
-bakery_id
+tenant_id
 
 created_at
 ```
@@ -2654,7 +2654,7 @@ Realtime channels SHOULD follow standardized naming.
 Examples:
 
 ```text
-bakery:{bakery_id}
+bakery:{tenant_id}
 
 branch:{branch_id}
 
@@ -4276,7 +4276,7 @@ orders
 
 ↓
 
-bakery_id
+tenant_id
 ```
 
 ```text
@@ -4284,7 +4284,7 @@ customers
 
 ↓
 
-bakery_id
+tenant_id
 ```
 
 ```text
@@ -4292,7 +4292,7 @@ inventory
 
 ↓
 
-bakery_id
+tenant_id
 ```
 
 Tenant ownership SHALL never be inferred.
@@ -7678,7 +7678,7 @@ updated_at
 
 deleted_at
 
-bakery_id
+tenant_id
 
 branch_id
 
@@ -7722,7 +7722,7 @@ referenced_table_id
 Examples:
 
 ```text
-bakery_id
+tenant_id
 
 branch_id
 
