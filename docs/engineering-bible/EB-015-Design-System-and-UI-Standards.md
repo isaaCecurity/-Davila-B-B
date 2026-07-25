@@ -11090,7 +11090,7 @@ Organizations MAY customize:
 
 - Logo.
 - Accent Color.
-- Company Name.
+- Organization Name.
 - Printed Reports.
 - Customer Documents.
 

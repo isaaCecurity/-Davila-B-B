@@ -12545,7 +12545,7 @@ The `storage_objects` table SHALL represent every stored file.
 Examples include:
 
 - Product Images
-- Company Logos
+- Organization Logos
 - Invoice PDFs
 - Receipts
 - Delivery Signatures
@@ -21212,7 +21212,7 @@ Examples:
 - Total Revenue
 - Total Inventory
 - Branch Comparison
-- Company Profit
+- Organization Profit
 - Enterprise Dashboards
 
 Consolidation SHALL derive from authoritative operational records.
