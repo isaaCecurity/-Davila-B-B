@@ -75,7 +75,7 @@ Ambiguous terminology SHALL NOT exist within BakeFlow.
 
 This document governs every business concept used throughout the BakeFlow platform, including:
 
-- Bakery organizations.
+- Organization organizations.
 - Branches.
 - Employees.
 - Customers.
@@ -153,7 +153,7 @@ Every domain object SHALL represent something that exists within real bakery ope
 Examples include:
 
 - Customer.
-- Bakery.
+- Organization.
 - Branch.
 - Employee.
 - Order.
@@ -287,7 +287,7 @@ BakeFlow consists of the following primary business domains.
 
 | Domain | Responsibility |
 |----------|----------------|
-| Organization | Bakery ownership, branches and business structure |
+| Organization | Organization ownership, branches and business structure |
 | Identity | Users, authentication, authorization and permissions |
 | Customer | Customer information and relationships |
 | Product | Products, categories, pricing and recipes |
@@ -349,13 +349,13 @@ Every operational record SHALL belong to an organizational structure.
 
 ## Primary Entity
 
-### Bakery
+### Organization
 
-A Bakery represents an independent business organization.
+An Organization represents an independent business organization.
 
-The Bakery is the highest-level business entity within BakeFlow.
+The Organization is the highest-level business entity within BakeFlow.
 
-A Bakery SHALL own:
+An Organization SHALL own:
 
 - Branches.
 - Employees.
@@ -368,13 +368,13 @@ A Bakery SHALL own:
 - Reports.
 - Business settings.
 
-The Bakery represents the tenant boundary of the platform.
+The Organization represents the tenant boundary of the platform.
 
 ---
 
-## Bakery Responsibilities
+## Organization Responsibilities
 
-A Bakery SHALL be responsible for:
+An Organization SHALL be responsible for:
 
 - Business identity.
 - Operational ownership.
@@ -384,7 +384,7 @@ A Bakery SHALL be responsible for:
 - Organizational policies.
 - Global business configuration.
 
-The Bakery SHALL NOT directly perform operational activities.
+The Organization SHALL NOT directly perform operational activities.
 
 Operational activities SHALL occur through Branches.
 
@@ -392,7 +392,7 @@ Operational activities SHALL occur through Branches.
 
 ## Branch
 
-A Branch represents a physical operating location belonging to a Bakery.
+A Branch represents a physical operating location belonging to an Organization.
 
 Examples include:
 
@@ -402,7 +402,7 @@ Examples include:
 - Warehouse.
 - Outlet.
 
-Every Branch SHALL belong to exactly one Bakery.
+Every Branch SHALL belong to exactly one Organization.
 
 ---
 
@@ -419,14 +419,14 @@ A Branch SHALL own:
 - Deliveries.
 - Operational reports.
 
-Branches SHALL inherit organizational policies from their Bakery unless explicitly overridden by approved configuration.
+Branches SHALL inherit organizational policies from their Organization unless explicitly overridden by approved configuration.
 
 ---
 
 ## Organizational Hierarchy
 
 ```text
-Bakery
+Organization
    │
    ├── Branch
    │      ├── Employees
@@ -441,7 +441,7 @@ Bakery
    └── Branch
 ```
 
-The Bakery SHALL remain the parent organization for every operational entity.
+The Organization SHALL remain the parent organization for every operational entity.
 
 ---
 
@@ -526,7 +526,7 @@ A User SHALL possess:
 - Audit ownership.
 - Security settings.
 
-A User SHALL remain unique across the entire Bakery organization.
+A User SHALL remain unique across the entire Organization organization.
 
 ---
 
@@ -549,7 +549,7 @@ Every action SHALL be attributable to exactly one User.
 
 ## Employee
 
-An Employee represents a User performing work on behalf of a Bakery.
+An Employee represents a User performing work on behalf of an Organization.
 
 Employee status describes the business relationship between the User and the organization.
 
@@ -595,7 +595,7 @@ Branch assignments SHALL determine operational responsibilities.
 ## Organizational Relationship
 
 ```text
-Bakery
+Organization
      │
      ▼
  Employee
@@ -734,7 +734,7 @@ Continuation
 
 ## Purpose
 
-The Customer Domain represents the individuals and organizations that purchase goods or services from a Bakery.
+The Customer Domain represents the individuals and organizations that purchase goods or services from an Organization.
 
 The Customer Domain exists to preserve long-term customer relationships rather than merely record sales transactions.
 
@@ -746,7 +746,7 @@ Customers SHALL remain independent business entities with persistent identities.
 
 ### Customer
 
-A Customer represents a person, household, business, institution, or organization that purchases products or services from a Bakery.
+A Customer represents a person, household, business, institution, or organization that purchases products or services from an Organization.
 
 Examples include:
 
@@ -866,14 +866,14 @@ A Customer SHALL always remain the owner of their commercial history.
 
 ## Customer Ownership
 
-Every Customer SHALL belong to exactly one Bakery.
+Every Customer SHALL belong to exactly one Organization.
 
-Customers MAY interact with multiple Branches belonging to the same Bakery.
+Customers MAY interact with multiple Branches belonging to the same Organization.
 
 Example:
 
 ```text
-Bakery
+Organization
       │
       ▼
  Customer
@@ -885,7 +885,7 @@ Bakery
       └── Loyalty Account
 ```
 
-Customer records SHALL be shared across authorized Branches within the same Bakery.
+Customer records SHALL be shared across authorized Branches within the same Organization.
 
 ---
 
@@ -898,7 +898,7 @@ The following rules SHALL always remain true.
 - Historical Orders SHALL always preserve the original Customer reference.
 - Customer deletion SHALL NOT invalidate historical financial records.
 - Customer history SHALL remain complete and auditable.
-- Customer ownership SHALL remain within a single Bakery.
+- Customer ownership SHALL remain within a single Organization.
 - Customer data SHALL comply with applicable privacy and security requirements.
 
 These invariants preserve customer continuity, financial integrity, and long-term relationship management.
@@ -945,7 +945,7 @@ Continuation
 
 ## Purpose
 
-The Product Domain defines every item that a Bakery offers for sale or internal production.
+The Product Domain defines every item that an Organization offers for sale or internal production.
 
 Products represent the commercial goods exchanged with customers.
 
@@ -957,7 +957,7 @@ The Product Domain SHALL remain independent from inventory, production, and fina
 
 ### Product
 
-A Product represents a sellable item offered by a Bakery.
+A Product represents a sellable item offered by an Organization.
 
 Examples include:
 
@@ -1141,7 +1141,7 @@ The following rules SHALL always remain true.
 - Historical Orders SHALL preserve the Product sold at the time of purchase.
 - Product deletion SHALL NOT invalidate historical business records.
 - Pricing history SHALL remain auditable.
-- Products SHALL belong to exactly one Bakery.
+- Products SHALL belong to exactly one Organization.
 - Product identity SHALL remain independent of inventory levels.
 
 These invariants preserve commercial consistency, reporting accuracy, and long-term maintainability.
@@ -1188,7 +1188,7 @@ Continuation
 
 ## Purpose
 
-The Inventory Domain governs every physical resource owned, consumed, transferred, produced, or stored by a Bakery.
+The Inventory Domain governs every physical resource owned, consumed, transferred, produced, or stored by an Organization.
 
 Inventory represents operational assets rather than commercial offerings.
 
@@ -1200,7 +1200,7 @@ The Inventory Domain SHALL ensure accurate visibility, traceability, and account
 
 ### Inventory Item
 
-An Inventory Item represents a physical resource tracked by the Bakery.
+An Inventory Item represents a physical resource tracked by the Organization.
 
 Examples include:
 
@@ -1317,7 +1317,7 @@ Every Stock Movement SHALL be permanently recorded.
 
 # Supplier
 
-A Supplier represents an external organization providing Inventory Items to the Bakery.
+A Supplier represents an external organization providing Inventory Items to the Organization.
 
 Examples include:
 
@@ -1428,7 +1428,7 @@ Continuation
 
 The Production Domain governs the transformation of raw inventory into finished bakery products.
 
-Production represents the operational heart of the Bakery.
+Production represents the operational heart of the Organization.
 
 Its responsibility is to ensure that products are manufactured consistently, efficiently, safely, and traceably.
 
@@ -1663,7 +1663,7 @@ Continuation
 
 ## Purpose
 
-The Sales Domain governs the commercial exchange between the Bakery and its Customers.
+The Sales Domain governs the commercial exchange between the Organization and its Customers.
 
 Its responsibility is to transform customer demand into completed business transactions while preserving operational and financial integrity.
 
@@ -1679,7 +1679,7 @@ An Order represents a Customer's request to purchase one or more Products.
 
 An Order is the central commercial transaction within BakeFlow.
 
-Every Order SHALL represent an agreement between a Customer and the Bakery at a specific point in time.
+Every Order SHALL represent an agreement between a Customer and the Organization at a specific point in time.
 
 ---
 
@@ -1812,7 +1812,7 @@ Each relationship SHALL preserve complete commercial traceability.
 
 The following rules SHALL always remain true.
 
-- Every Order SHALL belong to exactly one Bakery.
+- Every Order SHALL belong to exactly one Organization.
 - Every Order SHALL belong to exactly one Branch.
 - Every Order SHALL reference one Customer or an approved anonymous customer profile.
 - Every Order SHALL contain at least one Order Item.
@@ -1877,7 +1877,7 @@ The Financial Domain SHALL act as the authoritative owner of all accounting info
 
 ### Financial Transaction
 
-A Financial Transaction represents a monetary business event that changes the financial position of the Bakery.
+A Financial Transaction represents a monetary business event that changes the financial position of the Organization.
 
 Examples include:
 
@@ -1940,7 +1940,7 @@ Payments SHALL remain permanently associated with their originating financial re
 
 ## Expense
 
-An Expense represents a reduction in organizational resources incurred while operating the Bakery.
+An Expense represents a reduction in organizational resources incurred while operating the Organization.
 
 Examples include:
 
@@ -2007,7 +2007,7 @@ The following rules SHALL always remain true.
 - Payments SHALL preserve historical settlement information.
 - Financial adjustments SHALL never overwrite historical accounting records.
 - Every monetary value SHALL be traceable to a legitimate business event.
-- Financial ownership SHALL remain within a single Bakery.
+- Financial ownership SHALL remain within a single Organization.
 
 These invariants preserve accounting correctness, auditability, and long-term financial integrity.
 
@@ -2535,7 +2535,7 @@ Continuation
 
 ## Purpose
 
-The Administration Domain governs the configuration, operational policies, and business settings that control how a Bakery operates.
+The Administration Domain governs the configuration, operational policies, and business settings that control how an Organization operates.
 
 Administration defines organizational behavior without directly participating in operational workflows.
 
@@ -2547,7 +2547,7 @@ Administrative configuration SHALL influence business behavior through policy ra
 
 ### Business Configuration
 
-Business Configuration represents the collection of settings that define how a Bakery operates.
+Business Configuration represents the collection of settings that define how an Organization operates.
 
 Examples include:
 
@@ -2562,7 +2562,7 @@ Examples include:
 - Inventory policies.
 - Delivery policies.
 
-Configuration SHALL belong to the Bakery unless explicitly overridden by a Branch.
+Configuration SHALL belong to the Organization unless explicitly overridden by a Branch.
 
 ---
 
@@ -2580,7 +2580,7 @@ Examples include:
 - Inventory thresholds.
 - Cash drawer policies.
 
-Branch Configuration SHALL inherit Bakery Configuration by default.
+Branch Configuration SHALL inherit Organization Configuration by default.
 
 ---
 
@@ -2605,7 +2605,7 @@ Policies SHALL be versioned and auditable.
 ## Administration Relationships
 
 ```text
-Bakery
+Organization
      │
      ▼
 Business Configuration
@@ -2628,8 +2628,8 @@ Administrative configuration SHALL remain separate from operational data.
 
 The following rules SHALL always remain true.
 
-- Every Bakery SHALL possess one active Business Configuration.
-- Every Branch SHALL inherit Bakery Configuration unless overridden.
+- Every Organization SHALL possess one active Business Configuration.
+- Every Branch SHALL inherit Organization Configuration unless overridden.
 - Policy changes SHALL be versioned.
 - Historical business records SHALL preserve the policy context under which they were created.
 - Configuration changes SHALL remain auditable.
@@ -2826,11 +2826,11 @@ Entities outside an Aggregate SHALL reference only its Aggregate Root.
 
 ---
 
-## Bakery Aggregate
+## Organization Aggregate
 
 ### Aggregate Root
 
-**Bakery**
+**Organization**
 
 Owned Entities MAY include:
 
@@ -2840,7 +2840,7 @@ Owned Entities MAY include:
 - Subscription Information.
 - Organizational Settings.
 
-The Bakery Aggregate defines the tenant boundary of the platform.
+The Organization Aggregate defines the tenant boundary of the platform.
 
 ---
 
@@ -3000,7 +3000,7 @@ Reports SHALL derive their information from authoritative Aggregates.
 
 | Aggregate Root | Owns |
 |----------------|------|
-| Bakery | Organizational Structure |
+| Organization | Organizational Structure |
 | Employee | Employment Information |
 | Customer | Customer Relationship |
 | Product | Commercial Product Definition |
@@ -3063,11 +3063,11 @@ Every downstream Engineering Standard, API, database schema, user interface, rep
 
 ---
 
-## Bakery
+## Organization
 
-A Bakery is the highest-level business organization within BakeFlow.
+An Organization is the highest-level business organization within BakeFlow.
 
-A Bakery owns:
+An Organization owns:
 
 - Branches.
 - Employees.
@@ -3078,13 +3078,13 @@ A Bakery owns:
 - Production Operations.
 - Business Configuration.
 
-A Bakery represents the tenant boundary for the platform.
+An Organization represents the tenant boundary for the platform.
 
 ---
 
 ## Branch
 
-A Branch is a physical operating location belonging to a Bakery.
+A Branch is a physical operating location belonging to an Organization.
 
 A Branch performs day-to-day business operations.
 
@@ -3101,7 +3101,7 @@ Operational ownership SHALL belong to Branches.
 
 ## Employee
 
-An Employee represents an individual working for a Bakery.
+An Employee represents an individual working for an Organization.
 
 Employees perform business activities according to assigned Roles and Permissions.
 
@@ -3111,7 +3111,7 @@ Employee status represents employment rather than authentication.
 
 ## Customer
 
-A Customer represents an individual or organization purchasing goods or services from the Bakery.
+A Customer represents an individual or organization purchasing goods or services from the Organization.
 
 Customers own their commercial history.
 
@@ -3266,7 +3266,7 @@ Identity SHALL remain independent of mutable business attributes.
 
 | Entity | Owner |
 |---------|-------|
-| Bakery | Organization Domain |
+| Organization | Organization Domain |
 | Branch | Organization Domain |
 | User | Identity Domain |
 | Employee | Identity Domain |
@@ -3339,13 +3339,13 @@ Every Engineering Standard SHALL enforce these rules.
 
 The following organizational rules SHALL always apply.
 
-- Every Branch SHALL belong to exactly one Bakery.
-- Every Employee SHALL belong to exactly one Bakery.
+- Every Branch SHALL belong to exactly one Organization.
+- Every Employee SHALL belong to exactly one Organization.
 - Employees MAY be assigned to multiple Branches.
-- Every business record SHALL belong to exactly one Bakery.
-- Cross-Bakery data access SHALL NOT be permitted unless explicitly supported by future enterprise architecture.
+- Every business record SHALL belong to exactly one Organization.
+- Cross-Organization data access SHALL NOT be permitted unless explicitly supported by future enterprise architecture.
 
-The Bakery SHALL remain the highest organizational boundary.
+The Organization SHALL remain the highest organizational boundary.
 
 ---
 
@@ -3368,7 +3368,7 @@ Identity SHALL preserve accountability throughout the platform.
 Customer management SHALL satisfy the following constraints.
 
 - Customers MAY place multiple Orders.
-- Customers MAY interact with multiple Branches within the same Bakery.
+- Customers MAY interact with multiple Branches within the same Organization.
 - Customers SHALL retain their purchase history permanently.
 - Customer deletion SHALL NOT invalidate historical business records.
 - Anonymous sales SHALL use approved anonymous customer identities rather than null references.
@@ -3385,7 +3385,7 @@ Products SHALL satisfy the following rules.
 - Products MAY have multiple Prices.
 - Products SHALL remain independent of Inventory.
 - Historical pricing SHALL remain immutable after sale.
-- Products SHALL belong to exactly one Bakery.
+- Products SHALL belong to exactly one Organization.
 
 Products define commercial offerings rather than operational resources.
 
@@ -3546,7 +3546,7 @@ Events SHALL describe **what happened**, not **what should happen**.
 
 Examples include:
 
-- Bakery Created.
+- Organization Created.
 - Branch Opened.
 - Branch Closed.
 - Branch Configuration Updated.
@@ -3752,7 +3752,7 @@ Historical lifecycle transitions SHALL remain permanently traceable.
 
 ---
 
-# Bakery Lifecycle
+# Organization Lifecycle
 
 ```text
 Registered
@@ -3770,7 +3770,7 @@ Suspended
 Archived
 ```
 
-A Bakery SHALL preserve all historical records regardless of lifecycle state.
+An Organization SHALL preserve all historical records regardless of lifecycle state.
 
 ---
 
@@ -4123,7 +4123,7 @@ Examples include:
 - Tray.
 - Pack.
 
-Units SHALL remain standardized across the Bakery.
+Units SHALL remain standardized across the Organization.
 
 ---
 
@@ -4293,11 +4293,11 @@ Every Engineering Standard SHALL preserve these invariants.
 
 The following organizational truths SHALL always remain valid.
 
-- Every Branch SHALL belong to exactly one Bakery.
-- Every business record SHALL belong to exactly one Bakery.
+- Every Branch SHALL belong to exactly one Organization.
+- Every business record SHALL belong to exactly one Organization.
 - Every operational activity SHALL occur within one Branch.
-- Bakery ownership SHALL remain immutable for historical records.
-- Cross-Bakery ownership SHALL never occur.
+- Organization ownership SHALL remain immutable for historical records.
+- Cross-Organization ownership SHALL never occur.
 
 Organizational isolation SHALL preserve tenant integrity.
 
@@ -4311,7 +4311,7 @@ The following identity truths SHALL always remain valid.
 - Every authenticated action SHALL be attributable to one User.
 - Historical ownership SHALL NEVER be reassigned.
 - User deletion SHALL NOT invalidate audit history.
-- Identity SHALL remain globally unique within the Bakery.
+- Identity SHALL remain globally unique within the Organization.
 
 Identity SHALL preserve accountability.
 
@@ -4325,7 +4325,7 @@ The following customer truths SHALL always remain valid.
 - Customers SHALL permanently retain their commercial history.
 - Historical Orders SHALL never lose Customer references.
 - Customer archival SHALL NOT remove financial history.
-- Customer ownership SHALL remain within one Bakery.
+- Customer ownership SHALL remain within one Organization.
 
 Customer relationships SHALL remain durable.
 
@@ -4486,7 +4486,7 @@ When uncertainty exists regarding ownership, the authoritative domain defined in
 
 The Organization Domain SHALL own:
 
-- Bakery registration.
+- Organization registration.
 - Branch management.
 - Organizational hierarchy.
 - Business ownership.
@@ -4935,7 +4935,7 @@ Boundaries SHALL remain stable even as implementation technologies evolve.
 
 The Organization Domain SHALL own:
 
-- Bakery identity.
+- Organization identity.
 - Branch identity.
 - Organizational hierarchy.
 - Tenant isolation.
@@ -5185,9 +5185,9 @@ Alternative names, abbreviations, or synonyms SHALL NOT replace the terminology 
 
 | Canonical Term | Definition |
 |----------------|------------|
-| Bakery | The highest-level business organization and tenant within BakeFlow. |
-| Branch | A physical operating location belonging to a Bakery. |
-| Business Configuration | Organizational settings governing Bakery operations. |
+| Organization | The highest-level business organization and tenant within BakeFlow. |
+| Branch | A physical operating location belonging to an Organization. |
+| Business Configuration | Organizational settings governing Organization operations. |
 | Business Policy | A versioned rule controlling business behavior. |
 
 These terms SHALL be used consistently across all organizational features.
@@ -5199,7 +5199,7 @@ These terms SHALL be used consistently across all organizational features.
 | Canonical Term | Definition |
 |----------------|------------|
 | User | A uniquely identifiable person capable of authenticating into BakeFlow. |
-| Employee | A User employed by a Bakery. |
+| Employee | A User employed by an Organization. |
 | Role | A reusable collection of business responsibilities. |
 | Permission | Authorization to perform a specific business capability. |
 
@@ -5236,7 +5236,7 @@ A Recipe SHALL define production, not commercial identity.
 
 | Canonical Term | Definition |
 |----------------|------------|
-| Inventory Item | A physical resource tracked by the Bakery. |
+| Inventory Item | A physical resource tracked by the Organization. |
 | Stock Level | Quantity available at a Branch. |
 | Stock Movement | A permanent record of inventory quantity change. |
 | Warehouse | A physical storage location. |
@@ -5734,7 +5734,7 @@ Continuation
 
 ## Purpose
 
-A Business Capability represents a stable organizational ability that BakeFlow provides to a Bakery.
+A Business Capability represents a stable organizational ability that BakeFlow provides to an Organization.
 
 Capabilities describe **what the business can do**, independent of implementation, user interface, or technology.
 
@@ -5811,7 +5811,7 @@ The Product Domain SHALL provide:
 - Organize Product Categories.
 - Publish Available Products.
 
-These capabilities define the Bakery's commercial offerings.
+These capabilities define the Organization's commercial offerings.
 
 ---
 
@@ -6252,7 +6252,7 @@ Every Entity SHALL be traceable through:
 - Business Identifier.
 - Owning Aggregate.
 - Owning Domain.
-- Bakery.
+- Organization.
 - Branch.
 - Responsible User.
 - Creation Timestamp.
@@ -6815,17 +6815,17 @@ All modifications to an Aggregate SHALL occur through its Aggregate Root.
 
 ---
 
-## Bakery
+## Organization
 
 The highest organizational entity within BakeFlow.
 
-A Bakery represents an independent business operating one or more Branches.
+An Organization represents an independent business operating one or more Branches.
 
 ---
 
 ## Branch
 
-A physical operating location belonging to a Bakery.
+A physical operating location belonging to an Organization.
 
 Operational activities occur at the Branch level.
 
@@ -6856,7 +6856,7 @@ Business Events SHALL remain immutable.
 
 ## Customer
 
-A person or organization purchasing products or services from the Bakery.
+A person or organization purchasing products or services from the Organization.
 
 Customers own their commercial history.
 
@@ -6888,7 +6888,7 @@ Entities remain identifiable even as their attributes change.
 
 ## Financial Transaction
 
-A monetary event affecting the Bakery's financial position.
+A monetary event affecting the Organization's financial position.
 
 Financial Transactions generate Ledger Entries.
 
@@ -6928,7 +6928,7 @@ Orders belong to the Sales Domain.
 
 ## Product
 
-A commercial item offered for sale by the Bakery.
+A commercial item offered for sale by the Organization.
 
 Products remain independent of inventory quantities.
 

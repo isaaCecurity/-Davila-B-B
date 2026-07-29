@@ -8790,7 +8790,7 @@ The following terminology SHALL be used consistently.
 | Authentication | Login System |
 | Authorization | Access Check |
 | Identity | Account (when ambiguous) |
-| Tenant | Company (internally) |
+| Organization | Company / Bakery |
 | Branch | Store (internally) |
 | Permission | Access Right |
 | Role | User Type |

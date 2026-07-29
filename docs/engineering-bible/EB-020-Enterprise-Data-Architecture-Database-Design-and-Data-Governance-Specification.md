@@ -93,7 +93,7 @@ This specification governs every persistent data asset within BakeFlow, includin
 
 ## Organizational Data
 
-- Companies
+- Organizations
 - Branches
 - Business units
 - Operational locations
@@ -468,7 +468,7 @@ Responsible for enterprise structure.
 
 Includes:
 
-- Companies
+- Organizations
 - Branches
 - Locations
 - Departments
@@ -721,7 +721,7 @@ Examples include:
 
 | Aggregate | Root Entity |
 |-----------|-------------|
-| Organization | Company |
+| Organization | Organization |
 | Branch | Branch |
 | Customer | Customer |
 | Product | Product |
@@ -1158,7 +1158,7 @@ Foreign key columns SHALL:
 Examples:
 
 ```text
-company_id
+tenant_id
 branch_id
 customer_id
 order_id
@@ -1439,7 +1439,7 @@ Represents relatively stable business entities shared across multiple domains.
 
 Examples include:
 
-- Companies
+- Organizations
 - Branches
 - Employees
 - Customers
@@ -1498,7 +1498,7 @@ Represents settings that control application behavior.
 
 Examples include:
 
-- Company preferences
+- Organization preferences
 - Branch settings
 - Notification preferences
 - Feature flags
@@ -1549,7 +1549,7 @@ The following SHALL serve as canonical records:
 
 | Business Concept | Canonical Record |
 |------------------|------------------|
-| Company | Company |
+| Organization | Organization |
 | Branch | Branch |
 | Customer | Customer |
 | Product | Product |
@@ -1576,7 +1576,7 @@ Examples:
 
 - Marketing assets
 - Public product catalog
-- Company website content
+- Organization website content
 
 ---
 
@@ -1830,7 +1830,7 @@ Subsequent chapters SHALL apply these governance requirements when defining:
 END OF CHUNK 4/75
 
 Next:
-Chunk 5/75 — Enterprise Multi-Tenancy Architecture, Organization Hierarchy, Tenant Isolation & Company Data Ownership
+Chunk 5/75 — Enterprise Multi-Tenancy Architecture, Organization Hierarchy, Tenant Isolation & Organization Data Ownership
 
 ================================================================================
 ENGINEERING BIBLE
@@ -1869,7 +1869,7 @@ FOUNDATION
 
 # Chapter 5
 
-# Enterprise Multi-Tenancy Architecture, Organization Hierarchy, Tenant Isolation & Company Data Ownership
+# Enterprise Multi-Tenancy Architecture, Organization Hierarchy, Tenant Isolation & Organization Data Ownership
 
 ---
 
@@ -1908,7 +1908,7 @@ A tenant represents a legally or operationally independent business entity using
 
 A tenant SHALL own:
 
-- Company profile.
+- Organization profile.
 - Employees.
 - Branches.
 - Products.
@@ -1933,7 +1933,7 @@ The logical ownership hierarchy SHALL be:
 ```text
 Platform
     │
-    ├── Company (Tenant)
+    ├── Organization (Tenant)
     │      │
     │      ├── Branch
     │      │      │
@@ -1944,7 +1944,7 @@ Platform
     │      │      ├── Cash Sessions
     │      │      └── Production
     │      │
-    │      └── Shared Company Resources
+    │      └── Shared Organization Resources
     │
     └── Platform Services
 ```
@@ -1953,16 +1953,16 @@ Every operational record SHALL belong to exactly one tenant.
 
 ---
 
-# Company as the Root Aggregate
+# Organization as the Root Aggregate
 
-The **Company** entity SHALL act as the root aggregate for all tenant-owned data.
+The **Organization** entity SHALL act as the root aggregate for all tenant-owned data.
 
-Every tenant-owned entity SHALL be traceable back to a single Company.
+Every tenant-owned entity SHALL be traceable back to a single Organization.
 
 Examples include:
 
 ```text
-Company
+Organization
     ├── Branch
     ├── Employee
     ├── Customer
@@ -1975,15 +1975,15 @@ Company
     └── Expense
 ```
 
-The Company entity SHALL be the highest level of business ownership.
+The Organization entity SHALL be the highest level of business ownership.
 
 ---
 
 # Branch Ownership
 
-A Branch represents a physical or operational location belonging to a Company.
+A Branch represents a physical or operational location belonging to an Organization.
 
-A Branch SHALL inherit ownership from its parent Company.
+A Branch SHALL inherit ownership from its parent Organization.
 
 Each Branch MAY manage:
 
@@ -2002,7 +2002,7 @@ Cross-branch access SHALL be controlled through authorization policies.
 
 # Tenant Ownership Model
 
-Every tenant-owned record SHALL include a reference to its owning Company.
+Every tenant-owned record SHALL include a reference to its owning Organization.
 
 Where operationally appropriate, records SHALL also reference the responsible Branch.
 
@@ -2010,7 +2010,7 @@ This ownership model SHALL enable:
 
 - Tenant isolation.
 - Branch-level reporting.
-- Company-wide reporting.
+- Organization-wide reporting.
 - Access control.
 - Auditability.
 
@@ -2022,18 +2022,18 @@ The following ownership hierarchy SHALL apply:
 
 | Entity | Owner |
 |---------|-------|
-| Company | Platform |
-| Branch | Company |
-| Employee | Company |
-| Product | Company |
-| Recipe | Company |
-| Customer | Company |
+| Organization | Platform |
+| Branch | Organization |
+| Employee | Organization |
+| Product | Organization |
+| Recipe | Organization |
+| Customer | Organization |
 | Inventory Item | Branch |
 | Order | Branch |
 | Delivery Ticket | Branch |
-| Invoice | Company |
+| Invoice | Organization |
 | Expense | Branch |
-| Payment | Company |
+| Payment | Organization |
 
 No business entity SHALL exist without a defined ownership path.
 
@@ -2060,7 +2060,7 @@ Tenant data leakage SHALL be considered a critical security failure.
 
 # Branch Isolation
 
-Within a Company, Branch-level restrictions MAY be applied.
+Within an Organization, Branch-level restrictions MAY be applied.
 
 Examples include:
 
@@ -2070,13 +2070,13 @@ Examples include:
 - Branch production.
 - Branch reporting.
 
-Company administrators MAY receive cross-branch visibility based on permissions.
+Organization administrators MAY receive cross-branch visibility based on permissions.
 
 ---
 
 # Shared Resources
 
-Certain resources MAY be shared across all branches within a Company.
+Certain resources MAY be shared across all branches within an Organization.
 
 Examples include:
 
@@ -2084,11 +2084,11 @@ Examples include:
 - Recipes.
 - Pricing rules.
 - Suppliers.
-- Company branding.
+- Organization branding.
 - User roles.
 - System configuration.
 
-Shared resources SHALL remain scoped to the owning Company.
+Shared resources SHALL remain scoped to the owning Organization.
 
 ---
 
@@ -2128,7 +2128,7 @@ Future enterprise features MAY introduce controlled sharing through explicit aut
 
 Creating a new tenant SHALL initialize:
 
-- Company record.
+- Organization record.
 - Default branch.
 - Owner account.
 - Default roles.
@@ -2162,7 +2162,7 @@ Deactivated tenants SHALL remain recoverable according to retention policies.
 
 The architecture SHALL support future migration scenarios including:
 
-- Company mergers.
+- Organization mergers.
 - Branch transfers.
 - Organizational restructuring.
 - Subscription upgrades.
@@ -2192,8 +2192,8 @@ Scalability SHALL be achieved without redesigning the logical ownership model.
 The multi-tenant architecture SHALL adhere to the following principles:
 
 - Every business record has exactly one owner.
-- Company ownership is immutable after creation unless explicitly migrated.
-- Branch ownership is subordinate to Company ownership.
+- Organization ownership is immutable after creation unless explicitly migrated.
+- Branch ownership is subordinate to Organization ownership.
 - Tenant boundaries are enforced by default.
 - Shared resources remain company-scoped.
 - Platform resources remain globally managed.
@@ -2347,7 +2347,7 @@ Every tenant-owned entity SHALL contain ownership references.
 
 Required ownership metadata MAY include:
 
-- Company
+- Organization
 - Branch
 - Department
 - Responsible User
@@ -2435,7 +2435,7 @@ Unless explicitly exempted, every primary business entity SHALL contain the foll
 | Category | Requirement |
 |----------|-------------|
 | Identity | Primary UUID |
-| Ownership | Company Reference |
+| Ownership | Organization Reference |
 | Lifecycle | Created Timestamp |
 | Lifecycle | Updated Timestamp |
 | Audit | Created By |
@@ -2486,7 +2486,7 @@ Defaults SHALL never conceal missing required business information.
 The following categories of information SHALL generally remain immutable:
 
 - Primary identifiers
-- Company ownership
+- Organization ownership
 - Original creation timestamp
 - Original creator
 - Historical financial references
@@ -2622,7 +2622,7 @@ This chapter serves as the structural contract for every table defined throughou
 
 The standards defined in this chapter SHALL be applied to:
 
-- Companies
+- Organizations
 - Branches
 - Users
 - Customers
@@ -2714,7 +2714,7 @@ They SHALL be:
 
 Examples include:
 
-- Company ID
+- Organization ID
 - Branch ID
 - Customer ID
 - Order ID
@@ -2778,7 +2778,7 @@ Once assigned, a primary identifier SHALL NEVER change.
 
 This applies regardless of:
 
-- Company renaming.
+- Organization renaming.
 - Customer updates.
 - Branch relocation.
 - Product modifications.
@@ -2816,7 +2816,7 @@ Where sequential numbering is required, sequences SHALL be managed centrally.
 
 Sequence generation SHALL support:
 
-- Company-specific numbering.
+- Organization-specific numbering.
 - Branch-specific numbering where applicable.
 - Collision prevention.
 - High concurrency.
@@ -2826,20 +2826,20 @@ Sequence generation SHALL remain atomic.
 
 ---
 
-# Company-Scoped Sequences
+# Organization-Scoped Sequences
 
-Unless otherwise specified, business numbering SHALL be unique within a Company.
+Unless otherwise specified, business numbering SHALL be unique within an Organization.
 
 Example:
 
 ```text
-Company A
+Organization A
 
 INV-000001
 INV-000002
 INV-000003
 
-Company B
+Organization B
 
 INV-000001
 INV-000002
@@ -2860,7 +2860,7 @@ Examples include:
 - Production batches.
 - Driver manifests.
 
-Branch-level numbering SHALL remain unique within the owning Company.
+Branch-level numbering SHALL remain unique within the owning Organization.
 
 ---
 
@@ -3041,7 +3041,7 @@ These principles SHALL apply uniformly across all current and future business do
 
 The identifier standards defined in this chapter SHALL be applied to every entity introduced in subsequent chapters, including:
 
-- Companies
+- Organizations
 - Branches
 - Users
 - Customers
@@ -3156,9 +3156,9 @@ Global reference data SHALL be identical for every tenant.
 
 ---
 
-## Company Reference Data
+## Organization Reference Data
 
-Managed by the Company.
+Managed by the Organization.
 
 Examples:
 
@@ -3169,7 +3169,7 @@ Examples:
 - Departments
 - Internal Labels
 
-Company reference data SHALL be isolated from other tenants.
+Organization reference data SHALL be isolated from other tenants.
 
 ---
 
@@ -3184,7 +3184,7 @@ Examples:
 - Storage Locations
 - Cash Registers
 
-Branch reference data SHALL inherit Company ownership.
+Branch reference data SHALL inherit Organization ownership.
 
 ---
 
@@ -3367,7 +3367,7 @@ Platform
 
 ↓
 
-Company
+Organization
 
 ↓
 
@@ -3455,7 +3455,7 @@ These principles SHALL apply across every business domain.
 
 The standards defined in this chapter SHALL be referenced by all subsequent entity definitions, including:
 
-- Companies
+- Organizations
 - Branches
 - Users
 - Products
@@ -3474,7 +3474,7 @@ All entities SHALL consume standardized reference data rather than defining inde
 END OF CHUNK 8/75
 
 Next:
-Chunk 9/75 — Enterprise Organizational Domain: Company Entity, Branch Entity, Organizational Structure & Ownership Model
+Chunk 9/75 — Enterprise Organizational Domain: Organization Entity, Branch Entity, Organizational Structure & Ownership Model
 
 ================================================================================
 ENGINEERING BIBLE
@@ -3513,7 +3513,7 @@ ORGANIZATIONAL DOMAIN
 
 # Chapter 9
 
-# Enterprise Organizational Domain: Company Entity, Branch Entity, Organizational Structure & Ownership Model
+# Enterprise Organizational Domain: Organization Entity, Branch Entity, Organizational Structure & Ownership Model
 
 ---
 
@@ -3523,7 +3523,7 @@ This chapter defines the organizational structure of the BakeFlow platform.
 
 The Organization Domain serves as the foundation for ownership, authorization, reporting, operational boundaries, financial segregation, and tenant isolation.
 
-Every business transaction performed within BakeFlow SHALL ultimately belong to a Company and, where applicable, to one of its Branches.
+Every business transaction performed within BakeFlow SHALL ultimately belong to an Organization and, where applicable, to one of its Branches.
 
 ---
 
@@ -3536,7 +3536,7 @@ The organizational hierarchy SHALL reflect how bakeries operate in practice.
 Typical hierarchy:
 
 ```text
-Company
+Organization
     │
     ├── Branch
     │      │
@@ -3548,20 +3548,20 @@ Company
     │      ├── Customers
     │      └── Cash Operations
     │
-    └── Shared Company Resources
+    └── Shared Organization Resources
 ```
 
 Every operational record SHALL inherit ownership through this hierarchy.
 
 ---
 
-# Company Entity
+# Organization Entity
 
 ## Business Purpose
 
-A Company represents an independent bakery business using the BakeFlow platform.
+An Organization represents an independent bakery business using the BakeFlow platform.
 
-The Company entity SHALL serve as:
+The Organization entity SHALL serve as:
 
 - Tenant root
 - Ownership root
@@ -3570,13 +3570,13 @@ The Company entity SHALL serve as:
 - Administrative boundary
 - Billing boundary
 
-Every operational record SHALL belong to exactly one Company.
+Every operational record SHALL belong to exactly one Organization.
 
 ---
 
-# Company Responsibilities
+# Organization Responsibilities
 
-The Company SHALL own:
+The Organization SHALL own:
 
 - Branches
 - Users
@@ -3595,17 +3595,17 @@ The Company SHALL own:
 - Reports
 - Notifications
 - AI data
-- Company configuration
+- Organization configuration
 
 ---
 
-# Company Attributes
+# Organization Attributes
 
-Each Company SHALL maintain information including:
+Each Organization SHALL maintain information including:
 
 ### Identity
 
-- Company UUID
+- Organization UUID
 - Business Name
 - Legal Name
 - Display Name
@@ -3625,7 +3625,7 @@ Each Company SHALL maintain information including:
 
 ### Branding
 
-- Company Logo
+- Organization Logo
 - Brand Colours
 - Default Receipt Footer
 - Invoice Branding
@@ -3642,13 +3642,13 @@ Each Company SHALL maintain information including:
 - Country
 - Language
 - Subscription Plan
-- Company Status
+- Organization Status
 
 ---
 
-# Company Lifecycle
+# Organization Lifecycle
 
-Companies SHALL progress through defined lifecycle states.
+Organizations SHALL progress through defined lifecycle states.
 
 Example:
 
@@ -3672,9 +3672,9 @@ Suspended companies SHALL retain historical information while operational access
 
 ---
 
-# Company Constraints
+# Organization Constraints
 
-Every Company SHALL satisfy the following rules:
+Every Organization SHALL satisfy the following rules:
 
 - Unique primary identifier.
 - Unique business registration where applicable.
@@ -3684,7 +3684,7 @@ Every Company SHALL satisfy the following rules:
 - At least one administrator.
 - At least one branch.
 
-Companies SHALL NOT exist without an operational owner.
+Organizations SHALL NOT exist without an operational owner.
 
 ---
 
@@ -3692,7 +3692,7 @@ Companies SHALL NOT exist without an operational owner.
 
 ## Business Purpose
 
-A Branch represents a physical operating location belonging to a Company.
+A Branch represents a physical operating location belonging to an Organization.
 
 Branches enable:
 
@@ -3720,7 +3720,7 @@ Each Branch MAY independently manage:
 - Local Customers
 - Daily Reports
 
-Branch autonomy SHALL remain configurable by Company administrators.
+Branch autonomy SHALL remain configurable by Organization administrators.
 
 ---
 
@@ -3766,17 +3766,17 @@ Each Branch SHALL maintain information including:
 
 # Branch Ownership
 
-Each Branch SHALL belong to exactly one Company.
+Each Branch SHALL belong to exactly one Organization.
 
-A Branch SHALL NEVER be shared between multiple Companies.
+A Branch SHALL NEVER be shared between multiple Organizations.
 
-Changing Company ownership SHALL require a controlled migration process.
+Changing Organization ownership SHALL require a controlled migration process.
 
 ---
 
 # Headquarters Branch
 
-Companies MAY designate one Branch as the Headquarters.
+Organizations MAY designate one Branch as the Headquarters.
 
 The Headquarters MAY serve as:
 
@@ -3824,7 +3824,7 @@ Closed branches SHALL preserve all historical operational records.
 The Organization Domain SHALL support:
 
 ```text
-Company
+Organization
 
 1
 
@@ -3851,7 +3851,7 @@ Relationships SHALL remain strictly hierarchical.
 
 ---
 
-# Shared Company Resources
+# Shared Organization Resources
 
 The following resources SHALL normally be shared across all branches:
 
@@ -3861,7 +3861,7 @@ The following resources SHALL normally be shared across all branches:
 - User Directory
 - Roles
 - Permissions
-- Company Branding
+- Organization Branding
 - AI Configuration
 - Reporting Definitions
 
@@ -3882,7 +3882,7 @@ The following SHALL normally remain branch-owned:
 - Daily Sales
 - Branch Performance Metrics
 
-Branch isolation SHALL support operational independence while preserving Company oversight.
+Branch isolation SHALL support operational independence while preserving Organization oversight.
 
 ---
 
@@ -3890,10 +3890,10 @@ Branch isolation SHALL support operational independence while preserving Company
 
 The following rules SHALL always apply:
 
-- Every Branch belongs to one Company.
-- Every Company has at least one Branch.
+- Every Branch belongs to one Organization.
+- Every Organization has at least one Branch.
 - Every operational record belongs to a Branch where applicable.
-- Every Branch inherits Company ownership.
+- Every Branch inherits Organization ownership.
 - No cross-company Branch relationships are permitted.
 - Organizational hierarchies SHALL remain acyclic.
 
@@ -3910,7 +3910,7 @@ Platform
 
 ↓
 
-Company
+Organization
 
 ↓
 
@@ -3944,7 +3944,7 @@ Potential future capabilities include:
 - Distribution centres
 - Department hierarchies
 
-Such extensions SHALL preserve the Company as the root ownership entity.
+Such extensions SHALL preserve the Organization as the root ownership entity.
 
 ---
 
@@ -3956,7 +3956,7 @@ The Organization Domain SHALL adhere to the following principles:
 - Hierarchical structure.
 - Tenant isolation.
 - Branch autonomy.
-- Company-wide visibility.
+- Organization-wide visibility.
 - Historical preservation.
 - Extensibility.
 - Referential integrity.
@@ -3969,7 +3969,7 @@ Every future business entity SHALL integrate with this organizational model.
 
 This chapter establishes the organizational foundation for all subsequent business domains.
 
-The following chapters SHALL reference Company and Branch ownership when defining:
+The following chapters SHALL reference Organization and Branch ownership when defining:
 
 - Users
 - Roles
@@ -4142,7 +4142,7 @@ Authentication credentials SHALL remain under Supabase management.
 
 ## Business Purpose
 
-The Staff Profile represents a person's business identity inside a Company.
+The Staff Profile represents a person's business identity inside an Organization.
 
 Unlike the User Account, the Staff Profile contains operational information.
 
@@ -4198,7 +4198,7 @@ Each Staff Profile SHALL maintain:
 
 # Organizational Membership
 
-Every Staff Profile SHALL belong to exactly one Company.
+Every Staff Profile SHALL belong to exactly one Organization.
 
 A Staff Profile MAY be assigned to:
 
@@ -4339,7 +4339,7 @@ Authorization SHALL be based upon:
 - Assigned roles
 - Granted permissions
 - Branch assignment
-- Company ownership
+- Organization ownership
 
 Authorization SHALL be defined in detail within subsequent chapters.
 
@@ -4400,7 +4400,7 @@ The identity model SHALL accommodate these future capabilities without redesign.
 The following rules SHALL always apply:
 
 - Every User Account links to one Staff Profile.
-- Every Staff Profile belongs to one Company.
+- Every Staff Profile belongs to one Organization.
 - Every Staff Profile has a defined employment status.
 - Authentication records SHALL remain separate from business records.
 - Historical employment SHALL be preserved.
@@ -4604,7 +4604,7 @@ Roles SHALL describe **job functions**, not individual users.
 Examples include:
 
 - Owner
-- Company Administrator
+- Organization Administrator
 - Branch Manager
 - Production Manager
 - Baker
@@ -4627,7 +4627,7 @@ Typical default roles include:
 | Role | Purpose |
 |------|----------|
 | Owner | Full company control |
-| Administrator | Company administration |
+| Administrator | Organization administration |
 | Branch Manager | Branch management |
 | Baker | Production operations |
 | Driver | Delivery operations |
@@ -4635,7 +4635,7 @@ Typical default roles include:
 | Accountant | Financial management |
 | Inventory Officer | Inventory control |
 
-Companies MAY create additional custom roles.
+Organizations MAY create additional custom roles.
 
 ---
 
@@ -4781,7 +4781,7 @@ Each Staff Profile SHALL possess one or more Role Assignments.
 A Role Assignment SHALL define:
 
 - Assigned Role
-- Company
+- Organization
 - Branch Scope
 - Effective Date
 - Expiration Date (optional)
@@ -4888,7 +4888,7 @@ Active Account
 
 ↓
 
-Company Membership
+Organization Membership
 
 ↓
 
@@ -5107,7 +5107,7 @@ A Customer represents a person, household, retailer, distributor, or organizatio
 
 Customers SHALL support both retail and wholesale business models.
 
-Every Customer SHALL belong to exactly one Company.
+Every Customer SHALL belong to exactly one Organization.
 
 ---
 
@@ -5232,7 +5232,7 @@ Examples include:
 - Government
 - Educational Institution
 
-Categories SHALL remain configurable at the Company level.
+Categories SHALL remain configurable at the Organization level.
 
 ---
 
@@ -5437,7 +5437,7 @@ Analytics SHALL derive from transactional records rather than duplicated summary
 
 The following rules SHALL always apply:
 
-- Every Customer belongs to one Company.
+- Every Customer belongs to one Organization.
 - Every Customer possesses one primary identity.
 - Customer history SHALL never be deleted during normal operations.
 - Financial relationships SHALL remain historically accurate.
@@ -5586,7 +5586,7 @@ Examples include:
 - Packaging
 - Custom Cakes
 
-Every Product SHALL belong to exactly one Company.
+Every Product SHALL belong to exactly one Organization.
 
 ---
 
@@ -5930,7 +5930,7 @@ Analytical values SHOULD be derived from transactional records whenever practica
 
 The following rules SHALL always apply:
 
-- Every Product belongs to one Company.
+- Every Product belongs to one Organization.
 - Product names SHALL be unique within defined business rules.
 - Historical products SHALL never be deleted during normal operations.
 - Pricing history SHALL remain immutable.
@@ -6104,7 +6104,7 @@ Examples include:
 - Fuel Suppliers
 - Cleaning Suppliers
 
-Every Supplier SHALL belong to one Company.
+Every Supplier SHALL belong to one Organization.
 
 ---
 
@@ -6474,7 +6474,7 @@ Examples include:
 - FIFO
 - Standard Cost
 
-The selected valuation method SHALL remain configurable at the Company level.
+The selected valuation method SHALL remain configurable at the Organization level.
 
 ---
 
@@ -6499,7 +6499,7 @@ Analytics SHALL derive from transactional history whenever practical.
 
 The following rules SHALL always apply:
 
-- Every inventory item belongs to one Company.
+- Every inventory item belongs to one Organization.
 - Inventory quantities SHALL never change without a stock movement.
 - Recipes SHALL reference valid ingredients.
 - Production batches SHALL reference valid recipes.
@@ -6665,7 +6665,7 @@ An Order represents a customer's request to purchase one or more products.
 
 Every Order SHALL belong to:
 
-- One Company
+- One Organization
 - One Branch
 - One Customer
 
@@ -6835,7 +6835,7 @@ Each Order Item SHALL independently track fulfillment progress.
 
 # Order Approval
 
-Companies MAY configure approval workflows.
+Organizations MAY configure approval workflows.
 
 Approval MAY depend upon:
 
@@ -7036,7 +7036,7 @@ Relationships SHALL preserve complete business traceability.
 
 The following rules SHALL always apply:
 
-- Every Order belongs to one Company.
+- Every Order belongs to one Organization.
 - Every Order belongs to one Branch.
 - Every Order references one Customer.
 - Every Order contains at least one Order Item.
@@ -7203,7 +7203,7 @@ Invoices SHALL record amounts owed independently of payment status.
 
 Each Invoice SHALL reference:
 
-- Company
+- Organization
 - Branch
 - Customer
 - Related Order (where applicable)
@@ -7506,7 +7506,7 @@ The ledger SHALL provide complete financial traceability.
 
 # Financial Periods
 
-Companies SHALL define Financial Periods.
+Organizations SHALL define Financial Periods.
 
 Examples include:
 
@@ -7524,7 +7524,7 @@ Closed periods SHALL restrict unauthorized modifications.
 
 The Financial Domain SHALL support multiple currencies.
 
-Each Company SHALL define:
+Each Organization SHALL define:
 
 - Base Currency
 - Supported Currencies
@@ -7556,7 +7556,7 @@ Reports SHOULD derive values from transactional records whenever practical.
 
 The following rules SHALL always apply:
 
-- Every Invoice belongs to one Company.
+- Every Invoice belongs to one Organization.
 - Every Payment references a valid customer.
 - Invoice totals SHALL remain immutable after issuance.
 - Payment allocations SHALL preserve historical integrity.
@@ -7757,7 +7757,7 @@ Each Notification SHALL maintain:
 ### Ownership
 
 - Recipient
-- Company
+- Organization
 - Branch
 
 ### Content
@@ -8000,7 +8000,7 @@ Examples include:
 
 - Role Changes
 - Permission Updates
-- Company Settings
+- Organization Settings
 - Financial Adjustments
 - User Deactivation
 - Branch Creation
@@ -8076,7 +8076,7 @@ Escalation policies MAY include:
 
 - Notify Supervisor
 - Notify Branch Manager
-- Notify Company Administrator
+- Notify Organization Administrator
 - Repeat Notification
 - Alternate Communication Channel
 
@@ -8396,7 +8396,7 @@ Reports SHALL support configurable filtering.
 
 Typical filters include:
 
-- Company
+- Organization
 - Branch
 - Date Range
 - Customer
@@ -8592,7 +8592,7 @@ The Analytics Domain SHALL support future enhancements including:
 - Benchmark Comparisons
 - Predictive Dashboards
 - Embedded Business Intelligence
-- Cross-Company Benchmarking (where permitted)
+- Cross-Organization Benchmarking (where permitted)
 
 The architecture SHALL support these capabilities without structural redesign.
 
@@ -9102,7 +9102,7 @@ The AI Domain SHALL support future enhancements including:
 - Workforce Optimization
 - Predictive Equipment Maintenance
 - Vision-Based Quality Inspection
-- Multi-Company Benchmark Intelligence
+- Multi-Organization Benchmark Intelligence
 
 The architecture SHALL accommodate these capabilities without requiring structural redesign.
 
@@ -9278,7 +9278,7 @@ Mandatory attributes SHALL never be omitted.
 
 Examples include:
 
-- Company
+- Organization
 - Branch
 - Customer
 - Product
@@ -9334,7 +9334,7 @@ Textual attributes SHALL define minimum and maximum lengths where applicable.
 
 Examples include:
 
-- Company Name
+- Organization Name
 - Product Name
 - Customer Name
 - Notes
@@ -9527,11 +9527,11 @@ Uniqueness SHALL be enforced according to business scope.
 
 Examples include:
 
-- Company Name (platform policy)
-- Branch Code within Company
-- Product SKU within Company
-- Invoice Number within Company
-- Customer Number within Company
+- Organization Name (platform policy)
+- Branch Code within Organization
+- Product SKU within Organization
+- Invoice Number within Organization
+- Customer Number within Organization
 
 Uniqueness SHALL reflect business requirements rather than technical convenience.
 
@@ -9857,7 +9857,7 @@ Foreign key relationships SHALL be indexed where appropriate.
 
 Examples include:
 
-- Company
+- Organization
 - Branch
 - Customer
 - Product
@@ -9876,7 +9876,7 @@ Composite indexes SHALL support common business queries.
 
 Examples include:
 
-- Company + Branch
+- Organization + Branch
 - Branch + Status
 - Customer + Status
 - Product + Category
@@ -10096,7 +10096,7 @@ Cacheable information MAY include:
 - Reference Data
 - Product Catalog
 - Pricing
-- Company Settings
+- Organization Settings
 - Permission Definitions
 
 Transactional records SHALL not rely solely on cached values.
@@ -10161,7 +10161,7 @@ The platform SHALL support capacity forecasting.
 Planning SHALL consider:
 
 - User Growth
-- Company Growth
+- Organization Growth
 - Data Volume
 - Storage Consumption
 - Transaction Frequency
@@ -10428,7 +10428,7 @@ The platform SHALL support MFA for privileged accounts.
 
 MFA SHOULD be required for:
 
-- Company Owners
+- Organization Owners
 - Administrators
 - Financial Managers
 - System Administrators
@@ -10474,7 +10474,7 @@ Row-Level Security SHALL provide the primary mechanism for tenant isolation.
 
 RLS policies SHALL ensure:
 
-- Company isolation
+- Organization isolation
 - Branch isolation where applicable
 - User ownership constraints
 - Role-based access
@@ -10490,11 +10490,11 @@ Tenant isolation SHALL prevent cross-company access.
 
 Users SHALL never access:
 
-- Other Companies
-- Other Company Customers
-- Other Company Orders
-- Other Company Financial Records
-- Other Company Inventory
+- Other Organizations
+- Other Organization Customers
+- Other Organization Orders
+- Other Organization Financial Records
+- Other Organization Inventory
 
 Unless explicitly authorized by platform administration.
 
@@ -11440,7 +11440,7 @@ Each audit record SHOULD contain:
 - Audit Identifier
 - Timestamp
 - Authenticated User
-- Company
+- Organization
 - Branch
 - Entity Type
 - Entity Identifier
@@ -11948,7 +11948,7 @@ Business resources SHALL represent domain entities.
 
 Examples include:
 
-- Companies
+- Organizations
 - Branches
 - Staff
 - Customers
@@ -12116,7 +12116,7 @@ Published events SHALL include:
 - Event Identifier
 - Event Type
 - Timestamp
-- Company
+- Organization
 - Branch
 - Entity Identifier
 - Event Version
@@ -12742,7 +12742,7 @@ Master Data Management SHALL maintain authoritative business information.
 
 Master data MAY include:
 
-- Companies
+- Organizations
 - Branches
 - Customers
 - Products
@@ -14069,7 +14069,7 @@ Each log entry SHOULD include:
 - Component
 - Correlation Identifier
 - User Identifier (where applicable)
-- Company
+- Organization
 - Branch
 - Event Description
 
@@ -14962,7 +14962,7 @@ Business growth MAY include:
 - Regional Operations
 - National Enterprises
 - Franchise Networks
-- Multi-Company Ownership
+- Multi-Organization Ownership
 
 Business scaling SHALL preserve tenant isolation.
 
@@ -14974,7 +14974,7 @@ The architecture SHALL support increasing organizational complexity.
 
 Future organizational structures MAY include:
 
-- Parent Companies
+- Parent Organizations
 - Subsidiaries
 - Regional Offices
 - Distribution Centers
@@ -15519,7 +15519,7 @@ The architecture SHALL support hierarchical business structures.
 
 Examples include:
 
-- Company Hierarchies
+- Organization Hierarchies
 - Organizational Units
 - Product Categories
 - Permission Structures
@@ -16203,7 +16203,7 @@ This chapter establishes naming and documentation standards for:
 END OF CHUNK 33/75
 
 Next:
-Chunk 34/75 — Enterprise Domain Entity Specifications: Organization, Company, Branch, User, Staff, Roles & Identity Entities
+Chunk 34/75 — Enterprise Domain Entity Specifications: Organization, Organization, Branch, User, Staff, Roles & Identity Entities
 
 ================================================================================
 ENGINEERING BIBLE
@@ -16242,7 +16242,7 @@ ENTERPRISE DOMAIN ENTITY SPECIFICATIONS — ORGANIZATION & IDENTITY
 
 # Chapter 34
 
-# Enterprise Domain Entity Specifications: Organization, Company, Branch, User, Staff, Roles & Identity Entities
+# Enterprise Domain Entity Specifications: Organization, Organization, Branch, User, Staff, Roles & Identity Entities
 
 ---
 
@@ -16281,7 +16281,7 @@ The hierarchy SHALL support:
 
 - Platform
 - Organization
-- Company
+- Organization
 - Branch
 - Department
 - Staff Member
@@ -16343,15 +16343,15 @@ Lifecycle transitions SHALL follow governance policies.
 
 ---
 
-# Company Entity
+# Organization Entity
 
 ## Business Purpose
 
-A Company represents a legal or operational business operating within an Organization.
+An Organization represents a legal or operational business operating within an Organization.
 
-An Organization MAY contain one or multiple Companies.
+An Organization MAY contain one or multiple Organizations.
 
-Companies SHALL support:
+Organizations SHALL support:
 
 - Legal Separation
 - Financial Reporting
@@ -16361,9 +16361,9 @@ Companies SHALL support:
 
 ---
 
-## Company Responsibilities
+## Organization Responsibilities
 
-Companies SHALL own:
+Organizations SHALL own:
 
 - Branches
 - Financial Records
@@ -16374,11 +16374,11 @@ Companies SHALL own:
 - Inventory
 - Reports
 
-Companies SHALL maintain operational independence where required.
+Organizations SHALL maintain operational independence where required.
 
 ---
 
-## Company Lifecycle
+## Organization Lifecycle
 
 Typical lifecycle stages include:
 
@@ -16422,7 +16422,7 @@ Branches SHALL manage:
 - Expenses
 - Daily Operations
 
-Branch ownership SHALL always be traceable to a Company.
+Branch ownership SHALL always be traceable to an Organization.
 
 ---
 
@@ -16612,7 +16612,7 @@ Permissions SHALL be reusable across roles.
 
 Staff SHALL support assignment to:
 
-- Company
+- Organization
 - Branch
 - Department
 - Role
@@ -16627,8 +16627,8 @@ Future assignments SHALL permit multiple concurrent operational responsibilities
 
 The Organizational Domain SHALL maintain relationships including:
 
-- Organization owns Companies.
-- Company owns Branches.
+- Organization owns Organizations.
+- Organization owns Branches.
 - Branch contains Departments.
 - Branch employs Staff.
 - Staff references User.
@@ -16647,7 +16647,7 @@ Organization
 
 ↓
 
-Company
+Organization
 
 ↓
 
@@ -16673,8 +16673,8 @@ The following rules SHALL always apply:
 - Every Staff member SHALL reference one authenticated User.
 - Roles SHALL remain reusable.
 - Permissions SHALL remain independent.
-- Branches SHALL belong to Companies.
-- Companies SHALL belong to Organizations.
+- Branches SHALL belong to Organizations.
+- Organizations SHALL belong to Organizations.
 - Organizational ownership SHALL never be ambiguous.
 
 These rules SHALL govern organizational integrity.
@@ -16686,7 +16686,7 @@ These rules SHALL govern organizational integrity.
 The architecture SHALL support future enhancements including:
 
 - Matrix Organizations
-- Multi-Company Employment
+- Multi-Organization Employment
 - Cross-Branch Assignments
 - Temporary Workforce Management
 - Contractor Management
@@ -17898,7 +17898,7 @@ Organization
 
 ↓
 
-Company
+Organization
 
 ↓
 
@@ -17941,7 +17941,7 @@ Examples include:
 - Order requires Customer.
 - Invoice requires Order.
 - Payment requires Invoice.
-- Branch requires Company.
+- Branch requires Organization.
 - Staff requires User.
 
 Mandatory relationships SHALL always be validated.
@@ -18060,7 +18060,7 @@ Examples include:
 - Product
 - Branch
 - Staff
-- Company
+- Organization
 
 Shared entities SHALL remain authoritative within their owning domains.
 
@@ -18362,7 +18362,7 @@ Ownership SHALL remain visible throughout the enterprise.
 Enterprise Master Data SHALL include, but not be limited to:
 
 - Organizations
-- Companies
+- Organizations
 - Branches
 - Customers
 - Staff
@@ -18461,7 +18461,7 @@ Codes MAY identify:
 - Products
 - Customers
 - Branches
-- Companies
+- Organizations
 - Ingredients
 - Categories
 - Financial Accounts
@@ -18853,7 +18853,7 @@ Identity SHALL remain permanent throughout the transaction lifecycle.
 Every transaction SHALL belong to:
 
 - Organization
-- Company
+- Organization
 - Branch
 - Responsible Business Process
 
@@ -34766,7 +34766,7 @@ Continuous stewardship SHALL preserve enterprise excellence.
 
 This Engineering Bible has been intentionally designed to support future organizational growth including, but not limited to:
 
-- Multi-Company Operations
+- Multi-Organization Operations
 - Multi-Country Expansion
 - Franchise Networks
 - Advanced Financial Intelligence
