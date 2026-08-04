@@ -31,7 +31,7 @@ docs/
 | EB-003 | Architecture Principles | High-level system architecture philosophy |
 | EB-004 | Security Principles | CIA triad, least privilege, defense-in-depth, auditability |
 | EB-005 | Financial Integrity Principles | Rules for correctness in monetary calculations |
-| EB-006 | Domain Model & Ubiquitous Language | Canonical business terminology *(tenant terminology here is superseded — see PROJECT-OVERVIEW.md)* |
+| EB-006 | Domain Model & Ubiquitous Language | Canonical business terminology |
 | EB-007 | Database Design Standards | Primary keys, multi-tenancy, data types |
 | EB-008 | Supabase Architecture Standards | How Supabase (Postgres, Auth, Storage) is used |
 | EB-009 | API & Backend Standards | Request/response conventions, error handling |
@@ -60,7 +60,7 @@ BakeFlow is multi-tenant. The tenant boundary is the **Organization** (one baker
 
 ## How this is being built
 
-The engineering bible was drafted with ChatGPT, then audited for internal consistency (naming conventions, data types, and architectural decisions cross-checked across documents) before being used to drive implementation. This README will be updated once implementation begins with setup instructions, environment variables, and a getting-started guide.
+The engineering bible was drafted with ChatGPT, then audited for internal consistency (naming conventions, data types, and architectural decisions cross-checked across documents) before being used to drive implementation. The root-level `CLAUDE.md` distills the non-negotiable rules and canonical naming decisions for AI coding agents — it is the first file Claude Code should read. This README will be updated once implementation begins with setup instructions, environment variables, and a getting-started guide.
 
 ## License
 
