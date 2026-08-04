@@ -18514,7 +18514,7 @@ General business fields SHALL avoid CHAR.
 Financial values SHALL use:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 unless higher precision is explicitly required.
@@ -18962,7 +18962,7 @@ BakeFlow SHALL standardize:
 
 | Business Value | Data Type |
 |---------------|-----------|
-| Money | NUMERIC(18,2) |
+| Money | NUMERIC(19,4) |
 | Quantity | NUMERIC(18,3) |
 | Percentage | NUMERIC(5,2) |
 | Exchange Rate | NUMERIC(18,8) |

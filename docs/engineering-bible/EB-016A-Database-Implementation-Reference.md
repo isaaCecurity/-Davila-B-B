@@ -1393,7 +1393,7 @@ customer_id
 
 branch_id
 
-organization_id
+tenant_id
 
 invoice_id
 ```
@@ -1692,7 +1692,7 @@ UUID SHALL remain the canonical identifier strategy.
 Multi-tenant tables SHALL include:
 
 ```text
-organization_id
+tenant_id
 ```
 
 Where applicable:
@@ -2059,7 +2059,7 @@ Floating-point types SHALL never store financial values.
 Example:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 Financial precision SHALL remain absolute.
@@ -2429,7 +2429,7 @@ Floating-point storage SHALL be prohibited for business-critical values.
 Canonical financial type:
 
 ```sql
-NUMERIC(18,2)
+NUMERIC(19,4)
 ```
 
 Examples include:
@@ -2989,7 +2989,7 @@ Foreign key columns SHALL follow:
 Examples include:
 
 ```text
-organization_id
+tenant_id
 
 branch_id
 
@@ -3514,7 +3514,7 @@ Every foreign key SHALL receive an accompanying index.
 Examples include:
 
 ```text
-organization_id
+tenant_id
 
 branch_id
 
@@ -3574,7 +3574,7 @@ Composite indexes SHALL reflect actual query patterns.
 Example:
 
 ```sql
-(organization_id, branch_id)
+(tenant_id, branch_id)
 ```
 
 Column order SHALL remain deliberate.
@@ -3588,16 +3588,16 @@ Composite indexes SHALL be designed according to PostgreSQL's leftmost prefix be
 Example:
 
 ```sql
-(organization_id,
+(tenant_id,
  branch_id,
  created_at)
 ```
 
 Supports:
 
-- organization_id
-- organization_id + branch_id
-- organization_id + branch_id + created_at
+- tenant_id
+- tenant_id + branch_id
+- tenant_id + branch_id + created_at
 
 But NOT:
 
@@ -3614,17 +3614,17 @@ Index ordering SHALL reflect workload frequency.
 Multi-tenant tables SHOULD begin composite indexes with:
 
 ```text
-organization_id
+tenant_id
 ```
 
 Examples:
 
 ```sql
-(organization_id, customer_name)
+(tenant_id, customer_name)
 
-(organization_id, invoice_number)
+(tenant_id, invoice_number)
 
-(organization_id, payment_status)
+(tenant_id, payment_status)
 ```
 
 Tenant isolation SHALL improve query efficiency.
@@ -3636,7 +3636,7 @@ Tenant isolation SHALL improve query efficiency.
 Branch-scoped workloads SHOULD include:
 
 ```sql
-organization_id,
+tenant_id,
 branch_id
 ```
 
@@ -3693,11 +3693,11 @@ Business uniqueness SHALL utilize unique indexes.
 Examples:
 
 ```sql
-organization_id + sku
+tenant_id + sku
 
-organization_id + invoice_number
+tenant_id + invoice_number
 
-organization_id + email
+tenant_id + email
 ```
 
 Uniqueness SHALL remain database-enforced.
@@ -3736,7 +3736,7 @@ CREATE INDEX ...
 
 ON invoice
 
-(organization_id, payment_status)
+(tenant_id, payment_status)
 
 INCLUDE (total_amount, customer_id);
 ```
@@ -3805,7 +3805,7 @@ Configuration metadata SHALL not receive unnecessary indexes.
 Search-heavy modules MAY combine:
 
 ```sql
-organization_id
+tenant_id
 
 +
 
@@ -3857,7 +3857,7 @@ version
 
 sync_status
 
-organization_id
+tenant_id
 ```
 
 Synchronization SHALL remain scalable.
@@ -6369,7 +6369,7 @@ Cross-tenant access SHALL be impossible unless explicitly authorized by system a
 Every tenant-owned table SHALL include:
 
 ```text
-organization_id
+tenant_id
 ```
 
 Organization ownership SHALL determine visibility.
@@ -6539,11 +6539,11 @@ DELETE authorization SHALL require elevated privileges where applicable.
 Canonical visibility rule:
 
 ```text
-organization_id
+tenant_id
 
 =
 
-current_user.organization_id
+current_user.tenant_id
 ```
 
 Tenant boundaries SHALL remain absolute.
@@ -9842,7 +9842,7 @@ NOT NULL
 
 Examples include:
 
-- organization_id
+- tenant_id
 - created_at
 - total_amount
 - product_name
@@ -11072,7 +11072,7 @@ performed_by
 
 performed_at
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -11170,7 +11170,7 @@ Audit chronology SHALL remain reliable.
 Audit records SHALL preserve:
 
 ```text
-organization_id
+tenant_id
 
 branch_id
 ```
@@ -13873,7 +13873,7 @@ created_at
 
 updated_at
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -13951,7 +13951,7 @@ product_id
 
 branch_id
 
-organization_id
+tenant_id
 ```
 
 Foreign key names SHALL remain consistent.
@@ -23138,7 +23138,7 @@ Every business entity SHOULD resemble the following structure.
 ```text
 id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -23180,7 +23180,7 @@ These fields SHALL remain standardized across modules.
 Tenant-owned entities SHALL contain:
 
 ```text
-organization_id
+tenant_id
 
 branch_id
 ```
@@ -23316,7 +23316,7 @@ Customer entities SHOULD include:
 ```text
 id
 
-organization_id
+tenant_id
 
 customer_number
 
@@ -23340,7 +23340,7 @@ Employee entities SHOULD include:
 ```text
 id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -23362,7 +23362,7 @@ Products SHOULD include:
 ```text
 id
 
-organization_id
+tenant_id
 
 sku
 
@@ -23386,7 +23386,7 @@ Orders SHOULD include:
 ```text
 id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -23879,7 +23879,7 @@ SELECT
     customer_name,
     phone
 FROM customer
-WHERE organization_id = $1;
+WHERE tenant_id = $1;
 ```
 
 `SELECT *` SHALL remain prohibited in production application queries.
@@ -23900,7 +23900,7 @@ Example:
 ```sql
 INSERT INTO customer (
     id,
-    organization_id,
+    tenant_id,
     full_name,
     phone
 )
@@ -24477,7 +24477,7 @@ Canonical structure:
 ```text
 id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -24577,7 +24577,7 @@ event_name
 
 entity_id
 
-organization_id
+tenant_id
 
 occurred_at
 
@@ -24656,7 +24656,7 @@ UUIDs SHALL remain globally unique.
 Every tenant-owned table SHALL contain:
 
 ```text
-organization_id
+tenant_id
 ```
 
 Branch-aware entities SHALL additionally include:
@@ -27906,7 +27906,7 @@ Examples:
 ```text
 customer_id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -28068,7 +28068,7 @@ Alternative version names SHALL remain prohibited.
 Tenant ownership SHALL use:
 
 ```text
-organization_id
+tenant_id
 ```
 
 Branch ownership SHALL use:

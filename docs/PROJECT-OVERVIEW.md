@@ -48,7 +48,7 @@ Organization  (the tenant — one bakery business)
 - Branch-scoped tables additionally carry a `branch_id`, referencing `branches.id`.
 - Do not use `bakery_id` or `company_id` — both appeared in earlier drafts of these documents and have been superseded by the Organization → Branch model above.
 
-> **Note on document history:** Earlier engineering-bible documents (`EB-006`, `EB-011`, `EB-020`) used inconsistent terms for this concept — some called the tenant "Bakery," others called it "Company." **Organization → Branch is the confirmed, correct model.** If you are reading `EB-006` or `EB-020` and encounter "Bakery" or "Company" used as the tenant root, treat this document as authoritative and mentally substitute "Organization." These documents should be updated to match; see the reading-order table below.
+> **Note on document history:** Earlier drafts of the engineering-bible documents used inconsistent terms for this concept ("Bakery," "Company," `bakery_id`, `company_id`, `organization_id`). These have all been resolved: **Organization → Branch is the confirmed model, and `tenant_id` is the canonical tenant-scoping column everywhere**, including in the implementation references (`EB-016A`/`EB-016B`) and in JWT claims (`auth.jwt() ->> 'tenant_id'`). The naming-consistency tests in `tests/test_spec_coverage.py` guard this. If any document appears to contradict this model, this document is authoritative — and the contradiction should be treated as a bug and fixed.
 
 ---
 
@@ -90,7 +90,7 @@ Read in roughly this order when building a given part of the system:
 |---|---|---|
 | **1. Orientation** | This document | What the product is, why it's structured this way |
 | **2. Foundations** | `EB-002`, `EB-003`, `EB-004`, `EB-005` | Engineering, architecture, security, and financial principles |
-| **3. Domain language** | `EB-006` | Entity definitions and terminology *(note: tenant terminology here is superseded — see Section 3 above)* |
+| **3. Domain language** | `EB-006` | Entity definitions and terminology |
 | **4. Database** | `EB-007`, `EB-008`, `EB-011`, `EB-016A`, `EB-016B` | Schema, types, Supabase/RLS implementation |
 | **5. Auth** | `EB-010`, `EB-012` | Identity, sessions, authorization |
 | **6. Business logic** | `EB-013` | Operational workflows — the most detailed version of Section 4's user journey above |
@@ -101,7 +101,13 @@ Read in roughly this order when building a given part of the system:
 
 ---
 
-## 7. Open Items
+## 7. Resolved Naming Decisions (Change Log)
 
-- `EB-006` and `EB-020` still reference "Bakery" and "Company" respectively as the tenant root — these should be edited to say "Organization" for full consistency with this document.
-- `EB-013`'s "Organization → Branches → Employees" hierarchy is the confirmed correct structure and should be treated as the reference implementation of Section 3 above.
+All previously open terminology conflicts have been resolved. For the record:
+
+- `EB-006` and `EB-020` previously used "Bakery" and "Company" as the tenant root — both now use **Organization** (verified by `tests/test_spec_coverage.py`).
+- `EB-016A` and `EB-016B` previously used `organization_id` as the tenant-scoping column — both now use **`tenant_id`**, matching `EB-007`/`EB-011` and this document. The JWT tenant claim is likewise `tenant_id`.
+- `EB-011` and `EB-016A` previously contained `NUMERIC(18,2)` in monetary contexts — the canonical monetary type is **`NUMERIC(19,4)`** everywhere (`NUMERIC(18,4)` remains correct for physical quantities, `NUMERIC(5,2)` for percentages).
+- `EB-013`'s "Organization → Branches → Employees" hierarchy is the confirmed correct structure and is the reference implementation of Section 3 above.
+
+If new conflicts are discovered during implementation, record the decision here and update the offending document in the same commit.

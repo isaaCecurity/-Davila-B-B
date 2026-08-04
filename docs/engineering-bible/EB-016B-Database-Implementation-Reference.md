@@ -266,7 +266,7 @@ phone_number
 
 created_at
 
-organization_id
+tenant_id
 
 unit_cost
 ```
@@ -303,7 +303,7 @@ customer_id
 
 branch_id
 
-organization_id
+tenant_id
 
 invoice_id
 
@@ -1371,7 +1371,7 @@ Every Branch SHALL belong to exactly one Organization.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_name | VARCHAR(150) | No | — |
 | branch_code | VARCHAR(30) | No | — |
 | address | TEXT | Yes | — |
@@ -1399,7 +1399,7 @@ PRIMARY KEY (id)
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 
 REFERENCES organization(id)
 
@@ -1417,7 +1417,7 @@ Each organization SHALL have unique branch codes.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 branch_code
 
@@ -1455,7 +1455,7 @@ Business configuration SHALL remain data-driven rather than hard-coded.
 | Column | Type | Nullable |
 |---------|------|----------|
 | id | UUID | No |
-| organization_id | UUID | No |
+| tenant_id | UUID | No |
 | setting_key | VARCHAR(100) | No |
 | setting_value | JSONB | No |
 | description | TEXT | Yes |
@@ -1469,7 +1469,7 @@ Business configuration SHALL remain data-driven rather than hard-coded.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 setting_key
 
@@ -1530,7 +1530,7 @@ setting_key
 Every business entity SHALL contain:
 
 ```sql
-organization_id UUID
+tenant_id UUID
 NOT NULL
 ```
 
@@ -1630,7 +1630,7 @@ Authenticated users SHALL only access their assigned organization.
 Example policy:
 
 ```sql
-organization_id = auth.jwt()->>'organization_id'
+tenant_id = auth.jwt()->>'tenant_id'
 ```
 
 Implementation MAY use helper functions for readability.
@@ -1810,7 +1810,7 @@ This table SHALL never duplicate authentication credentials.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | References auth.users(id) |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | employee_id | UUID | Yes | — |
 | first_name | VARCHAR(100) | No | — |
 | last_name | VARCHAR(100) | No | — |
@@ -1839,7 +1839,7 @@ ON DELETE CASCADE
 ```
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ON DELETE RESTRICT
 ```
@@ -1885,7 +1885,7 @@ Examples:
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | employee_number | VARCHAR(30) | No | — |
 | first_name | VARCHAR(100) | No | — |
@@ -1906,7 +1906,7 @@ Examples:
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 employee_number
 
@@ -1918,7 +1918,7 @@ employee_number
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 → organization(id)
 ```
 
@@ -1970,7 +1970,7 @@ Roles SHALL remain organization-specific to support customization.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | role_name | VARCHAR(100) |
 | description | TEXT |
 | is_system | BOOLEAN |
@@ -1984,7 +1984,7 @@ Roles SHALL remain organization-specific to support customization.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 role_name
 
@@ -2182,7 +2182,7 @@ This hierarchy SHALL remain unchanged.
 The following foreign key relationships SHALL exist:
 
 ```text
-employee.organization_id
+employee.tenant_id
 
 → organization.id
 ```
@@ -2194,7 +2194,7 @@ employee.branch_id
 ```
 
 ```text
-role.organization_id
+role.tenant_id
 
 → organization.id
 ```
@@ -2268,8 +2268,8 @@ Employees SHALL only access records belonging to their organization.
 Example condition:
 
 ```sql
-organization_id =
-current_organization_id()
+tenant_id =
+current_tenant_id()
 ```
 
 Implementation MAY use helper SQL functions.
@@ -2465,7 +2465,7 @@ Customers SHALL remain organization-owned.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | customer_code | VARCHAR(30) | No | — |
 | customer_type | VARCHAR(20) | No | 'individual' |
 | business_name | VARCHAR(200) | Yes | — |
@@ -2513,7 +2513,7 @@ PRIMARY KEY (id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 customer_code
 
@@ -2537,7 +2537,7 @@ credit_limit >= 0
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 
 REFERENCES organization(id)
 
@@ -2677,7 +2677,7 @@ Suppliers SHALL remain organization-owned.
 | Column | Type | Nullable |
 |---------|------|----------|
 | id | UUID | No |
-| organization_id | UUID | No |
+| tenant_id | UUID | No |
 | supplier_code | VARCHAR(30) | No |
 | business_name | VARCHAR(200) | No |
 | contact_person | VARCHAR(150) | Yes |
@@ -2703,7 +2703,7 @@ Suppliers SHALL remain organization-owned.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 supplier_code
 
@@ -2846,7 +2846,7 @@ Authenticated users SHALL only access customers belonging to their organization.
 Example condition:
 
 ```sql
-organization_id = current_organization_id()
+tenant_id = current_tenant_id()
 ```
 
 ---
@@ -3003,7 +3003,7 @@ Categories SHALL support reporting and filtering.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | category_name | VARCHAR(100) | No | — |
 | category_code | VARCHAR(30) | No | — |
 | description | TEXT | Yes | — |
@@ -3019,7 +3019,7 @@ Categories SHALL support reporting and filtering.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 category_code
 
@@ -3077,7 +3077,7 @@ The same unit definitions SHALL be reused throughout the platform.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | unit_name | VARCHAR(50) |
 | unit_symbol | VARCHAR(20) |
 | decimal_precision | SMALLINT |
@@ -3103,7 +3103,7 @@ The same unit definitions SHALL be reused throughout the platform.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 unit_symbol
 
@@ -3135,7 +3135,7 @@ Products SHALL remain independent from inventory movements.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | category_id | UUID | No | — |
 | default_unit_id | UUID | No | — |
 | product_code | VARCHAR(40) | No | — |
@@ -3159,7 +3159,7 @@ Products SHALL remain independent from inventory movements.
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -3180,7 +3180,7 @@ REFERENCES unit_of_measure(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 product_code
 
@@ -3634,7 +3634,7 @@ Ingredients SHALL also participate in inventory management.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | default_unit_id | UUID | No | — |
 | ingredient_code | VARCHAR(30) | No | — |
 | ingredient_name | VARCHAR(150) | No | — |
@@ -3650,7 +3650,7 @@ Ingredients SHALL also participate in inventory management.
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -3666,7 +3666,7 @@ REFERENCES unit_of_measure(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 ingredient_code
 
@@ -3730,7 +3730,7 @@ Recipe details SHALL be maintained through version records.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | product_id | UUID |
 | recipe_code | VARCHAR(40) |
 | recipe_name | VARCHAR(150) |
@@ -3744,7 +3744,7 @@ Recipe details SHALL be maintained through version records.
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -3760,7 +3760,7 @@ REFERENCES product(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 recipe_code
 
@@ -4237,7 +4237,7 @@ Each production batch SHALL represent one completed or in-progress production ru
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | recipe_version_id | UUID | No | — |
 | batch_number | VARCHAR(40) | No | — |
@@ -4277,7 +4277,7 @@ cancelled
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -4303,7 +4303,7 @@ REFERENCES employee(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 batch_number
 
@@ -4847,7 +4847,7 @@ Every warehouse SHALL belong to one Organization.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | warehouse_code | VARCHAR(30) | No | — |
 | warehouse_name | VARCHAR(150) | No | — |
@@ -4883,7 +4883,7 @@ general
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -4899,7 +4899,7 @@ REFERENCES branch(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 warehouse_code
 
@@ -4942,7 +4942,7 @@ The same product MAY exist in multiple warehouses.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | warehouse_id | UUID |
 | ingredient_id | UUID |
 | product_id | UUID |
@@ -5033,7 +5033,7 @@ Inventory balances SHALL be reconstructed from this ledger.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | warehouse_id | UUID |
 | inventory_item_id | UUID |
 | movement_type | inventory_movement_enum |
@@ -5129,7 +5129,7 @@ Transfers SHALL generate two inventory movements:
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | source_warehouse_id | UUID |
 | destination_warehouse_id | UUID |
 | transfer_number | VARCHAR(40) |
@@ -5168,7 +5168,7 @@ cancelled
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 transfer_number
 
@@ -5260,7 +5260,7 @@ Adjustments SHALL generate inventory movements.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | warehouse_id | UUID |
 | adjustment_number | VARCHAR(40) |
 | adjustment_reason | VARCHAR(100) |
@@ -5293,7 +5293,7 @@ Represents a physical inventory count (cycle count or full stock take).
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | warehouse_id | UUID |
 | count_number | VARCHAR(40) |
 | count_date | DATE |
@@ -5555,7 +5555,7 @@ Purchase Requisitions SHALL precede Purchase Orders where approval workflows are
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | requisition_number | VARCHAR(40) | No | — |
 | requested_by | UUID | No | — |
@@ -5590,7 +5590,7 @@ cancelled
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 requisition_number
 
@@ -5628,7 +5628,7 @@ Purchase Orders SHALL become the authoritative purchasing document.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | supplier_id | UUID |
 | requisition_id | UUID |
@@ -5685,7 +5685,7 @@ REFERENCES purchase_requisition(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 purchase_order_number
 
@@ -5782,7 +5782,7 @@ Approving a Goods Receipt SHALL generate inventory receipt movements.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | warehouse_id | UUID |
 | purchase_order_id | UUID |
 | receipt_number | VARCHAR(40) |
@@ -5822,7 +5822,7 @@ Partial receipts SHALL remain supported.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 receipt_number
 
@@ -5910,7 +5910,7 @@ Supplier invoices SHALL create Accounts Payable obligations.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | supplier_id | UUID |
 | purchase_order_id | UUID |
 | invoice_number | VARCHAR(60) |
@@ -5971,7 +5971,7 @@ Purchase returns SHALL:
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | supplier_id | UUID |
 | goods_receipt_id | UUID |
 | return_number | VARCHAR(40) |
@@ -6005,7 +6005,7 @@ Supplier Error
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 return_number
 
@@ -6220,7 +6220,7 @@ Quotations MAY be converted into Sales Orders.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | customer_id | UUID | No | — |
 | quotation_number | VARCHAR(40) | No | — |
@@ -6261,7 +6261,7 @@ cancelled
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 quotation_number
 
@@ -6348,7 +6348,7 @@ Sales Orders SHALL become the operational document used for:
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | customer_id | UUID |
 | quotation_id | UUID |
@@ -6404,7 +6404,7 @@ REFERENCES quotation(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 order_number
 
@@ -6547,7 +6547,7 @@ Walk-in customers MAY complete orders without delivery records.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | sales_order_id | UUID |
 | delivery_number | VARCHAR(40) |
@@ -6600,7 +6600,7 @@ REFERENCES employee(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 delivery_number
 
@@ -6816,7 +6816,7 @@ Invoices SHALL become immutable after posting.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | branch_id | UUID | No | — |
 | customer_id | UUID | No | — |
 | sales_order_id | UUID | Yes | — |
@@ -6881,7 +6881,7 @@ REFERENCES sales_order(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 invoice_number
 
@@ -6983,7 +6983,7 @@ Overpayments SHALL be supported.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | customer_id | UUID |
 | payment_reference | VARCHAR(60) |
 | payment_date | DATE |
@@ -7025,7 +7025,7 @@ Future payment methods MAY be introduced through configuration.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 payment_reference
 
@@ -7123,7 +7123,7 @@ Receipts SHALL remain immutable.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | customer_payment_id | UUID |
 | receipt_number | VARCHAR(40) |
 | receipt_date | DATE |
@@ -7137,7 +7137,7 @@ Receipts SHALL remain immutable.
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 receipt_number
 
@@ -7178,7 +7178,7 @@ Credit Notes SHALL never modify the original invoice.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | customer_invoice_id | UUID |
 | credit_note_number | VARCHAR(40) |
 | credit_reason | VARCHAR(100) |
@@ -7210,7 +7210,7 @@ Administrative Correction
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 credit_note_number
 
@@ -7453,7 +7453,7 @@ Example:
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | fiscal_year_name | VARCHAR(50) | No | — |
 | start_date | DATE | No | — |
 | end_date | DATE | No | — |
@@ -7489,7 +7489,7 @@ start_date < end_date
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 fiscal_year_name
 
@@ -7605,7 +7605,7 @@ The Chart of Accounts SHALL remain organization-specific.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | parent_account_id | UUID | Yes | — |
 | account_code | VARCHAR(20) | No | — |
 | account_name | VARCHAR(150) | No | — |
@@ -7677,7 +7677,7 @@ Credit
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -7693,7 +7693,7 @@ REFERENCES account(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 account_code
 
@@ -7745,7 +7745,7 @@ Marketing
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | cost_center_code | VARCHAR(20) |
 | cost_center_name | VARCHAR(100) |
 | description | TEXT |
@@ -7760,7 +7760,7 @@ Marketing
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 cost_center_code
 
@@ -7810,7 +7810,7 @@ Sales Channel
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | dimension_type | VARCHAR(50) |
 | dimension_code | VARCHAR(30) |
 | dimension_name | VARCHAR(100) |
@@ -7825,7 +7825,7 @@ Sales Channel
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 dimension_type,
 
@@ -8061,7 +8061,7 @@ Examples:
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | accounting_period_id | UUID | No | — |
 | journal_number | VARCHAR(40) | No | — |
 | journal_date | DATE | No | CURRENT_DATE |
@@ -8130,7 +8130,7 @@ Additional types MAY be introduced.
 ## Foreign Keys
 
 ```sql
-organization_id
+tenant_id
 REFERENCES organization(id)
 ```
 
@@ -8151,7 +8151,7 @@ REFERENCES journal_entry(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 journal_number
 
@@ -8600,7 +8600,7 @@ Repairs
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | account_id | UUID | No | — |
 | category_code | VARCHAR(30) | No | — |
 | category_name | VARCHAR(100) | No | — |
@@ -8626,7 +8626,7 @@ REFERENCES account(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 category_code
 
@@ -8664,7 +8664,7 @@ Approval SHALL generate accounting entries.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | expense_category_id | UUID |
 | cost_center_id | UUID |
@@ -8717,7 +8717,7 @@ amount >= 0
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 expense_number
 
@@ -8769,7 +8769,7 @@ Each branch MAY operate multiple cash registers.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | account_id | UUID |
 | register_code | VARCHAR(30) |
@@ -8795,7 +8795,7 @@ REFERENCES account(id)
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 register_code
 
@@ -8819,7 +8819,7 @@ Each petty cash fund SHALL reconcile independently.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | account_id | UUID |
 | fund_name | VARCHAR(100) |
@@ -8865,7 +8865,7 @@ Each bank account SHALL correspond to one General Ledger account.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | account_id | UUID |
 | bank_name | VARCHAR(150) |
 | account_name | VARCHAR(150) |
@@ -9217,7 +9217,7 @@ Payroll runs SHALL remain immutable after posting.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | payroll_number | VARCHAR(40) | No | — |
 | payroll_period_start | DATE | No | — |
 | payroll_period_end | DATE | No | — |
@@ -9251,7 +9251,7 @@ cancelled
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 payroll_number
 
@@ -9375,7 +9375,7 @@ Loan Deduction
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | component_code | VARCHAR(30) |
 | component_name | VARCHAR(100) |
 | component_type | VARCHAR(20) |
@@ -9438,7 +9438,7 @@ Furniture
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | asset_number | VARCHAR(40) |
 | asset_name | VARCHAR(150) |
 | asset_category | VARCHAR(100) |
@@ -9486,7 +9486,7 @@ written_off
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 asset_number
 
@@ -9621,7 +9621,7 @@ Budgets SHALL support annual and periodic planning.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | fiscal_year_id | UUID |
 | budget_name | VARCHAR(100) |
 | version_number | INTEGER |
@@ -10580,7 +10580,7 @@ KPIs SHALL be centrally managed.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | Yes | — |
+| tenant_id | UUID | Yes | — |
 | kpi_code | VARCHAR(50) | No | — |
 | kpi_name | VARCHAR(150) | No | — |
 | category | VARCHAR(50) | No | — |
@@ -10622,14 +10622,14 @@ Executive
 ```sql
 UNIQUE (
 
-organization_id,
+tenant_id,
 
 kpi_code
 
 )
 ```
 
-System KPIs MAY use a NULL organization_id.
+System KPIs MAY use a NULL tenant_id.
 
 ---
 
@@ -10660,7 +10660,7 @@ Snapshots SHALL support historical trend analysis.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | kpi_definition_id | UUID |
 | snapshot_time | TIMESTAMPTZ |
@@ -10706,7 +10706,7 @@ The cache SHALL reduce repeated aggregation over large datasets.
 | Column | Type |
 |---------|------|
 | cache_key | VARCHAR(150) |
-| organization_id | UUID |
+| tenant_id | UUID |
 | branch_id | UUID |
 | payload | JSONB |
 | expires_at | TIMESTAMPTZ |
@@ -10751,7 +10751,7 @@ Low Gross Margin
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | kpi_definition_id | UUID |
 | alert_name | VARCHAR(150) |
 | comparison_operator | VARCHAR(10) |
@@ -10821,7 +10821,7 @@ Alerts SHALL remain historically traceable.
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | alert_rule_id | UUID |
 | detected_at | TIMESTAMPTZ |
 | metric_value | NUMERIC(18,4) |
@@ -11204,7 +11204,7 @@ Each key SHALL belong to exactly one organization.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | No | — |
+| tenant_id | UUID | No | — |
 | key_name | VARCHAR(100) | No | — |
 | key_hash | TEXT | No | — |
 | key_prefix | VARCHAR(20) | No | — |
@@ -11279,7 +11279,7 @@ Custom ERP
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | webhook_name | VARCHAR(100) |
 | endpoint_url | TEXT |
 | signing_secret | TEXT |
@@ -11337,7 +11337,7 @@ Payment Received
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | event_type | VARCHAR(100) |
 | source_table | VARCHAR(50) |
 | source_id | UUID |
@@ -11447,7 +11447,7 @@ Stripe
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | provider | VARCHAR(50) |
 | external_account_id | VARCHAR(150) |
 | encrypted_access_token | BYTEA |
@@ -11507,7 +11507,7 @@ Data Export
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | job_type | VARCHAR(100) |
 | payload | JSONB |
 | priority | SMALLINT |
@@ -11850,7 +11850,7 @@ Stores immutable records of every auditable system action.
 | Column | Type | Nullable | Default |
 |---------|------|----------|----------|
 | id | UUID | No | gen_random_uuid() |
-| organization_id | UUID | Yes | — |
+| tenant_id | UUID | Yes | — |
 | actor_user_id | UUID | Yes | — |
 | actor_employee_id | UUID | Yes | — |
 | event_type | VARCHAR(100) | No | — |
@@ -11982,7 +11982,7 @@ Generated Report
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | user_profile_id | UUID |
 | activity_type | VARCHAR(100) |
 | description | TEXT |
@@ -12036,7 +12036,7 @@ Account Locked
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | user_profile_id | UUID |
 | severity | VARCHAR(20) |
 | event_type | VARCHAR(100) |
@@ -12102,7 +12102,7 @@ Regulatory Submission
 | Column | Type |
 |---------|------|
 | id | UUID |
-| organization_id | UUID |
+| tenant_id | UUID |
 | compliance_type | VARCHAR(100) |
 | reference_table | VARCHAR(100) |
 | reference_id | UUID |
@@ -12436,7 +12436,7 @@ generate_document_number(
 
 document_type,
 
-organization_id,
+tenant_id,
 
 branch_id
 
@@ -13680,7 +13680,7 @@ product_name gin_trgm_ops
 Recommended composite indexes:
 
 ```text
-organization_id
+tenant_id
 
 +
 
@@ -13688,7 +13688,7 @@ status
 ```
 
 ```text
-organization_id
+tenant_id
 
 +
 
@@ -13696,7 +13696,7 @@ created_at
 ```
 
 ```text
-organization_id
+tenant_id
 
 +
 
@@ -13704,7 +13704,7 @@ branch_id
 ```
 
 ```text
-organization_id
+tenant_id
 
 +
 
@@ -13763,7 +13763,7 @@ to minimize table lookups.
 
 Queries SHALL:
 
-- Filter by `organization_id` first.
+- Filter by `tenant_id` first.
 - Use indexed columns in predicates.
 - Avoid `SELECT *`.
 - Prefer pagination over large result sets.
@@ -13957,7 +13957,7 @@ Every business record SHALL belong to exactly one organization unless explicitly
 Every tenant-owned table SHALL contain:
 
 ```sql
-organization_id UUID NOT NULL
+tenant_id UUID NOT NULL
 ```
 
 Examples include:
@@ -14113,7 +14113,7 @@ Every organization-owned table SHOULD implement:
 ```sql
 USING (
 
-organization_id
+tenant_id
 
 =
 
@@ -14133,7 +14133,7 @@ Example:
 ```sql
 WITH CHECK (
 
-organization_id
+tenant_id
 
 =
 
@@ -14151,7 +14151,7 @@ Users SHALL never insert records into another organization.
 Users SHALL only update rows satisfying:
 
 ```sql
-organization_id
+tenant_id
 
 =
 
@@ -14181,7 +14181,7 @@ FOR SELECT
 
 USING (
 
-organization_id
+tenant_id
 
 =
 
@@ -14201,7 +14201,7 @@ ON inventory_item
 
 USING (
 
-organization_id
+tenant_id
 
 =
 
@@ -14341,7 +14341,7 @@ Required JWT claims:
 ```text
 user_id
 
-organization_id
+tenant_id
 
 branch_id
 
@@ -14424,7 +14424,7 @@ RLS predicates SHOULD utilize indexed columns.
 Minimum required indexes:
 
 ```text
-organization_id
+tenant_id
 
 branch_id
 
@@ -17044,7 +17044,7 @@ Recommended format:
   "level": "...",
   "service": "...",
   "request_id": "...",
-  "organization_id": "...",
+  "tenant_id": "...",
   "user_id": "...",
   "message": "...",
   "metadata": {}
@@ -22185,7 +22185,7 @@ SELECT
     id,
     customer_name
 FROM customer
-WHERE organization_id = current_organization()
+WHERE tenant_id = current_organization()
 ORDER BY customer_name;
 ```
 
