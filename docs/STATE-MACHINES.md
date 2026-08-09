@@ -2,6 +2,8 @@
 
 **Status:** canonical. Each entity below has exactly one legal set of transitions. `EB-013` describes these workflows in prose; this document is the enforceable version.
 
+**Correction (2026-08-09):** the Order state machine below was expanded from 5 states to the full 8-state model (`draft → submitted → confirmed → scheduled → in_production → ready → delivered → completed`, plus `cancelled → archived`) to match `EB-013` Appendix A, and the `ready → delivered` transition now hard-requires a verified `deliveries` row. `EB-013` §3 (roles) is separately flagged outdated — see `docs/ROLES-AND-PERMISSIONS.md`, which supersedes it.
+
 **Universal rules:**
 
 1. Every transition is validated in the database, not only in the app. A status column with a `CHECK` constraint prevents invalid *values*; a trigger prevents invalid *transitions*.
@@ -14,21 +16,27 @@
 ## 1. Order
 
 ```
-draft ──► confirmed ──► in_production ──► ready ──► completed
-  │           │               │             │
-  └───────────┴───────────────┴─────────────┴──► cancelled
+draft ──► submitted ──► confirmed ──► scheduled ──► in_production ──► ready ──► delivered ──► completed
+  │           │             │              │               │            │          │
+  └───────────┴─────────────┴──────────────┴───────────────┴────────────┴──────────┴──► cancelled ──► archived
 ```
 
 | From | To | Who | Preconditions | Side effects |
 |---|---|---|---|---|
 | — | draft | owner, admin, branch_manager, cashier | — | Order number assigned |
-| draft | confirmed | owner, admin, branch_manager, cashier | ≥1 order item; totals computed | Order items become immutable; invoice issued |
-| confirmed | in_production | owner, admin, branch_manager, baker | A production batch exists for the order | — |
+| draft | submitted | owner, admin, branch_manager, cashier | — | — |
+| submitted | confirmed | owner, admin, branch_manager, cashier | ≥1 order item; totals computed | Order items become immutable; invoice issued |
+| confirmed | scheduled | owner, admin, branch_manager, cashier | — | — |
+| scheduled | in_production | owner, admin, branch_manager, baker | A production batch exists for the order | — |
 | in_production | ready | owner, admin, branch_manager, baker | All linked batches completed or failed | Finished stock available |
-| ready | completed | owner, admin, branch_manager, cashier | Fulfilled: picked up, or delivery status = delivered | Sale stock movement written |
-| any non-terminal | cancelled | owner, admin, branch_manager | `cancelled_reason` provided | Reserved stock released; unpaid invoice voided |
+| ready | delivered | owner, admin, branch_manager, cashier | `fulfilment_type = 'pickup'`, **or** the linked `deliveries` row for this order has `status = 'delivered'` | — |
+| delivered | completed | owner, admin, branch_manager, cashier | — | Sale stock movement written |
+| any non-terminal | cancelled | owner, admin, branch_manager | `cancelled_reason` provided; if `amount_paid > 0`, a matching `refunds` total must already exist | Reserved stock released; unpaid invoice voided |
+| cancelled | archived | owner, admin, branch_manager | — | — |
 
-**Terminal:** `completed`, `cancelled`.
+**Terminal:** `completed`, `archived`. (`cancelled` is non-terminal — its only legal exit is `archived`.)
+
+**The `ready → delivered` gate is enforced in the database, not just convention.** For `fulfilment_type = 'delivery'` orders, the guard trigger looks up the linked `deliveries` row and blocks the transition unless that row's own status is `delivered`. This closes a gap where an order could previously reach a terminal-ish state with no verified delivery ever having happened. Pickup orders skip this check — there's nothing to deliver.
 
 **Payment is not a state.** An order tracks `amount_paid` independently of status. An order can be paid while still in production, or completed while unpaid (credit sale). Do not model payment as an order status — that conflation is the most common way this schema gets corrupted.
 
@@ -145,21 +153,35 @@ create or replace function guard_order_status_transition()
 returns trigger language plpgsql as $$
 declare
   allowed text[];
+  v_delivery_status text;
 begin
   if new.status = old.status then
     return new;
   end if;
 
   allowed := case old.status
-    when 'draft'         then array['confirmed','cancelled']
-    when 'confirmed'     then array['in_production','cancelled']
-    when 'in_production' then array['ready','cancelled']
-    when 'ready'         then array['completed','cancelled']
+    when 'draft'         then array['submitted', 'cancelled']
+    when 'submitted'     then array['confirmed', 'cancelled']
+    when 'confirmed'     then array['scheduled', 'cancelled']
+    when 'scheduled'     then array['in_production', 'cancelled']
+    when 'in_production' then array['ready', 'cancelled']
+    when 'ready'         then array['delivered', 'cancelled']
+    when 'delivered'     then array['completed', 'cancelled']
+    when 'cancelled'     then array['archived']
     else array[]::text[]
   end;
 
   if not (new.status = any(allowed)) then
     raise exception 'invalid order transition: % -> %', old.status, new.status;
+  end if;
+
+  -- Pickup orders have nothing to deliver; delivery orders must show their
+  -- linked deliveries row as actually delivered before the order can follow.
+  if new.status = 'delivered' and new.fulfilment_type = 'delivery' then
+    select d.status into v_delivery_status from deliveries d where d.order_id = new.id;
+    if v_delivery_status is distinct from 'delivered' then
+      raise exception 'order requires linked delivery to be delivered first';
+    end if;
   end if;
 
   if new.status = 'cancelled' and coalesce(new.cancelled_reason, '') = '' then

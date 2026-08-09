@@ -2,13 +2,14 @@
 
 BakeFlow is a mobile-first operational management platform for independent bakeries (starting with the Nigerian market). It connects orders, inventory, production, deliveries, and finance into one system so a bakery owner gets accurate financial visibility without bookkeeping knowledge.
 
-**Status:** pre-development. This repo contains the full engineering specification. Application code will be built phase-by-phase per `docs/AI-BUILD-GUIDE.md`.
+**Status:** backend is live and ahead of this repo (see `docs/PROJECT-OVERVIEW.md` §migration-sync for the gap — reconcile before assuming the committed migrations reflect production). Frontend is pre-development: no app code exists yet. Application code will be built phase-by-phase per `docs/AI-BUILD-GUIDE.md`, into the structure defined in `docs/FRONTEND-STRUCTURE.md`.
 
 ## Tech stack
 
-- **Mobile app:** React Native + Expo, Expo Router
-- **Backend:** Supabase (PostgreSQL, Auth, Storage, Row-Level Security)
-- **State:** Zustand (client state), TanStack Query (server state)
+- **Mobile app** (operational workspace — primary, build first): React Native + Expo, Expo Router
+- **Web app** (management/config/analytics workspace — reserved, build after mobile is underway): framework TBD, same backend
+- **Backend:** Supabase (PostgreSQL, Auth, Storage, Row-Level Security) — shared by both apps, no duplicated logic
+- **State:** Zustand (client state), TanStack Query (server state) — see `docs/FRONTEND-STRUCTURE.md` for store/hook boundaries between the two apps
 
 ## Non-negotiable rules
 
@@ -27,7 +28,9 @@ These override anything ambiguous or contradictory found elsewhere. If an EB doc
 
 ## Domain vocabulary (canonical)
 
-Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Order, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Baker, Cashier, Driver, Accountant.
+Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Order, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Cashier, Baker, Driver, Accountant (architecturally present, disabled in MVP 1), Supervisor (optional, enabled and configured per-bakery by the Branch Manager — see `docs/ROLES-AND-PERMISSIONS.md`).
+
+**"Ticket" is not a BakeFlow entity.** If you encounter it in an older EB chapter, it means Order — normalize the wording, don't create a Ticket table. **"Manager"** alone means Branch Manager; there is no separate Manager role.
 
 ## How to use the docs
 
@@ -43,15 +46,23 @@ Read per task, not all at once (some files are 30k+ lines — grep for specific 
 | Build phases & prompts | `docs/AI-BUILD-GUIDE.md` | — |
 | Creating tables | `docs/SCHEMA-REFERENCE.md` | EB-007, EB-011, EB-016A/B |
 | RLS policies, JWT claims | `docs/RLS-POLICY-PATTERNS.md` | EB-008, EB-010, EB-012 |
-| Status transitions, workflows | `docs/STATE-MACHINES.md` | EB-013 |
+| Status transitions, workflows | `docs/STATE-MACHINES.md` | — (EB-013's own state-machine appendix is fine; its §3 on roles is not — see below) |
+| Roles, permissions, Mobile/Web split | `docs/ROLES-AND-PERMISSIONS.md` | — (supersedes EB-013 §3 entirely; do not read EB-013 §3 for this) |
+| Frontend folder structure | `docs/FRONTEND-STRUCTURE.md` | EB-014 §2–3, §5–6 only if the concrete doc doesn't cover something |
 | RPCs, errors, queries | `docs/API-CONTRACT.md` | EB-009, EB-017 |
 | Colors, type, components | `docs/DESIGN-TOKENS.md` | EB-015, EB-018 |
 | What to test, per phase | `docs/TESTING-STRATEGY.md` | EB-019 |
-| App structure, navigation | — | EB-014, EB-018 |
 | CI/CD & operations | — | EB-019 |
 | Out of MVP scope — skip | — | EB-020 |
 
 If a `docs/*.md` file and an EB chapter disagree on a concrete value, the `docs/*.md` file wins and the EB chapter should be corrected in the same commit.
+
+**Known-outdated EB content — do not implement against these, even if a task seems to point there:**
+- **EB-013 §3** ("User Roles..."): describes Web as the primary operational surface, a `Manager` role, a fixed universal `Supervisor`, and a `Ticket` entity. All four are wrong. Use `docs/ROLES-AND-PERMISSIONS.md` instead. EB-013's other sections (state machines, business rules for non-role topics) are not affected by this and can still be read normally.
+
+**Low-signal chapters — skip unless specifically asked to audit documentation quality itself.** These are almost entirely generic "SHALL" governance prose with very few concrete, BakeFlow-specific, checkable claims (verified by direct reading, not assumption). Reading them for an implementation task burns tokens for near-zero signal: **EB-000, EB-001, EB-002, EB-003, EB-004, EB-005, EB-006, EB-019, EB-020**. If a task seems to require one of these, check the table above first — a `docs/*.md` concrete doc almost certainly already covers what's needed. The exception within this range: EB-005 (Financial Integrity) and EB-004 (Security) may contain a genuinely load-bearing principle occasionally referenced elsewhere — if something cites one by name, grep for that specific claim rather than reading the chapter start to finish.
+
+**EB-016A/EB-016B are not schema dumps despite the name.** They contain naming/type/indexing *standards* (33K + 24K lines), not table-by-table `CREATE TABLE` definitions for domains like orders, payments, or production. For actual current schema, query the live database directly (Supabase project `tvfyxpafbpnkneujcnvr`) — the committed migrations in `supabase/migrations/` are known to be behind production; see the migration-sync gap noted in `docs/PROJECT-OVERVIEW.md`.
 
 ## Workflow
 
