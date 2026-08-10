@@ -1,0 +1,40 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    // expo/tsconfig.base does NOT set strict. BakeFlow requires it: money is
+    // NUMERIC(19,4), and organization/branch boundaries are security invariants
+    // that must not be reachable through an implicit any.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    // No baseUrl: TypeScript 6 deprecates it (TS5101). `paths` entries resolve
+    // relative to this file, which is what we want in a workspace anyway.
+    "paths": {
+      "@/*": ["./*"],
+      "@bakeflow/api": ["../../packages/api"],
+      "@bakeflow/api/*": ["../../packages/api/*"],
+      "@bakeflow/auth": ["../../packages/auth"],
+      "@bakeflow/auth/*": ["../../packages/auth/*"],
+      "@bakeflow/types": ["../../packages/types"],
+      "@bakeflow/types/*": ["../../packages/types/*"],
+      "@bakeflow/validation": ["../../packages/validation"],
+      "@bakeflow/validation/*": ["../../packages/validation/*"],
+      "@bakeflow/hooks": ["../../packages/hooks"],
+      "@bakeflow/hooks/*": ["../../packages/hooks/*"],
+      "@bakeflow/ui": ["../../packages/ui"],
+      "@bakeflow/ui/*": ["../../packages/ui/*"],
+      "@bakeflow/config": ["../../packages/config"],
+      "@bakeflow/config/*": ["../../packages/config/*"],
+      "@bakeflow/utils": ["../../packages/utils"],
+      "@bakeflow/utils/*": ["../../packages/utils/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "nativewind-env.d.ts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
+}
