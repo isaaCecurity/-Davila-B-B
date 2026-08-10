@@ -2,6 +2,10 @@
   "name": "bakeflow-frontend",
   "private": true,
   "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=22.13.0",
+    "npm": "10.8.2"
+  },
   "workspaces": [
     "apps/mobile",
     "packages/*"
@@ -18,6 +22,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "deps:check": "npm run deps:check --workspace apps/mobile",
-    "deps:duplicates": "npm ls react react-dom @types/react --depth=0"
+    "deps:doctor": "npm run doctor --workspace apps/mobile",
+    "deps:duplicates": "npm ls react react-dom @types/react --depth=0",
+    "ci:install": "corepack npm ci",
+    "ci:verify": "corepack npm --version && npm run typecheck && npm run lint && npm run deps:check"
   }
 }
