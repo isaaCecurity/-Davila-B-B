@@ -13,12 +13,12 @@
     },
     "android": {
       "package": "com.bakeflow.app",
-      "edgeToEdgeEnabled": true,
       "allowBackup": false
     },
     "plugins": [
       "expo-router",
       "expo-dev-client",
+      "expo-system-ui",
       "expo-secure-store",
       [
         "expo-sqlite",

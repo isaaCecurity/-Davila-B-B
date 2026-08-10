@@ -12,6 +12,12 @@
   "scripts": {
     "dev:mobile": "npm run dev --workspace apps/mobile",
     "build:mobile": "npm run build --workspace apps/mobile",
-    "lint": "npm run lint --workspaces --if-present"
+    "android": "npm run android --workspace apps/mobile",
+    "ios": "npm run ios --workspace apps/mobile",
+    "prebuild": "npm run prebuild --workspace apps/mobile",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "deps:check": "npm run deps:check --workspace apps/mobile",
+    "deps:duplicates": "npm ls react react-dom @types/react --depth=0"
   }
 }

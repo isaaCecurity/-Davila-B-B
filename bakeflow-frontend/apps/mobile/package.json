@@ -10,7 +10,10 @@
     "ios": "expo run:ios",
     "build": "expo export",
     "typecheck": "tsc --noEmit",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "prebuild": "expo prebuild",
+    "deps:check": "expo install --check",
+    "doctor": "expo-doctor"
   },
   "dependencies": {
     "@shopify/react-native-skia": "2.6.2",
@@ -27,6 +30,7 @@
     "expo-router": "~57.0.12",
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
+    "expo-system-ui": "~57.0.2",
     "nativewind": "4.2.6",
     "react": "19.2.3",
     "react-native": "0.86.2",
