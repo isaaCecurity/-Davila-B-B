@@ -94,3 +94,41 @@ Fixtures were removed; counts returned to 0.
 Security suite is now **16 assertions** (S1, S2, S2b, S3, S4, S5a–d, S6–S13, G1, G2).
 
 **No implementation work was performed. B7 was not started.**
+
+---
+
+## 2026-08-10 · B5 — PLAN phase only, stopped at the gate
+
+Attempted B5 (per-entity sync operation application). **Stopped at PLAN. No code
+written, no migration applied, no business table touched.** Live row counts unchanged
+at 0.
+
+**Inspected:** `tickets`/`ticket_items` columns; the five ticket guard functions;
+trigger firing order on `tickets`; `docs/STATE-MACHINES.md` §1 and §63-70;
+`docs/OFFLINE-SYNC-MODEL.md` conflict sections (§335, §659-663, §1018-1047).
+
+**Verified against the live database (not read from docs):**
+
+| Finding | Query result |
+|---|---|
+| Trigger order on `tickets` | `prevent_submitted_ticket_update -> tickets_assign_number -> tickets_guard_status_transition -> tickets_set_updated_at -> trg_guard_driver_created_ticket_assignment -> trg_guard_ticket_actor_assignment` |
+| `prevent_submitted_ticket_update()` guards `status` | true — so it pre-empts the transition guard |
+| Guards `subtotal_amount` / `total_amount` | **false / false** |
+| `guard_ticket_item_mutation()` includes `submitted` | **false** |
+| `sync_conflicts` table exists | **false** |
+| `tickets` / `customers` rows | 0 / 0 |
+
+**Conclusion.** Both defects documented in `docs/STATE-MACHINES.md` §63-70 are real and
+still deployed: onward ticket transitions are unreachable, and a submitted ticket's
+money is not frozen. Additionally the `sync_conflicts` table the sync model references
+does not exist, and no per-entity conflict strategy or applier contract is defined.
+
+An applier built on this would either fail on every transition past `submitted` or
+silently rewrite finalised totals. `docs/STATE-MACHINES.md` §70 records the owner's
+2026-08-10 decision not to write the remediation migration, so overriding it was not
+an option.
+
+**Raised:** BLOCKER-005 (ticket guards), BLOCKER-006 (conflict strategy / applier
+contract), with matching NOTIFICATIONS entries. `CURRENT_TASK.md` marks B5 BLOCKED.
+
+**B7 was not started**, per the human's explicit gate.
