@@ -72,3 +72,47 @@ If a `docs/*.md` file and an EB chapter disagree on a concrete value, the `docs/
 - After schema changes, run `pytest` — `tests/test_spec_coverage.py` guards naming invariants and requirement-ID uniqueness.
 - Don't commit `__pycache__/`, `.pyc`, or `.pytest_cache/` (see `.gitignore`).
 - When you hit a spec contradiction, stop and surface it; record the resolution in `docs/PROJECT-OVERVIEW.md` §7 and fix the offending document in the same commit.
+
+## Agent orchestration layer
+
+Nine Agency specialists are installed project-locally in `.claude/agents/`, each
+carrying an injected **BakeFlow governance** preamble. They are generic experts
+operating under this project's rules, not authorities in their own right.
+
+**Precedence, highest first:** approved business requirements → approved architecture
+(`ARCHITECTURE_DECISIONS.md`) → security/data rules (this file,
+`docs/RLS-POLICY-PATTERNS.md`) → `docs/MASTER_PROMPT.md` → specialist expertise →
+agent preference. A generic recommendation that conflicts with an approved BakeFlow
+decision loses. Two BakeFlow requirements in conflict become a blocker, never a guess.
+
+**Control files (project root)** — read before acting, update after meaningful progress:
+
+| File | Role |
+|---|---|
+| `BACKEND_ROADMAP.md` | Dependency graph; a task cannot start before its prerequisites |
+| `CURRENT_TASK.md` | The one active task and its quality gate |
+| `BLOCKERS.md` | Decisions that must not be guessed |
+| `NOTIFICATIONS.md` | Human-facing action queue |
+| `ARCHITECTURE_DECISIONS.md` | Locked decisions — do not redesign |
+| `TECHNICAL_DEBT.md` | Known, accepted debt |
+| `IMPLEMENTATION_LOG.md` | Append-only record of executed work |
+
+**Blocker rule.** Unknown business rules, unspecified financial behaviour (tax,
+pricing, discounts, rounding, refunds, invoice finalisation), security or
+authorization decisions, destructive migrations, data-loss risk, architecture
+conflicts, and missing external access all stop work: append to `BLOCKERS.md` and
+`NOTIFICATIONS.md`, mark the task blocked, tell the human, then continue only
+unrelated safe work.
+
+**Evidence rule.** Never record a test as passing unless it was executed, and never
+document planned functionality as delivered.
+
+**Verification commands** (the real ones — do not invent others):
+
+```bash
+.venv/Scripts/python.exe -m pytest -q          # repository tests
+cd bakeflow-frontend && corepack npm install   # install, pinned to npm 10.8.2
+npm run typecheck --workspace apps/mobile      # tsc --noEmit, strict
+npm run lint --workspace apps/mobile           # eslint
+npm run deps:check --workspace apps/mobile     # expo install --check
+```
