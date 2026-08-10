@@ -1,0 +1,17 @@
+{
+  "name": "bakeflow-frontend",
+  "private": true,
+  "packageManager": "npm@10.8.2",
+  "workspaces": [
+    "apps/mobile",
+    "apps/web",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:mobile": "npm run dev --workspace apps/mobile",
+    "dev:web": "npm run dev --workspace apps/web",
+    "build:mobile": "npm run build --workspace apps/mobile",
+    "build:web": "npm run build --workspace apps/web",
+    "lint": "npm run lint --workspaces --if-present"
+  }
+}
