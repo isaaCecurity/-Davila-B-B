@@ -114,6 +114,23 @@ BEGIN
     INSERT INTO _results VALUES ('S2 unauthorized branch blocked', SQLERRM LIKE '%branch%', SQLERRM);
   END;
 
+  -- S2b -- a branch id from ANOTHER organization must never be authorized.
+  -- U1 is a legitimate member of both A and B, so membership alone passes; the
+  -- operation claims organization A while naming B2, a branch that belongs to B.
+  -- This is the case is_authorized_for_branch() guards by checking
+  -- branch-belongs-to-organization BEFORE any organization-wide role is consulted.
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',U1,'tenant_id',ORG_A,'roles',json_build_array('driver'))::text, true);
+  BEGIN
+    v_res := public.process_sync_batch(D1, jsonb_build_array(jsonb_build_object(
+      'operation_id', gen_random_uuid(), 'tenant_id', ORG_A, 'branch_id', B2,
+      'entity_id', gen_random_uuid(), 'entity_type','tickets','operation_type','CREATE',
+      'device_created_at', now()::text, 'payload','{}'::jsonb)));
+    INSERT INTO _results VALUES ('S2b cross-org branch id rejected', false, 'accepted - MUST NOT HAPPEN');
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO _results VALUES ('S2b cross-org branch id rejected', SQLERRM LIKE '%branch%', SQLERRM);
+  END;
+
   -- S3 -- one batch spanning two organizations
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub',U1,'tenant_id',ORG_A,'roles',json_build_array('driver'))::text, true);

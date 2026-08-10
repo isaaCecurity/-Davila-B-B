@@ -58,3 +58,39 @@ authorized operations only.
 Installed 9 specialists into `.claude/agents/` with a BakeFlow governance preamble;
 staged 4 deferred agents in `.claude/agents-deferred/`; created the 7 control files.
 No BakeFlow feature code was written.
+
+---
+
+## 2026-08-10 · VERIFICATION pass — authorization foundation (steps 1–6)
+
+Read-only re-verification of the multi-organization authorization foundation against
+the live project, plus one new behavioural test. No migrations were applied.
+
+**Verified against the live database (all PASS):**
+
+| Step | Assertion | Evidence |
+|---|---|---|
+| 1 | `profiles_update_self` WITH CHECK pins `active_tenant_id`, `tenant_id`, `primary_branch_id`, `status`, `deleted_at`, `deleted_by` | `pg_policy` |
+| 2 | `profiles.active_tenant_id` is `uuid` NULL with FK to `organizations`; `set_active_organization()` is SECURITY DEFINER, pins `search_path`, validates membership **and** `status='active'`; EXECUTE granted to `authenticated`, denied to `anon` | `information_schema`, `pg_proc`, `has_function_privilege` |
+| 3 | Token hook reads `active_tenant_id`, filters `user_roles.deleted_at` + `roles.deleted_at` + profile `status`/`deleted_at`, scopes roles to the active organization only, and coalesces the null tenant so `jsonb_set`'s STRICT behaviour cannot return NULL | `pg_get_functiondef` |
+| 4 | `guard_user_role_integrity()` no longer requires `profiles.tenant_id = NEW.tenant_id` (multi-org membership insertable) while still enforcing branch-belongs-to-organization; `organizations_select`, `profiles_select`, `profiles_update_admin` all resolve via `user_roles` | `pg_get_functiondef`, `pg_policy` |
+| 5 | `accept_organization_invite` has no "already belongs to a different organization" rejection, seeds `profiles.tenant_id` only when NULL, sets `active_tenant_id` only when NULL | `pg_get_functiondef` |
+| 6 | `sync_devices` has no `tenant_id`/`branch_id`; FORCE RLS on `sync_devices` + `sync_operations`; `sync_validate_device` returns `uuid` and checks ownership + revocation; no sync function references `current_tenant_id()`; internal helpers not EXECUTE-able by `authenticated`/`anon`; inner processor takes 3 args (no batch-level tenant) | `pg_proc`, `pg_class`, `has_function_privilege` |
+
+`assert_schema_invariants()` — executed, no violations.
+Row counts before and after — 0 users / 0 orgs / 0 profiles / 0 devices / 0 operations / 0 branches.
+
+**Test-coverage gap found and closed.** A textual ordering check on
+`is_authorized_for_branch()` produced a false negative (the word "owner" appears in an
+explanatory comment above the branch check). Reading the body confirmed the ordering is
+correct — but it revealed that no *behavioural* test covered the cross-organization
+branch case. S2 only covered an unauthorized branch inside the actor's own organization.
+
+Added **S2b** to `tests/sql/security_multiorg_sync.sql` and executed it: a user who is
+**owner** in Bakery A (organization-wide authority) submitting an operation for Bakery A
+that names Branch B2 (a branch of Bakery B) is refused, and zero rows are written.
+Fixtures were removed; counts returned to 0.
+
+Security suite is now **16 assertions** (S1, S2, S2b, S3, S4, S5a–d, S6–S13, G1, G2).
+
+**No implementation work was performed. B7 was not started.**
