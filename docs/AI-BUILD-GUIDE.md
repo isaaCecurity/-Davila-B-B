@@ -1,39 +1,49 @@
 # BakeFlow — AI-Assisted Implementation Guide (Claude Code)
 
-This document is the authoritative build guide designed specifically to instruct an AI coding agent (like Claude Code) on how to incrementally build out the BakeFlow Supabase PostgreSQL backend.
+> ## ⚠️ These six phases are already built
+>
+> This guide was written to drive the initial build. **That build has happened.** The live database (`tvfyxpafbpnkneujcnvr`) contains all 38 tables, ~65 functions, and 101 RLS policies covering every phase below. Running these prompts against production would attempt to re-create existing objects.
+>
+> **Keep this document for the phase structure and prompt style, not as a to-do list.** If you are adding a *new* domain (notifications, reporting, purchasing), copy the shape of a phase prompt — but take the actual specification from the concrete docs in §1, never from the EB chapters, and confirm against the live schema first.
+>
+> The repo also cannot currently rebuild that database: the baseline migration is an empty file. Read `PROJECT-OVERVIEW.md` §7 before touching migrations.
 
-BakeFlow is a mobile-first operational management platform for independent bakeries using a multi-tenant model. To ensure high data integrity, strict multi-tenant isolation, and complete financial correctness, **do not attempt to implement the entire database at once.** Instead, follow this phased, step-by-step roadmap using the provided structured prompts.
+This document instructs an AI coding agent (like Claude Code) on how to extend the BakeFlow Supabase PostgreSQL backend incrementally.
+
+BakeFlow is a mobile-first operational management platform for independent bakeries using a multi-tenant model. To ensure high data integrity, strict multi-tenant isolation, and complete financial correctness, **do not attempt to implement a whole domain at once.** Work in phases, verifying each before starting the next.
 
 ---
 
 ## 1. Reference Blueprint Documents
 
-When instructing Claude Code, feed it this file alongside the relevant Engineering Bible (EB) chapters for the current phase:
+**Read the concrete `docs/*.md` files first.** They contain the actual tables, columns, RPC signatures, and policies. The EB chapters are *prose standards* — `CLAUDE.md` records that they contain almost no `CREATE TABLE` DDL, so instructing an agent to "match EB-011 exactly" sends it looking for column lists that do not exist.
 
-| Phase / Focus | Key Reference Document(s) | Primary Purpose |
+| Phase / Focus | Read first (concrete) | Deep reference (prose, optional) |
 |---|---|---|
-| **High-Level Context** | `docs/PROJECT-OVERVIEW.md` | Business logic, Organization -> Branch hierarchy |
-| **Supabase Standards** | `docs/engineering-bible/EB-008-Supabase-Architecture-Standards.md` | RLS philosophy, JWT claims, custom claims |
-| **Auth & Security** | `docs/engineering-bible/EB-010-Authentication-Authorization-Identity-Standards.md`<br>`docs/engineering-bible/EB-012-Authentication-Authorization-Security-Architecture.md` | Role-Based Access Control, security architecture |
-| **SQL Schema Blueprint**| `docs/engineering-bible/EB-011-Database-Schema-Domain-Model-Standards.md` | Exact table designs, columns, constraints |
-| **Reference SQL Code** | `docs/engineering-bible/EB-016A-Database-Implementation-Reference.md`<br>`docs/engineering-bible/EB-016B-Database-Implementation-Reference.md` | SQL triggers, functions, database initializers |
-| **Business Workflows** | `docs/engineering-bible/EB-013-Business-Rules-Operational-Workflows-Domain-Logic.md` | RLS constraints, state transitions |
+| **High-Level Context** | `docs/PROJECT-OVERVIEW.md` | — |
+| **Tables & columns** | `docs/SCHEMA-REFERENCE.md` | EB-007, EB-011, EB-016A/B |
+| **RLS policies, JWT claims** | `docs/RLS-POLICY-PATTERNS.md` | EB-008, EB-010, EB-012 |
+| **RPCs, errors, read conventions** | `docs/API-CONTRACT.md` | EB-009, EB-017 |
+| **Status transitions** | `docs/STATE-MACHINES.md` | EB-013 Appendix A |
+| **Roles & permissions** | `docs/ROLES-AND-PERMISSIONS.md` | — (supersedes EB-013 §3) |
+| **What to test** | `docs/TESTING-STRATEGY.md` | EB-019 |
 
 ---
 
 ## 2. Core Architectural Rules for the AI
 
 Every prompt given to Claude Code should reinforce these non-negotiable rules:
-1. **Multi-Tenant Isolation:** Every tenant-scoped table MUST have `tenant_id UUID NOT NULL REFERENCES organizations(id) DEFAULT (auth.jwt() ->> 'tenant_id')::uuid`. Row-Level Security (RLS) MUST be enabled on every table to isolate data by `tenant_id`.
-2. **No Money as Float:** All monetary columns MUST use `NUMERIC(19,4)`.
-3. **No Soft Deletes without Archiving:** Business-critical operational data is immutable or archived, never silently deleted.
+1. **Multi-Tenant Isolation:** Every tenant-scoped table MUST have `tenant_id UUID NOT NULL REFERENCES organizations(id)`, **set explicitly by the application on every insert**. Do **not** add `DEFAULT (auth.jwt() ->> 'tenant_id')::uuid` — a JWT-derived default breaks silently for service-role operations, migrations, and seeds, and is forbidden by `CLAUDE.md` rule 3, `SCHEMA-REFERENCE.md`, and `RLS-POLICY-PATTERNS.md` §1.6/§10. RLS is the enforcement layer; the explicit value is the source of truth. Audit check `A5` fails any table that carries such a default.
+2. **No Money as Float:** All monetary columns MUST use `NUMERIC(19,4)`. Quantities are `NUMERIC(18,4)`, percentages `NUMERIC(5,2)`.
+3. **No Hard Deletes:** Business-critical operational data is immutable or soft-deleted via `deleted_at`/`deleted_by`, never silently removed. See `SCHEMA-REFERENCE.md` §11.
 4. **Primary Keys:** Every primary key MUST be a `UUID` defaulting to `gen_random_uuid()`.
+5. **The entity is Ticket, not Order.** Tables are `tickets`/`ticket_items`; FKs are `ticket_id`. Some existing RPC arguments are named `p_order_id` for historical reasons — match the existing convention when editing those functions, and use `ticket` everywhere new.
 
 ---
 
-## 3. Incremental Build Roadmap & Prompts
+## 3. The Build Roadmap (historical)
 
-Copy and paste the following prompts into Claude Code sequentially. Wait for Claude Code to complete each phase, run its own verification checks, and confirm it works before proceeding to the next.
+The six phases below were executed to produce the current schema. They are retained as a record of the intended build order and as a template for new work. **Verify against the live database before running any of them.**
 
 ---
 
@@ -84,7 +94,8 @@ Refer to these files:
 
 Tasks:
 1. Write SQL DDL to create:
-   - `roles` (pre-defined platform roles: Owner, Admin, Branch Manager, Baker, Cashier, Driver, Accountant)
+   - `roles` (pre-defined platform roles: Owner, Admin, Branch Manager, Supervisor, Baker, Cashier, Driver, Accountant — see `docs/ROLES-AND-PERMISSIONS.md` §4 for the live `rank` values)
+   - `permissions` and `role_permissions` (the permission catalog read by `has_permission()`)
    - `user_roles` (junction table linking profile to role, scoped by `tenant_id`)
    - `branch_assignments` (linking profiles to branches for multi-branch assignment)
    - `organization_invites` (for inviting new staff members to an organization)
@@ -125,7 +136,7 @@ Tasks:
    - SKU codes must be unique within a tenant.
 3. Enable RLS on all these tables. Write policies allowing:
    - All employees of the tenant to read catalog and recipes.
-   - Only authorized roles (Owner, Admin, Production Manager) to create, update, or delete products and recipes.
+   - Only authorized roles (Owner, Admin, Branch Manager — there is no "Production Manager" role) to create, update, or delete products and recipes. Prefer the `products.manage` / `pricing.manage` permission keys over hard-coded role lists.
 
 Please provide the SQL migration and explain the foreign key mappings.
 ```
@@ -176,15 +187,15 @@ Refer to these files:
 Tasks:
 1. Write the SQL DDL for:
    - `customers` (guest/anonymous profile or registered)
-   - `orders` (scoped to `branch_id`, tracking order state: draft, confirmed, in_production, ready, completed, cancelled)
-   - `order_items` (scoped to `orders`, tracking quantity and price)
-   - `invoices` (billing document linked to an order)
+   - `tickets` (scoped to `branch_id`, tracking the full 10-state machine: draft, submitted, confirmed, scheduled, in_production, ready, delivered, completed, cancelled, archived — see `docs/STATE-MACHINES.md` §1)
+   - `ticket_items` (scoped to `tickets`, tracking quantity and price)
+   - `invoices` (billing document linked to a ticket)
    - `payments` (linked to invoices or customer credit, tracking cash, card, transfer)
 2. Ensure financial invariants:
    - Prices, totals, discounts, taxes must be `NUMERIC(19,4)`.
-   - Prevent updating order items once an order is marked ready or completed.
+   - Prevent updating ticket items once a ticket is marked ready, completed, or cancelled.
 3. Enable RLS on these tables scoped by `tenant_id` and `branch_id`.
-4. (Optional but recommended) Write a Postgres trigger to automatically transition order state based on payment status if configured.
+4. Do **not** transition ticket state from payment status. Payment is not a state: a ticket can be paid while in production, or completed while unpaid on credit. `docs/STATE-MACHINES.md` §1 calls this conflation the most common way this schema gets corrupted. Track `amount_paid` independently.
 
 Provide the SQL script and detail how monetary rounding calculations are protected.
 ```
@@ -226,5 +237,5 @@ Provide the final database migrations, explain the state machines, and outline h
 ## 4. Operational Best Practices with Claude Code
 
 - **Apply Migrations Iteratively:** Run each phase's SQL script on your Supabase development database, verify the schema is updated, and check that no RLS policy blocks basic operations.
-- **Run the Spec Verification Suite:** After completing all database schema migrations, execute `pytest` in your repository to ensure that all requirement IDs remain unique and no naming invariants have been broken.
+- **Run the Spec Verification Suite:** After completing all database schema migrations, execute `pytest` in your repository to ensure that all requirement IDs remain unique and no naming invariants have been broken. Note that `pytest` only lints Markdown — it does not touch the database. For the database, run `tests/db_security_audit.sql` and the `verify_*()` functions listed in `SCHEMA-REFERENCE.md` §9.
 - **Maintain a Clean Workspace:** Ensure Claude Code does not leave any compiled `.pyc` files or cache artifacts staged in git. Keep the repository as clean as specified in `.gitignore`.

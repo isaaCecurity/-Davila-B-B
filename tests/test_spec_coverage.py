@@ -112,9 +112,72 @@ def test_canonical_docs_exist():
         "docs/API-CONTRACT.md",
         "docs/STATE-MACHINES.md",
         "docs/TESTING-STRATEGY.md",
+        "docs/ROLES-AND-PERMISSIONS.md",
+        "docs/FRONTEND-STRUCTURE.md",
     ]
     missing = [p for p in required if not os.path.exists(p)]
     assert not missing, f"Missing canonical documents: {missing}"
+
+
+def _read(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def test_sales_entity_is_ticket_not_order():
+    """The live schema uses tickets/ticket_items. Earlier drafts said orders/order_items.
+
+    Guards the resolution recorded in PROJECT-OVERVIEW.md section 7: 'ticket' is
+    canonical, so a table-definition header for `orders` is a regression.
+    """
+    schema = _read("docs/SCHEMA-REFERENCE.md")
+    assert "### `tickets`" in schema, "SCHEMA-REFERENCE.md no longer defines the `tickets` table"
+    for banned in ("### `orders`", "### `order_items`"):
+        assert banned not in schema, (
+            f"SCHEMA-REFERENCE.md defines {banned} — the canonical tables are "
+            "`tickets` and `ticket_items` (see CLAUDE.md domain vocabulary)"
+        )
+
+
+def test_no_jwt_derived_tenant_id_default():
+    """tenant_id is set explicitly by the application, never defaulted from the JWT.
+
+    A JWT-derived default breaks silently for service-role operations, migrations
+    and seeds. See CLAUDE.md rule 3 and RLS-POLICY-PATTERNS.md sections 1.6 and 10.
+    """
+    pattern = re.compile(r"tenant_id[^\n]*DEFAULT\s*\(\s*auth\.jwt\(\)", re.IGNORECASE)
+    # Naming the anti-pattern in order to forbid it is fine; prescribing it is not.
+    prohibition = re.compile(
+        r"never|not\b|non-|no\b|prohibit|forbid|avoid|shall not|do not|don't|instead|breaks",
+        re.IGNORECASE,
+    )
+    docs = [os.path.join("docs", f) for f in sorted(os.listdir("docs")) if f.endswith(".md")]
+    offenders = {}
+    for path in ["CLAUDE.md", *docs]:
+        lines = _read(path).splitlines()
+        for i, line in enumerate(lines):
+            if not pattern.search(line):
+                continue
+            window = " ".join(lines[max(0, i - 3):i + 2])
+            if not prohibition.search(window):
+                offenders.setdefault(path, []).append(line.strip()[:90])
+    assert not offenders, (
+        "A JWT-derived DEFAULT for tenant_id is prescribed in: "
+        f"{offenders}. Set tenant_id explicitly on every insert instead."
+    )
+
+
+def test_ticket_status_check_covers_full_state_machine():
+    """SCHEMA-REFERENCE's status CHECK must not drift behind STATE-MACHINES."""
+    schema = _read("docs/SCHEMA-REFERENCE.md")
+    for state in (
+        "draft", "submitted", "confirmed", "scheduled", "in_production",
+        "ready", "delivered", "completed", "cancelled", "archived",
+    ):
+        assert f"'{state}'" in schema, (
+            f"Ticket state '{state}' missing from SCHEMA-REFERENCE.md — the deployed "
+            "tickets_status_check carries all ten states (STATE-MACHINES.md section 1)"
+        )
 
 
 def test_requirement_id_uniqueness():

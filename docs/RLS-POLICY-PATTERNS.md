@@ -20,14 +20,14 @@
 Define these once. They keep policies readable and make claim-shape changes a one-file edit.
 
 ```sql
-create or replace function auth.current_tenant_id()
+create or replace function public.current_tenant_id()
 returns uuid
 language sql stable
 as $$
   select nullif(auth.jwt() ->> 'tenant_id', '')::uuid
 $$;
 
-create or replace function auth.has_role(role_keys text[])
+create or replace function public.has_role(role_keys text[])
 returns boolean
 language sql stable
 as $$
@@ -37,25 +37,36 @@ as $$
   )
 $$;
 
-create or replace function auth.has_branch_access(target_branch_id uuid)
+create or replace function public.has_branch_access(target_branch_id uuid)
 returns boolean
 language sql stable security definer
 set search_path = public
 as $$
   select
-    auth.has_role(array['owner','admin'])
+    public.has_role(array['owner','admin'])
     or exists (
       select 1 from branch_assignments ba
       where ba.profile_id = auth.uid()
         and ba.branch_id  = target_branch_id
-        and ba.tenant_id  = auth.current_tenant_id()
+        and ba.tenant_id  = public.current_tenant_id()
     )
 $$;
 ```
 
-`auth.has_branch_access` is `SECURITY DEFINER` deliberately — it reads `branch_assignments`, and a policy on that table would otherwise recurse. Owners and admins bypass branch scoping by design; every other role sees only assigned branches.
+`public.has_branch_access` is `SECURITY DEFINER` deliberately — it reads `branch_assignments`, and a policy on that table would otherwise recurse. Owners and admins bypass branch scoping by design; every other role sees only assigned branches.
 
-**Stability requirement:** all three functions are `STABLE`, so Postgres evaluates them once per statement rather than per row. Marking them `VOLATILE` will make large list queries slow enough to notice.
+> **Schema qualification matters.** These helpers live in **`public`**, not `auth`. An earlier revision of this document wrote them as `auth.current_tenant_id()` etc. throughout; a policy copied from that text fails at creation with *"function auth.current_tenant_id() does not exist"*. Always write `public.`.
+
+There is a fourth deployed helper this document previously omitted:
+
+```sql
+-- public.has_permission(required_permission text, target_branch_id uuid) returns boolean
+-- Joins user_roles -> role_permissions -> permissions, honours branch_assignments,
+-- and bypasses for owner/admin. Prefer it over hard-coded role arrays where a
+-- permission key exists (see ROLES-AND-PERMISSIONS.md section 4).
+```
+
+**Stability requirement:** all four functions are `STABLE`, so Postgres evaluates them once per statement rather than per row. Marking them `VOLATILE` will make large list queries slow enough to notice.
 
 ---
 
@@ -68,24 +79,24 @@ alter table products enable row level security;
 alter table products force row level security;
 
 create policy products_select on products
-  for select using (tenant_id = auth.current_tenant_id());
+  for select using (tenant_id = public.current_tenant_id());
 
 create policy products_insert on products
   for insert with check (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_role(array['owner','admin','branch_manager'])
+    tenant_id = public.current_tenant_id()
+    and public.has_role(array['owner','admin','branch_manager'])
   );
 
 create policy products_update on products
   for update
-  using (tenant_id = auth.current_tenant_id()
-         and auth.has_role(array['owner','admin','branch_manager']))
-  with check (tenant_id = auth.current_tenant_id());
+  using (tenant_id = public.current_tenant_id()
+         and public.has_role(array['owner','admin','branch_manager']))
+  with check (tenant_id = public.current_tenant_id());
 
 create policy products_delete on products
   for delete using (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_role(array['owner','admin'])
+    tenant_id = public.current_tenant_id()
+    and public.has_role(array['owner','admin'])
   );
 ```
 
@@ -95,45 +106,51 @@ Note the `UPDATE` policy carries both `USING` and `WITH CHECK`. `USING` decides 
 
 ## 4. Pattern B — branch-scoped table
 
-Adds branch access on top of tenant isolation. Applies to `orders`, `order_items`, `warehouses`, `stock_movements`, `production_batches`, `deliveries`, `cash_sessions`, `expenses`, `invoices`, `payments`.
+Adds branch access on top of tenant isolation. Applies to `tickets`, `ticket_items`, `warehouses`, `stock_movements`, `production_batches`, `production_batch_ingredients`, `deliveries`, `cash_sessions`, `expenses`, `invoices`, `payments`, `refunds`, `daily_financial_audits`, `sync_devices`, `sync_changes`, `sync_operations`.
+
+Child tables that carry no `branch_id` of their own (`ticket_items`, `production_batch_ingredients`) scope through their parent with an `EXISTS` subquery against the parent's `branch_id`, rather than repeating the column.
 
 ```sql
-create policy orders_select on orders
+create policy tickets_select on tickets
   for select using (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_branch_access(branch_id)
+    tenant_id = public.current_tenant_id()
+    and public.has_branch_access(branch_id)
   );
 
-create policy orders_insert on orders
+create policy tickets_insert on tickets
   for insert with check (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_branch_access(branch_id)
-    and auth.has_role(array['owner','admin','branch_manager','cashier'])
+    tenant_id = public.current_tenant_id()
+    and public.has_branch_access(branch_id)
+    and public.has_permission('tickets.create', branch_id)
   );
 
-create policy orders_update on orders
+create policy tickets_update on tickets
   for update
-  using (tenant_id = auth.current_tenant_id()
-         and auth.has_branch_access(branch_id))
-  with check (tenant_id = auth.current_tenant_id()
-              and auth.has_branch_access(branch_id));
+  using (tenant_id = public.current_tenant_id()
+         and public.has_branch_access(branch_id))
+  with check (tenant_id = public.current_tenant_id()
+              and public.has_branch_access(branch_id));
 ```
 
-No `DELETE` policy — orders are cancelled, never deleted.
+No `DELETE` policy — tickets are cancelled or archived, never deleted.
 
-For child tables like `order_items` where `branch_id` is not a column, scope through the parent:
+**Prefer `has_permission(key, branch_id)` over `has_role(array[...])`** where a matching permission key exists. The permission catalog is live (`ROLES-AND-PERMISSIONS.md` §4), and a hard-coded role array silently diverges from it. Keep `has_role()` for checks with no corresponding key — currently anything production-, inventory-, or delivery-related.
+
+For child tables like `ticket_items` where `branch_id` is not a column, scope through the parent:
 
 ```sql
-create policy order_items_select on order_items
+create policy ticket_items_select on ticket_items
   for select using (
-    tenant_id = auth.current_tenant_id()
+    tenant_id = public.current_tenant_id()
     and exists (
-      select 1 from orders o
-      where o.id = order_items.order_id
-        and auth.has_branch_access(o.branch_id)
+      select 1 from tickets t
+      where t.id = ticket_items.ticket_id
+        and public.has_branch_access(t.branch_id)
     )
   );
 ```
+
+`production_batch_ingredients` takes the same shape against `production_batches`.
 
 ---
 
@@ -144,15 +161,15 @@ create policy order_items_select on order_items
 ```sql
 create policy stock_movements_select on stock_movements
   for select using (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_branch_access(branch_id)
+    tenant_id = public.current_tenant_id()
+    and public.has_branch_access(branch_id)
   );
 
 create policy stock_movements_insert on stock_movements
   for insert with check (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_branch_access(branch_id)
-    and auth.has_role(array['owner','admin','branch_manager','baker','cashier'])
+    tenant_id = public.current_tenant_id()
+    and public.has_branch_access(branch_id)
+    and public.has_role(array['owner','admin','branch_manager','baker','cashier'])
   );
 
 create or replace function prevent_stock_movement_mutation()
@@ -175,8 +192,8 @@ create trigger stock_movements_immutable
 ```sql
 create policy ingredient_stock_levels_select on ingredient_stock_levels
   for select using (
-    tenant_id = auth.current_tenant_id()
-    and auth.has_branch_access(branch_id)
+    tenant_id = public.current_tenant_id()
+    and public.has_branch_access(branch_id)
   );
 ```
 
@@ -192,14 +209,14 @@ No insert, update, or delete policy for anyone. If a screen needs to change stoc
 create policy profiles_select on profiles
   for select using (
     id = auth.uid()
-    or (tenant_id = auth.current_tenant_id()
-        and auth.has_role(array['owner','admin','branch_manager']))
+    or (tenant_id = public.current_tenant_id()
+        and public.has_role(array['owner','admin','branch_manager']))
   );
 
 create policy profiles_update on profiles
   for update
   using (id = auth.uid())
-  with check (id = auth.uid() and tenant_id = auth.current_tenant_id());
+  with check (id = auth.uid() and tenant_id = public.current_tenant_id());
 ```
 
 The `WITH CHECK` prevents a user editing their own profile from moving themselves into another tenant. Role assignment is never self-service — `user_roles` has no policy permitting a user to insert their own row; that path runs through an invite accepted via a `SECURITY DEFINER` RPC.
@@ -208,11 +225,17 @@ The `WITH CHECK` prevents a user editing their own profile from moving themselve
 
 ## 8. Special cases
 
-**`organizations`** is not tenant-scoped — it *is* the tenant. Select where `id = auth.current_tenant_id()`. Insert is permitted for any authenticated user whose `profiles.tenant_id` is still null (creating their first organization), then the RPC sets their tenant and owner role atomically.
+**`organizations`** is not tenant-scoped — it *is* the tenant. Select where `id = public.current_tenant_id()`. Insert is permitted for any authenticated user whose `profiles.tenant_id` is still null (creating their first organization), then the RPC sets their tenant and owner role atomically.
 
-**`roles`** is platform reference data. `SELECT` for all authenticated users; no write policies at all — seeded by migration.
+**`branches`** is tenant-scoped but cannot use Pattern B, because it is the table `has_branch_access()` arbitrates over — scoping it by `has_branch_access(id)` would hide from a user the very branches they are assigned to, and risks recursion. Use Pattern A on `tenant_id` alone for `SELECT`, so every member of the organization can see the branch list, and gate writes on the `branch.manage` permission. Read paths that must respect assignment filter in the query, not the policy.
 
-**`organization_invites`** needs a lookup by token for an unauthenticated recipient. Do not solve this with a permissive policy. The accept path is a `SECURITY DEFINER` RPC taking the raw token, hashing it, and matching on `token_hash`. The table itself is readable only by owners and admins of the issuing tenant.
+**`roles`**, **`permissions`**, **`role_permissions`** are platform reference data. `SELECT` for all authenticated users (filtered `deleted_at IS NULL`); no write policies at all — seeded by migration. `authenticated` must not hold INSERT/UPDATE/DELETE grants on them either, since a missing policy alone would not stop a table-level grant.
+
+**`organization_invites`** needs a lookup by token for an unauthenticated recipient. Do not solve this with a permissive policy. The accept path is a `SECURITY DEFINER` RPC taking the raw token, hashing it, and matching on `token_hash`. The table itself is readable only by owners and admins of the issuing tenant — and **`token_hash` must be withheld at the column level**, since a table-level `SELECT` grant otherwise exposes the hash to any tenant member who can read the row.
+
+**`permanent_deletion_challenges`** follows the same rule for `confirmation_phrase_hash`. See `SCHEMA-REFERENCE.md` §11.
+
+**`document_sequences`** is written only by `next_document_number()`. Clients get no INSERT or UPDATE grant; a client able to move a sequence backwards would produce duplicate ticket and invoice numbers.
 
 ---
 

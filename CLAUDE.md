@@ -22,15 +22,17 @@ These override anything ambiguous or contradictory found elsewhere. If an EB doc
 5. **Money is `NUMERIC(19,4)`. Never float, never `NUMERIC(18,2)`.** Physical quantities are `NUMERIC(18,4)`; percentages are `NUMERIC(5,2)`. Rounding happens only at final display or settlement, never mid-calculation.
 6. **Primary keys are `UUID DEFAULT gen_random_uuid()`.** Not BIGINT, not `uuid_generate_v4()`.
 7. **Stock levels are never updated directly.** All stock changes go through inserts into an immutable `stock_movements` ledger; current levels are maintained by trigger from movements.
-8. **No silent deletes of business-critical data.** Operational records (orders, payments, stock movements, cash sessions) are immutable or archived, never hard-deleted.
+8. **No silent deletes of business-critical data.** Operational records (tickets, payments, stock movements, cash sessions) are immutable or archived, never hard-deleted. The live mechanism is a `deleted_at`/`deleted_by` soft-delete pair on most tables, plus a two-step hash-confirmed permanent-delete flow via `permanent_deletion_challenges` gated by the `records.permanent_delete` permission — see `docs/SCHEMA-REFERENCE.md` §11.
 9. **Every significant business event is auditable** — who, what, when. All tables carry `created_at`/`updated_at` `TIMESTAMPTZ` columns.
 10. **Naming:** lowercase plural snake_case table names; foreign keys as `{entity}_id`.
 
 ## Domain vocabulary (canonical)
 
-Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Order, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Cashier, Baker, Driver, Accountant (architecturally present, disabled in MVP 1), Supervisor (optional, enabled and configured per-bakery by the Branch Manager — see `docs/ROLES-AND-PERMISSIONS.md`).
+Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Ticket, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Cashier, Baker, Driver, Accountant (architecturally present, disabled in MVP 1), Supervisor (optional, enabled and configured per-bakery by the Branch Manager — see `docs/ROLES-AND-PERMISSIONS.md`).
 
-**"Ticket" is not a BakeFlow entity.** If you encounter it in an older EB chapter, it means Order — normalize the wording, don't create a Ticket table. **"Manager"** alone means Branch Manager; there is no separate Manager role.
+**"Ticket" is the canonical customer-order entity** — the tables are `tickets` and `ticket_items`, and the permission keys are `tickets.*`. Earlier drafts of these docs called it "Order" and instructed agents to normalize "ticket" to "order"; that is reversed. Normalize the other way: Order means Ticket. Note the historical wart that the live RPC arguments are named `p_order_id` even though they take a `tickets.id` — do not rename them, and do not let the argument name mislead you about the entity.
+
+**"Manager"** alone means Branch Manager; there is no separate Manager role.
 
 ## How to use the docs
 
@@ -58,11 +60,11 @@ Read per task, not all at once (some files are 30k+ lines — grep for specific 
 If a `docs/*.md` file and an EB chapter disagree on a concrete value, the `docs/*.md` file wins and the EB chapter should be corrected in the same commit.
 
 **Known-outdated EB content — do not implement against these, even if a task seems to point there:**
-- **EB-013 §3** ("User Roles..."): describes Web as the primary operational surface, a `Manager` role, a fixed universal `Supervisor`, and a `Ticket` entity. All four are wrong. Use `docs/ROLES-AND-PERMISSIONS.md` instead. EB-013's other sections (state machines, business rules for non-role topics) are not affected by this and can still be read normally.
+- **EB-013 §3** ("User Roles..."): describes Web as the primary operational surface, a `Manager` role, and a fixed universal `Supervisor`. Those three are wrong. Use `docs/ROLES-AND-PERMISSIONS.md` instead. Its fourth claim — that `Ticket` is the core sales entity — turned out to be **correct**, and matches the live schema; only the role content of §3 is superseded. EB-013's other sections (state machines, business rules for non-role topics) are not affected by this and can still be read normally.
 
 **Low-signal chapters — skip unless specifically asked to audit documentation quality itself.** These are almost entirely generic "SHALL" governance prose with very few concrete, BakeFlow-specific, checkable claims (verified by direct reading, not assumption). Reading them for an implementation task burns tokens for near-zero signal: **EB-000, EB-001, EB-002, EB-003, EB-004, EB-005, EB-006, EB-019, EB-020**. If a task seems to require one of these, check the table above first — a `docs/*.md` concrete doc almost certainly already covers what's needed. The exception within this range: EB-005 (Financial Integrity) and EB-004 (Security) may contain a genuinely load-bearing principle occasionally referenced elsewhere — if something cites one by name, grep for that specific claim rather than reading the chapter start to finish.
 
-**EB-016A/EB-016B are not schema dumps despite the name.** They contain naming/type/indexing *standards* (33K + 24K lines), not table-by-table `CREATE TABLE` definitions for domains like orders, payments, or production. For actual current schema, query the live database directly (Supabase project `tvfyxpafbpnkneujcnvr`) — the committed migrations in `supabase/migrations/` are known to be behind production; see the migration-sync gap noted in `docs/PROJECT-OVERVIEW.md`.
+**EB-016A/EB-016B are not schema dumps despite the name.** They contain naming/type/indexing *standards* (33K + 24K lines), not table-by-table `CREATE TABLE` definitions for domains like orders, payments, or production. For actual current schema, **query the live database directly** (Supabase project `tvfyxpafbpnkneujcnvr`) — the committed migrations in `supabase/migrations/` share no version with the ones production has recorded, and the intended baseline file is empty, so the repo cannot rebuild the database at all. The live database outranks every `.sql` file and every document in this repo on questions of what the schema actually is. See the migration-sync gap in `docs/PROJECT-OVERVIEW.md` §7.
 
 ## Workflow
 
