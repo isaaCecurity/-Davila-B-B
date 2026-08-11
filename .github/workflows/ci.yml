@@ -1,0 +1,82 @@
+# BakeFlow CI — P11.1 quality gate.
+#
+# Runs the three checks that are reproducible from the repository alone:
+# lint, typecheck, and the pytest spec-coverage suite.
+#
+# DELIBERATELY NOT RUN HERE: tests/sql/*.sql. Those suites assert against a live
+# Postgres instance and need both a database and credentials. The repository cannot
+# currently rebuild the schema (BLOCKER-002 — 17 migrations applied live, 14 files in
+# the repo, zero version overlap), so a CI database would not match production, and
+# pointing CI at the production project would mean putting a privileged key in GitHub
+# secrets. Both are human decisions, so the SQL suites stay a local, manually executed
+# gate until BLOCKER-002 is resolved. Do not wire them in by inventing either half.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref rather than paying for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bakeflow-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches engines.node (">=22.13.0") in bakeflow-frontend/package.json.
+          node-version: '22.13.0'
+          cache: npm
+          cache-dependency-path: bakeflow-frontend/package-lock.json
+
+      # `corepack npm` honours packageManager (npm@10.8.2) without a global
+      # `corepack enable`, which needs admin on Windows (TD-009). Using the same
+      # entry point locally and in CI keeps the npm version identical in both.
+      - name: Install (pinned npm, lifecycle scripts denied by .npmrc)
+        run: corepack npm ci
+
+      - name: Verify npm version is pinned
+        run: corepack npm --version
+
+      # tsc covers packages/* as well as apps/mobile: apps/mobile/tsconfig.json
+      # includes them, verified by tsc resolving ../../packages/* into the program.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Two flat configs, disjoint paths: apps/mobile/eslint.config.js for the app,
+      # the root eslint.config.js for packages/*. --max-warnings=0 in both so a
+      # warning fails the gate instead of passing silently.
+      - name: Lint
+        run: npm run lint
+
+  spec:
+    name: Spec coverage (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # tests/test_spec_coverage.py imports only os, re and pytest — there is no
+      # requirements file to install, and inventing one is out of scope here.
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Run spec-coverage suite
+        run: python -m pytest -q

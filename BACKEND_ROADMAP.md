@@ -178,7 +178,8 @@ live — `select count(*) from supabase_migrations.schema_migrations` returns **
 ## P0.7 · Testing infrastructure — COMPLETE (backend) / NOT_STARTED (frontend)
 **Objective:** Executable test harnesses.
 **Deliverables:** `pytest` suite (12 tests); `tests/sql/security_multiorg_sync.sql` (16 assertions).
-**Gap:** no frontend test runner (`jest-expo`) and no CI pipeline. → **P11.1**.
+**Gap:** no frontend test runner (`jest-expo`). CI now runs lint/typecheck/pytest as of
+2026-08-11, but not the SQL suites. → **P11.1** (PARTIAL).
 
 ---
 
@@ -562,7 +563,7 @@ business database; backups must not yield readable data (AD-013).
 
 | ID | Type | Status |
 |---|---|---|
-| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | NOT_STARTED |
+| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **PARTIAL** — see below |
 | P11.2 | Shared DB fixture library | NOT_STARTED |
 | P11.3 | Unit tests (frontend) | NOT_STARTED — no runner yet |
 | P11.4 | Integration tests | NOT_STARTED |
@@ -578,6 +579,32 @@ business database; backups must not yield readable data (AD-013).
 
 **P11.1 is the highest-value item here** — the suites exist but nothing runs them
 automatically, so a regression would go unnoticed.
+
+### P11.1 · Lint/typecheck/spec CI gate — PARTIAL (2026-08-11)
+
+**Delivered.** `.github/workflows/ci.yml` runs lint, typecheck and `pytest` on push to
+`main` and on every pull request. Two ESLint flat configs now own disjoint paths —
+`apps/mobile/eslint.config.js` for the app, a new root `bakeflow-frontend/eslint.config.js`
+for `packages/*` — because flat config does not merge across directories. Both run with
+`--max-warnings=0`.
+
+**What this closed.** Before today **zero files in the repository were linted**:
+`expo lint` aborted on a hard-coded `apps/mobile/components` glob that does not exist
+(TD-011), and `packages/*` lay outside the only config's base path (TD-010). Both are
+now RESOLVED. Coverage was verified by counting linted files, not by trusting exit 0 —
+**24 files** (7 app + 17 root).
+
+**Still open, deliberately.** The **SQL suites are not in CI** and P11.1 cannot be
+COMPLETE until they are. They need a live Postgres and credentials; the repository
+cannot rebuild the schema (**BLOCKER-002**), and pointing CI at production would mean
+storing a privileged key in GitHub secrets. Both halves are human decisions, so they
+were left undone rather than guessed. `tests/sql/*.sql` remain a manual local gate.
+
+**Not verified.** The workflow has never executed on GitHub — no run exists yet. Every
+command it invokes was executed locally and passed; the YAML itself is unproven in situ.
+
+**Blockers:** BLOCKER-002 (for the SQL half only).
+**Parallelizable:** with everything — it changes no runtime code.
 
 ---
 

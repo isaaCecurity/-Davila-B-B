@@ -1,6 +1,49 @@
 # BakeFlow — Current Task
 
 ```
+TASK: P11.1 — Lint/typecheck/spec CI quality gate
+STATUS: PARTIAL — lint/typecheck/pytest delivered; SQL suites deferred (BLOCKER-002)
+OWNER: claude
+PREREQS: none
+QUALITY GATE: plan -> implement -> test -> code review -> fix -> retest -> document
+EVIDENCE: npm run lint -> exit 0, 24 files linted (7 app + 17 root, counted via
+          --format json, not inferred from exit code)
+          npm run typecheck -> exit 0
+          .venv/Scripts/python.exe -m pytest -q -> 12 passed
+          negative control: probe file with an unused var + undefined identifier ->
+          ESLint warned (exit 0, which is why --max-warnings=0 was added);
+          tsc raised TS2304. Probe deleted.
+```
+
+**Scope held.** No database logic, business rule, sync behaviour, financial rule or
+frontend feature was touched. The only non-config edit was deleting the probe I created.
+
+---
+
+## P11.1 — what changed
+
+| File | Change |
+|---|---|
+| `bakeflow-frontend/eslint.config.js` | **new** — root flat config covering `packages/*` |
+| `bakeflow-frontend/apps/mobile/package.json` | `lint`: `expo lint` → `eslint . --max-warnings=0` |
+| `bakeflow-frontend/package.json` | `lint` also runs `eslint . --max-warnings=0` at root |
+| `.github/workflows/ci.yml` | **new** — lint + typecheck + pytest on push/PR |
+
+**Two findings worth keeping.** ESLint alone would not have caught an undefined
+identifier (`typescript-eslint` disables `no-undef` and defers to `tsc`), so lint and
+typecheck are complementary gates and CI must run both — dropping either leaves a real
+class of error unchecked. And an exit code is not evidence of coverage: `expo lint`
+returned a *failure* while linting nothing, and the first fix returned *success* while
+warning. Both were caught only by counting files and by the negative-control probe.
+
+**Not verified:** the workflow has never run on GitHub. Its commands pass locally; the
+YAML is unproven until a push triggers it.
+
+---
+
+## Previous task — P4.1a Catalog READ PATH (unchanged, still IN REVIEW)
+
+```
 TASK: P4.1a — Catalog domain, READ PATH
 STATUS: IN REVIEW  (implementation + tests done; security/code review returned)
 OWNER: agents-orchestrator

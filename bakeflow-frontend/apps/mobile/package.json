@@ -10,7 +10,7 @@
     "ios": "expo run:ios",
     "build": "expo export",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "prebuild": "expo prebuild",
     "deps:check": "expo install --check",
     "doctor": "expo-doctor"
