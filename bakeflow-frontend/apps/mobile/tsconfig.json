@@ -1,0 +1,52 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    // expo/tsconfig.base does NOT set strict. BakeFlow requires it: money is
+    // NUMERIC(19,4), and organization/branch boundaries are security invariants
+    // that must not be reachable through an implicit any.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    // No baseUrl: TypeScript 6 deprecates it (TS5101). `paths` entries resolve
+    // relative to this file, which is what we want in a workspace anyway.
+    "paths": {
+      "@/*": ["./*"],
+      "@bakeflow/api": ["../../packages/api"],
+      "@bakeflow/api/*": ["../../packages/api/*"],
+      "@bakeflow/auth": ["../../packages/auth"],
+      "@bakeflow/auth/*": ["../../packages/auth/*"],
+      "@bakeflow/types": ["../../packages/types"],
+      "@bakeflow/types/*": ["../../packages/types/*"],
+      "@bakeflow/validation": ["../../packages/validation"],
+      "@bakeflow/validation/*": ["../../packages/validation/*"],
+      "@bakeflow/hooks": ["../../packages/hooks"],
+      "@bakeflow/hooks/*": ["../../packages/hooks/*"],
+      "@bakeflow/ui": ["../../packages/ui"],
+      "@bakeflow/ui/*": ["../../packages/ui/*"],
+      "@bakeflow/config": ["../../packages/config"],
+      "@bakeflow/config/*": ["../../packages/config/*"],
+      "@bakeflow/utils": ["../../packages/utils"],
+      "@bakeflow/utils/*": ["../../packages/utils/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "nativewind-env.d.ts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts",
+    // The shared packages are typechecked here on purpose. `tsc` only visits a file it
+    // can reach, so until a screen imports @bakeflow/api the workspace packages would be
+    // invisible to `npm run typecheck --workspace apps/mobile` — the command the quality
+    // gate actually runs — and could ship broken. Listing them makes the gate mean what
+    // it claims. Remove this only if packages/* gain their own checked build.
+    "../../packages/**/*.ts"
+  ],
+  // The default `exclude` resolves relative to this file, so it covers
+  // apps/mobile/node_modules but NOT packages/*/node_modules. Hoisting means none exist
+  // today, but a single version conflict creating a nested node_modules would pull
+  // thousands of .d.ts files into the program. Stated explicitly since `include` now
+  // reaches outside this directory.
+  "exclude": ["**/node_modules"]
+}

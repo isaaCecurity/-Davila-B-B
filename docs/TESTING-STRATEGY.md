@@ -80,16 +80,16 @@ Must return zero rows. Catches any float or `(18,2)` slipping back in.
 
 **Invariants:**
 
-- `orders.total_amount = subtotal − discount + tax`, always.
-- `orders.subtotal_amount = SUM(order_items.line_total)`, after every item mutation.
-- `order_items.line_total = ROUND(quantity × unit_price, 4)`.
-- `orders.amount_paid = SUM(payments.amount)` for that order, after every payment.
+- `tickets.total_amount = subtotal − discount + tax`, always.
+- `tickets.subtotal_amount = SUM(ticket_items.line_total)`, after every item mutation.
+- `ticket_items.line_total = ROUND(quantity × unit_price, 4)`, and is never negative.
+- `tickets.amount_paid = SUM(payments.amount)` for that ticket, after every payment. **Note this invariant ignores refunds** — a fully refunded ticket still satisfies it while reading as paid. Do not encode a refund expectation into this test until the refund treatment question in `PROJECT-OVERVIEW.md` §7 is answered.
 - Refunds against a payment never exceed the payment amount.
 - `cash_sessions.variance = counted − expected`, and `expected = float + cash payments − cash expenses`.
 
-**Rounding:** run a batch of 1,000 randomized orders with awkward quantities (0.3333, 7 × 1.1, prices ending in odd kobo). Assert the sum of `line_total` equals the recomputed subtotal exactly. Any drift means rounding is happening mid-calculation, violating Core Principle 2.
+**Rounding:** run a batch of 1,000 randomized tickets with awkward quantities (0.3333, 7 × 1.1, prices ending in odd kobo). Assert the sum of `line_total` equals the recomputed subtotal exactly. Any drift means rounding is happening mid-calculation, violating Core Principle 2.
 
-**Price snapshot:** create an order, change the variant's `unit_price`, assert the existing `order_items.unit_price` is unchanged and the order total is unchanged. This is the test that catches someone "helpfully" joining to live prices.
+**Price snapshot:** create a ticket, change the variant's `unit_price`, assert the existing `ticket_items.unit_price` is unchanged and the ticket total is unchanged. This is the test that catches someone "helpfully" joining to live prices.
 
 ---
 
@@ -131,14 +131,14 @@ For each entity in `STATE-MACHINES.md`, generate every from/to pair and assert l
 - Every legal transition raises `insufficient_role` for an unauthorized role.
 - No transition leaves a terminal state.
 - Required fields are enforced (cancellation reason, failure reason, variance note).
-- `order_items` mutation is blocked once the order is ready, completed, or cancelled.
+- `ticket_items` mutation is blocked once the ticket is ready, completed, or cancelled — and is still *permitted* at confirmed, scheduled, and in_production. Assert both halves; the deployed guard allows edits through in_production and a test that only checks the blocked side would pass against a wrongly-strict implementation.
 - Two concurrent `open_cash_session` calls for one branch → exactly one succeeds.
 
 ---
 
 ## 7. Journey tests
 
-The nine steps in `PROJECT-OVERVIEW.md` §4, as one end-to-end test: sign up → create org and branch → add product, variant, recipe, ingredients → record opening stock → create and confirm an order → run a production batch → fulfil → record payment → log an expense → assert the dashboard figures.
+The nine steps in `PROJECT-OVERVIEW.md` §4, as one end-to-end test: sign up → create org and branch → add product, variant, recipe, ingredients → record opening stock → create and confirm a ticket → run a production batch → fulfil → record payment → log an expense → assert the dashboard figures.
 
 The final assertion is the one that matters: **revenue, expenses, and stock on the dashboard must be derivable from steps 1–8 with no manual entry.** That is Core Principle 3 as an executable test. If a number on the dashboard cannot be traced to a recorded event, the test fails.
 
@@ -152,7 +152,7 @@ The final assertion is the one that matters: **revenue, expenses, and stock on t
 | 2 — RBAC, invites | Role-based policy tests; JWT claims contain `tenant_id` and `roles`; invite accept is atomic; users cannot self-assign roles |
 | 3 — catalog, recipes | Isolation on all catalog tables; SKU uniqueness per tenant; one active recipe per variant |
 | 4 — inventory | Reconciliation query; negative-stock refusal; concurrency test; append-only enforcement |
-| 5 — orders, payments | All financial invariants; price snapshot; item freeze; payment append-only |
+| 5 — tickets, payments | All financial invariants; price snapshot; item freeze; payment append-only |
 | 6 — production, delivery, cash | Batch atomicity and rollback; delivery driver scoping; one open session per branch; variance note enforcement |
 
 ---

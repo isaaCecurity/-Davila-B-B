@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "BakeFlow",
+    "slug": "bakeflow",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "bakeflow",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.bakeflow.app",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "com.bakeflow.app",
+      "allowBackup": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-system-ui",
+      "expo-secure-store",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "bakeflow-frontend",
+  "private": true,
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=22.13.0",
+    "npm": "10.8.2"
+  },
+  "workspaces": [
+    "apps/mobile",
+    "packages/*"
+  ],
+  "overrides": {
+    "react": "19.2.3"
+  },
+  "scripts": {
+    "dev:mobile": "npm run dev --workspace apps/mobile",
+    "build:mobile": "npm run build --workspace apps/mobile",
+    "android": "npm run android --workspace apps/mobile",
+    "ios": "npm run ios --workspace apps/mobile",
+    "prebuild": "npm run prebuild --workspace apps/mobile",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present && eslint . --max-warnings=0",
+    "deps:check": "npm run deps:check --workspace apps/mobile",
+    "deps:doctor": "npm run doctor --workspace apps/mobile",
+    "deps:duplicates": "npm ls react react-dom @types/react --depth=0",
+    "ci:install": "corepack npm ci",
+    "ci:verify": "corepack npm --version && npm run typecheck && npm run lint && npm run deps:check"
+  }
+}

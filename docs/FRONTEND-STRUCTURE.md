@@ -16,7 +16,7 @@ bakeflow-frontend/
 │   │   ├── features/
 │   │   │   ├── auth/
 │   │   │   ├── dashboard/          # monitoring views (Owner/Admin/Branch Manager/Supervisor)
-│   │   │   ├── orders/
+│   │   │   ├── tickets/
 │   │   │   ├── production/
 │   │   │   ├── inventory/
 │   │   │   ├── delivery/           # Driver's primary workspace
@@ -42,7 +42,7 @@ bakeflow-frontend/
 │       │   ├── organization/       # Owner: manage org, branches, Branch Managers
 │       │   ├── branch-settings/    # Branch Manager: configure branch, staff, functions
 │       │   ├── permissions/        # Branch Manager: enable/configure Supervisor + future roles
-│       │   ├── orders/             # oversight, not primary execution
+│       │   ├── tickets/            # oversight, not primary execution
 │       │   ├── production/
 │       │   ├── inventory/
 │       │   ├── delivery/
@@ -77,7 +77,7 @@ No additional top-level directories without a documented reason (EB-014 §2).
 
 ## 1. Backend logic split
 
-Supabase owns all business rules — state transitions, financial math, stock reconciliation — via RPCs and triggers (`guard_order_status_transition`, `record_payment`, `complete_production_batch`, etc.). The frontend is a thin orchestration layer with no duplicated business logic.
+Supabase owns all business rules — state transitions, financial math, stock reconciliation — via RPCs and triggers (`guard_ticket_status_transition`, `record_payment`, `complete_production_batch`, etc.). The frontend is a thin orchestration layer with no duplicated business logic.
 
 Request flow (EB-014 §6):
 
@@ -92,7 +92,7 @@ A screen never calls Supabase directly. A feature's `services/*.service.ts` neve
 `packages/hooks` splits along query vs. mutation:
 
 - **Query hooks** (read data) are shared freely between `apps/mobile` and `apps/web` — both need to see the same live state.
-- **Mutation hooks tied to operational RPCs** (`confirm_order`, `adjust_stock`, `open_cash_session`, `record_payment`, `transition_delivery`, etc.) are conventionally mobile-only, matching the Mobile = operational / Web = management split in `docs/ROLES-AND-PERMISSIONS.md`. Web is not technically blocked from importing them, but doing so is a signal something's been placed in the wrong app.
+- **Mutation hooks tied to operational RPCs** (`confirm_ticket`, `adjust_stock`, `open_cash_session`, `record_payment`, `transition_delivery`, etc.) are conventionally mobile-only, matching the Mobile = operational / Web = management split in `docs/ROLES-AND-PERMISSIONS.md`. Web is not technically blocked from importing them, but doing so is a signal something's been placed in the wrong app.
 
 ## 3. Zustand store responsibilities
 
@@ -108,7 +108,9 @@ One store, one responsibility (EB-014 §5) — no monolithic stores:
 | `sync.store.ts` | Offline/sync status (mobile) |
 | `ui.store.ts` | Global UI state (modals, active tab, etc.) |
 
-`permissions.store.ts` is forward-compatible with the function/permission catalog table once it's designed — it doesn't yet have a backing table to read from (checked live: none exists as of this document), but the store's shape shouldn't need to change when that table lands.
+`permissions.store.ts` reads the live permission catalog: `permissions` (25 keys) and `role_permissions` (93 grants), resolved server-side by `has_permission(required_permission text, target_branch_id uuid)`. An earlier revision of this document said no such table existed; it does. See `docs/ROLES-AND-PERMISSIONS.md` §4 for the keys and the full grant matrix.
+
+Two caveats for the store's shape: per-Supervisor overrides have **no backing table yet** — `role_permissions` is role-level only, so today every Supervisor in every bakery resolves to the same set — and four keys (`tickets.update`, `tickets.cancel`, `sync.submit`, `sync.view`) are granted to no role, so any UI gated on them is currently hidden for everyone.
 
 ## 4. Feature-internal structure
 
