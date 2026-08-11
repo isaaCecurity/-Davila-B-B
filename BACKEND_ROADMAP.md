@@ -22,16 +22,26 @@ tracked separately and must never be conflated:
 ## Current State
 
 **Completed phases:** P0 (partial — see P0.5), P1, P2, P3.1–P3.6
-**Active work:** P3.7 (per-entity sync application) — **BLOCKED at PLAN**
-**Blocked:** P3.7, P6.2 (invitations), P5.x (financial rules), P0.5 (migration reproducibility)
-**Upcoming:** P4.1 Catalog — unblocked, awaiting go-ahead
+**Active work:** P4.1 Catalog — **read path IN_PROGRESS**, write path BLOCKED
+**Blocked:** P3.7, P6.2 (invitations), P5.x (financial rules), P0.5 (migration reproducibility),
+P4.1 write path (BLOCKER-010)
+**Standing blocked:** P3.7 (per-entity sync application) — BLOCKED at PLAN
 
 **Current recommended next task:** **P4.1 — Catalog domain** (`product_categories`,
-`products`, `product_variants`). Its prerequisites (P1, P2) are verified complete, it
-touches no unresolved financial rule, and it is a prerequisite for most of Phase 4.
+`products`, `product_variants`, `ingredients`, `recipes`, `recipe_ingredients`). Its
+prerequisites (P1, P2) are verified complete, and it is a prerequisite for most of
+Phase 4 **and for P3.7**.
 
-> The human previously gated P4 behind P3.7. P3.7 is blocked on decisions
-> (BLOCKER-005, BLOCKER-006), so P4.1 needs an explicit go-ahead to start.
+> **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
+> gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
+> own dependency line and created a cycle in which neither milestone could start.
+> **P4.1 is P3.7's prerequisite, not its dependent.** P4.1 may proceed while P3.7 stays
+> blocked on BLOCKER-005/006/009.
+
+> **Financial scoping (corrected 2026-08-11).** P4.1's **read** path touches no
+> unresolved financial rule. Its **write** path does: `product_variants.unit_price` is
+> the authoritative sale price and there is no price-history table, so editing it in
+> place is BLOCKER-003 territory. The milestone is split accordingly.
 
 ### Legacy ID crosswalk
 
@@ -43,9 +53,9 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | BLOCKED |
+| B5 Per-entity apply | P3.7 | BLOCKED (downstream of P4.1/P4.4) |
 | B6 Invitation delivery | P6.2 | BLOCKED |
-| B7 Core domain services | P4 | READY |
+| B7 Core domain services | P4 | P4.1a IN_PROGRESS / P4.1b BLOCKED |
 | B8 Tickets / sales | P4.4 | NOT_STARTED |
 | B9 Payments & cash | P5 | BLOCKED |
 | B10 Financial reporting | P5.7 | BLOCKED |
@@ -61,14 +71,14 @@ P1 Database foundation ────────────────── CO
       │
 P2 Auth & authorization ───────────────── COMPLETE
       │
-      ├── P3 Multi-org & sync ─────────── P3.1-3.6 COMPLETE / P3.7 BLOCKED
-      │        │
-      │        └── P3.8 pending-sync UX ── BLOCKED (needs P3.7)
-      │
       ├── P4 Core domain backend ──────── READY
       │     P4.1 Catalog ──► P4.2 Inventory ──► P4.3 Production
       │            │                │
       │            └──► P4.4 Sales/Tickets ──► P4.5 Delivery
+      │            │
+      │            └──► P3 Multi-org & sync ── P3.1-3.6 COMPLETE / P3.7 BLOCKED
+      │                       │                 (P3.7 needs P4.1/P4.4 per entity)
+      │                       └── P3.8 pending-sync UX ── BLOCKED (needs P3.7)
       │
       ├── P5 Financial backend ────────── BLOCKED (rules unspecified)
       │
@@ -76,8 +86,8 @@ P2 Auth & authorization ───────────────── COMP
                    │
 P7 BACKEND COMPLETION GATE ◄──────────────  requires P1-P6
                    │
-P8 FRONTEND START CHECKPOINT ◄──────────── requires P2, P4.1, P4.4 only
-                   │                        (NOT the full backend)
+P8 FRONTEND START CHECKPOINT ◄──────────── requires P2 + P4.1 only
+                   │                        (NOT P4.4, NOT the full backend)
 P9 Frontend/backend vertical slices
                    │
 P10 Offline/mobile completion
@@ -89,6 +99,22 @@ P12 Production readiness & Play Store release
 
 **Note the shape:** P8 does **not** wait for P7. The frontend checkpoint sits on a
 much smaller prerequisite set, deliberately.
+
+**Corrected 2026-08-11 (BLOCKER-008).** Two edges in this graph were wrong and are
+fixed above:
+
+1. **P8.0 requires P2 + P4.1 only.** The graph previously read "requires P2, P4.1, P4.4
+   only", which contradicted both the P8.0 requirements table and P8.1's own dependency
+   line. Resolved in favour of **P2 + P4.1**, because that is the reading two of the
+   three locations already carried and the one the P8.0 prose argues for ("the checkpoint
+   opens as soon as P4.1 lands"). P4.4 is **not** a frontend-checkpoint prerequisite, so
+   BLOCKER-005 does not block the frontend start.
+2. **P3.7 sits downstream of P4.1, not upstream of it.** P3.7 has always declared
+   P4.1/P4.4 as its own prerequisites; the "P4 gated behind P3.7" note contradicted that
+   and formed a cycle. The gate is lifted in the P4.1 → P3.7 direction. Phase numbering
+   is therefore **not** strictly topological here: P3.7 depends on Phase 4 milestones.
+   That is recorded deliberately rather than hidden — see "Validation performed on this
+   roadmap", item 2.
 
 ---
 
@@ -134,7 +160,9 @@ much smaller prerequisite set, deliberately.
 ## P0.5 · Migration reproducibility — BLOCKED
 **Objective:** The repository can rebuild the live schema.
 **Dependencies:** P1.
-**Tasks:** resolve the 14 stale unapplied migration files; materialise the 11 applied migrations as repo files.
+**Tasks:** resolve the 14 stale unapplied migration files; materialise the **17** applied
+migrations as repo files. *(Corrected 2026-08-11: this line previously said 11. Verified
+live — `select count(*) from supabase_migrations.schema_migrations` returns **17**.)*
 **Deliverables:** a coherent `supabase/migrations/` set.
 **Tests:** `supabase db pull` succeeds; a fresh `db reset` reproduces the live schema.
 **Completion criteria:** repo and live histories agree.
@@ -255,7 +283,9 @@ Verified 2026-08-10 by executed queries; see `IMPLEMENTATION_LOG.md`.
 
 ## P3.7 · Per-entity sync application — **BLOCKED** *(formerly B5)*
 **Objective:** Apply recorded operations to business tables, per entity, with explicit conflict semantics.
-**Dependencies:** P3.1–P3.6 (met), P4.1/P4.4 for the target entity.
+**Dependencies:** P3.1–P3.6 (met), **P4.1** and/or **P4.4** for the target entity —
+P3.7 is *downstream* of those milestones, never upstream of them (BLOCKER-008b,
+resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
 **Tasks (not started):** define the applier contract per entity; implement per-entity handlers; conflict recording; revision increment; `sync_changes` emission.
 **Deliverables:** none — stopped at PLAN.
 **Tests:** none executed.
@@ -287,20 +317,43 @@ Each milestone below carries the same shape: **schema → business rules → ser
 → authorization → validation → tests → sync support → audit → completion gate.**
 "Sync support" means registering the entity with P3.7 and therefore inherits its block.
 
-## P4.1 · Catalog — READY ◄ recommended next
+## P4.1 · Catalog — READ PATH IN_PROGRESS / WRITE PATH BLOCKED ◄ current
 **Objective:** Products, variants, categories, ingredients, recipes.
-**Dependencies:** P2 (complete).
-**Schema:** `product_categories`, `products`, `product_variants`, `ingredients`, `recipes`, `recipe_ingredients` — all exist.
+**Dependencies:** P2 (complete). **Does not depend on P3.7** — the reverse is true.
+**Schema:** `product_categories`, `products`, `product_variants`, `ingredients`, `recipes`, `recipe_ingredients` — all exist. All six are **tenant-scoped only**.
 **Business rules:** recipe is the BOM linking a variant to ingredients; variant pricing feeds `guard_order_item_price`.
-**Service layer:** CRUD RPCs with tenant/branch scoping.
-**Authorization:** `catalog.*` permission keys; owner/admin/branch_manager write, others read.
-**Validation:** Zod schemas mirroring DB constraints (`packages/validation`).
-**Tests:** RLS isolation; recipe→variant integrity; soft-delete behaviour.
-**Sync support:** blocked by P3.7 — catalog is read-mostly offline, so this is acceptable.
-**Audit:** `audit_log` entries on write.
-**Completion gate:** CRUD + RLS tests pass; no cross-organization read.
+
+### Corrections applied 2026-08-11 (all verified live, not inferred from docs)
+
+| Previously stated | Verified live | Consequence |
+|---|---|---|
+| Service layer = "CRUD **RPCs** with tenant/**branch** scoping" | No catalog RPC exists; **no catalog table has `branch_id`** | Per `API-CONTRACT.md` §1, single-row writes with no side effects belong to **PostgREST + RLS**, not RPCs. Do **not** author catalog CRUD RPCs. Scoping is **tenant-only**; "branch isolation where applicable" does not apply to catalog. |
+| Authorization = "`catalog.*` permission keys" | **No `catalog.*` key exists.** The live keys are `products.manage` and `pricing.manage`, both granted to owner/admin/branch_manager | Authorization is **role-based RLS**, not permission keys. Per AD-016 the two keys enforce nothing today (`has_permission()` gates zero policies, TD-001). |
+| "touches no unresolved financial rule" | True of the **read** path only | The **write** path touches `product_variants.unit_price` — the authoritative sale price, `NUMERIC(19,4)`, with no price-history table. That is BLOCKER-003 territory. |
+
+**Service layer:** PostgREST + RLS reads through `packages/api`, consumed only via
+Screen → Feature Hook → Feature Service → `packages/api`. No catalog RPCs.
+**Authorization:** role-based RLS. SELECT = `tenant_id = current_tenant_id() AND deleted_at IS NULL`; INSERT/UPDATE = owner/admin/branch_manager; DELETE = owner/admin. 24 policies over 6 tables, RLS enabled **and forced** on all six (verified live).
+**Validation:** Zod schemas mirroring **live** DB constraints (`packages/validation`).
+**Tests:** RLS isolation; recipe→variant integrity; soft-delete invisibility; FORCE RLS.
+**Sync support:** needs P3.7, which is blocked. Catalog is read-mostly offline, so the read path does not wait on it.
+**Audit:** `audit_log` entries on write — deferred with the write path.
+
+### P4.1a · Catalog read path — IN_PROGRESS
+**Scope:** types, Zod schemas, typed read service (list/get + relation reads), executed RLS suite.
+**Completion gate:** RLS suite proves no cross-organization read and no soft-deleted row is visible; typecheck and lint clean.
 **Blockers:** none.
-**Parallelizable:** with P6.1, P6.3.
+
+### P4.1b · Catalog write path — BLOCKED
+**Blockers:** **BLOCKER-010** (new, 2026-08-11) — three unresolved sub-decisions:
+(a) does soft-delete free a natural key? The unique indexes `products_tenant_name_key`,
+`ingredients_tenant_name_key`, `product_categories_tenant_name_key`,
+`product_variants_tenant_sku_key` and `recipes_one_active_per_variant` are **not partial
+on `deleted_at IS NULL`** (verified live), so under AD-012 a soft-deleted name is
+permanently consumed — fixing it is a migration and needs approval;
+(b) may `unit_price` be edited in place with no price-history table (**BLOCKER-003**);
+(c) confirmation that PostgREST + RLS, not an RPC, is the write mechanism.
+**Parallelizable:** P4.1a with P6.1, P6.3.
 
 ## P4.2 · Inventory — NOT_STARTED
 **Objective:** Warehouses and the immutable stock ledger.
@@ -410,7 +463,7 @@ refund and finalisation rules are **not specified**. None may be invented.
 | 7 | API/service tests pass | ✗ none exist |
 | 8 | Error paths tested | ✗ |
 | 9 | Documentation current | ✓ |
-| 10 | No critical blockers remain | ✗ 6 open |
+| 10 | No critical blockers remain | ✗ **8 open** (001, 002, 003, 004, 005, 006, 007, 009) — 008 RESOLVED 2026-08-11; 010 is scoped to P4.1b, not to this gate |
 | 11 | No unresolved critical security issues | ✓ |
 | 12 | Production configuration verified | ✗ P12 |
 
@@ -435,13 +488,17 @@ sits on a deliberately small prerequisite set.
 | Membership + active-org switching RPC | P2.4, P2.5 | COMPLETE |
 | Organization enumeration for the switcher | P2.6 | COMPLETE |
 | Role/permission read model | P2.3 | COMPLETE |
-| At least one readable domain | P4.1 Catalog | READY |
+| At least one readable domain | P4.1 Catalog (**read path**) | IN_PROGRESS |
 
-**Five of six are already met.** The checkpoint opens as soon as **P4.1** lands.
+**Five of six are already met.** The checkpoint opens as soon as **P4.1's read path**
+lands. **P4.4 is not a prerequisite** — confirmed 2026-08-11 in resolving BLOCKER-008(a).
+The full prerequisite set is therefore **P2 + P4.1**, stated identically here, in the
+dependency graph above, and in P8.1 below. A catalog *list and detail* screen needs the
+read path only, so P4.1b's block does not hold the checkpoint shut either.
 
 ### P8.1 · First frontend vertical slice — "Sign in → pick organization → see catalog"
 **Objective:** Prove the whole spine end-to-end on a real device before broadening.
-**Dependencies:** P2, P4.1.
+**Dependencies:** **P2 + P4.1** (read path). Not P4.4, not P7.
 **Screens:** sign-in; organization switcher; catalog list; catalog detail.
 **APIs/services consumed:** Supabase auth; `set_active_organization()`; `organizations_select`; catalog reads.
 **Authentication flow:** encrypted session storage per AD-014 (`expo-crypto` AES-GCM + SecureStore key + `expo-file-system` blob) — **no AsyncStorage**.
@@ -548,12 +605,41 @@ complete. No release with an open critical blocker.
 ## Validation performed on this roadmap
 
 1. **Capability coverage** — every domain in `SCHEMA-REFERENCE.md` §1–§8 has a milestone; every `docs/` specification maps to a phase (reporting → P5.8, storage → P4/P12, notifications → P6.3, roles → P2.3, state machines → P4.4/P4.5, offline sync → P3/P10, testing strategy → P11, design tokens → P8/P9).
-2. **Ordering** — no milestone depends on a later one. P8 deliberately depends on a subset of P2/P4.1 rather than on P7.
+2. **Ordering** — ~~no milestone depends on a later one~~. **This claim was false and is
+   withdrawn (2026-08-11).** One milestone genuinely does depend on a later-numbered one:
+   **P3.7 depends on P4.1/P4.4**, because a sync applier cannot exist for an entity whose
+   domain milestone has not been built. That is a legitimate dependency, so the correct
+   fix was to state it rather than to renumber. **Phase numbers are a reading order, not
+   a topological sort.** The accurate claim is: *the dependency graph is acyclic, and the
+   single backward edge (P3.7 → P4.1/P4.4) is documented at both ends.* The cycle that
+   previously existed — P3.7 declaring P4.1 as a prerequisite while Current State gated
+   P4 behind P3.7 — is removed; see BLOCKER-008(b).
+   P8 deliberately depends on a subset of P2/P4.1 rather than on P7.
 3. **Frontend checkpoint** — explicit at **P8.0**, opens when P4.1 lands.
 4. **Backend completion** — explicit at **P7.1**, twelve criteria.
 5. **Release gate** — explicit at **P12.0**.
-6. **Duplicates/contradictions** — P3.8's RLS half is complete while its UX half is blocked; recorded as a split rather than duplicated. P4.6 audit infrastructure vs P6.4 coverage are distinct. No contradictions found.
+6. **Duplicates/contradictions** — P3.8's RLS half is complete while its UX half is
+   blocked; recorded as a split rather than duplicated. P4.6 audit infrastructure vs P6.4
+   coverage are distinct. ~~No contradictions found.~~ **This claim was false and is
+   withdrawn (2026-08-11).** Contradictions were present in this file at the time the
+   claim was written, and the validation pass did not catch them:
+   - **P8.0 had two different prerequisite sets.** The graph said "P2, P4.1, P4.4"; the
+     P8.0 table and P8.1 said P2 + P4.1. Resolved to **P2 + P4.1** and now stated
+     identically in all three places. *(BLOCKER-008a)*
+   - **P3.7 and P4 gated each other**, a true cycle in which neither could start.
+     Resolved: **P4.1 is P3.7's prerequisite.** *(BLOCKER-008b)*
+   - **Four P4.1/P0.5 statements contradicted the live database** — migration count
+     (11 vs **17** live), `catalog.*` permission keys (**none exist**; the live keys are
+     `products.manage`/`pricing.manage`), "branch scoping" (**no catalog table has
+     `branch_id`**), and "touches no unresolved financial rule" (true of the read path
+     only; the write path touches `product_variants.unit_price`). All four corrected in
+     place against live verification.
+   The honest statement is therefore: *contradictions were found and are recorded above
+   with their resolutions; this section is not evidence that none remain.*
 7. **New conflict identified** — see BLOCKER-007 below.
+8. **How this section is to be used** — it records what was checked and what was found,
+   never a clean bill of health. An item here must name its evidence or say it is
+   unverified.
 
 ### Conflict found during reconciliation
 
@@ -571,6 +657,7 @@ resolved.
 |---|---|---|
 | 2026-08-10 | Created as a narrow 10-item backend list (B1–B10). | setup |
 | 2026-08-10 | Expanded into the master roadmap: 13 phases (P0–P12), legacy B-ID crosswalk preserved, explicit frontend checkpoint at P8.0, backend gate at P7.1, release gate at P12.0. Recorded BLOCKER-007. No status was upgraded; P3.7/P4.4 remain BLOCKED and B5/B7 ordering is unchanged. | roadmap update |
+| 2026-08-11 | **Dependency + factual correction, documentation only — no code, migration, schema or database change.** Resolved **BLOCKER-008**: (a) P8.0's prerequisite set fixed to **P2 + P4.1** and now stated identically in the dependency graph, the P8.0 requirements table and P8.1 — P4.4 is *not* a frontend-checkpoint prerequisite, so BLOCKER-005 no longer appears to block the frontend start; (b) the P3.7 ↔ P4 cycle broken by recording **P4.1 as P3.7's prerequisite** and withdrawing the "P4 gated behind P3.7" note. **No status was upgraded by this change** — P3.7 remains BLOCKED on BLOCKER-005/006/009, all of which are untouched and still OPEN. The "Validation performed on this roadmap" section was corrected rather than deleted: items 2 ("no milestone depends on a later one") and 6 ("No contradictions found") were both false and are now withdrawn with the evidence stated. Four roadmap-vs-live factual errors corrected against the live database: P0.5 migration count 11 → **17**; P4.1 authorization `catalog.*` → **`products.manage`/`pricing.manage`** (AD-016: enforce nothing today); P4.1 "tenant/**branch** scoping" → **tenant-only, no catalog table has `branch_id`**; P4.1 "touches no unresolved financial rule" → **true of the read path only**. P4.1 split into **P4.1a read (IN_PROGRESS)** and **P4.1b write (BLOCKED, BLOCKER-010)**. P7.1 criterion 10 open-blocker count 6 → **8**. | BLOCKER-008 resolution |
 
 **How to record a change here:** date, what moved and why, and whether any status
 changed. Never upgrade a status in this log without linking the evidence.
