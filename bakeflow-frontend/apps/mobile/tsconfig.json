@@ -35,6 +35,12 @@
     "**/*.tsx",
     "nativewind-env.d.ts",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "expo-env.d.ts",
+    // The shared packages are typechecked here on purpose. `tsc` only visits a file it
+    // can reach, so until a screen imports @bakeflow/api the workspace packages would be
+    // invisible to `npm run typecheck --workspace apps/mobile` — the command the quality
+    // gate actually runs — and could ship broken. Listing them makes the gate mean what
+    // it claims. Remove this only if packages/* gain their own checked build.
+    "../../packages/**/*.ts"
   ]
 }
