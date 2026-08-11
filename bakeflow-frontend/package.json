@@ -20,7 +20,7 @@
     "ios": "npm run ios --workspace apps/mobile",
     "prebuild": "npm run prebuild --workspace apps/mobile",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present && eslint .",
     "deps:check": "npm run deps:check --workspace apps/mobile",
     "deps:doctor": "npm run doctor --workspace apps/mobile",
     "deps:duplicates": "npm ls react react-dom @types/react --depth=0",
