@@ -6,10 +6,19 @@
 export {
   nonNegativeMoneySchema,
   nonNegativeQuantitySchema,
+  nonZeroQuantitySchema,
   positiveQuantitySchema,
+  signedQuantitySchema,
   timestamptzSchema,
   uuidSchema,
 } from './decimal';
+
+export {
+  ingredientStockLevelSchema,
+  productStockLevelSchema,
+  stockMovementSchema,
+  warehouseSchema,
+} from './inventory';
 
 export {
   ingredientSchema,

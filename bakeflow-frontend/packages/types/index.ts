@@ -48,3 +48,26 @@ export type {
   UnitOfMeasure,
 } from './catalog';
 export { UNITS_OF_MEASURE } from './catalog';
+
+export type {
+  IngredientStockLevel,
+  IngredientStockLevelRow,
+  IngredientStockMovement,
+  ProductStockLevel,
+  ProductStockLevelRow,
+  ProductStockMovement,
+  StockItemType,
+  StockMovement,
+  StockMovementReason,
+  StockMovementRow,
+  StockReferenceType,
+  Warehouse,
+  WarehouseRow,
+} from './inventory';
+export {
+  NEGATIVE_STOCK_REASONS,
+  POSITIVE_STOCK_REASONS,
+  STOCK_ITEM_TYPES,
+  STOCK_MOVEMENT_REASONS,
+  STOCK_REFERENCE_TYPES,
+} from './inventory';

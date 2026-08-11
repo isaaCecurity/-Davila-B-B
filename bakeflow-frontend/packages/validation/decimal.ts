@@ -53,9 +53,13 @@ const exactDecimalString = z.string({
       : undefined,
 });
 
-// Signed `moneySchema`/`quantitySchema` variants are deliberately absent: no catalog
-// column permits a negative value, and an exported schema with no caller is surface that
-// gets adopted without ever having been exercised. Add them when a signed column exists.
+// Signed quantity variants were deliberately absent while catalog was the only consumer,
+// to be added "when a signed column exists". P4.2 is that moment: `stock_movements`
+// records both directions of the ledger, and `*_stock_levels.quantity_on_hand` has **no**
+// non-negative CHECK live, so both must accept a leading '-'.
+//
+// Signed *money* is still absent. `stock_movements.unit_cost` is
+// `CHECK (unit_cost >= 0)`, so no money column permits a negative value yet.
 
 /** `NUMERIC(19,4) CHECK (value >= 0)` — e.g. `product_variants.unit_price`. */
 export const nonNegativeMoneySchema = exactDecimalString
@@ -79,6 +83,35 @@ export const positiveQuantitySchema = exactDecimalString
     (value) => !isNegativeDecimalString(value) && !isZeroDecimalString(value),
     'must be > 0',
   )
+  .transform((value): Quantity => unsafeQuantity(value));
+
+/**
+ * `NUMERIC(18,4)` with **no sign constraint** — e.g. `ingredient_stock_levels
+ * .quantity_on_hand`, `product_stock_levels.quantity_on_hand`.
+ *
+ * Verified live 2026-08-11: neither level table has a `>= 0` CHECK on `quantity_on_hand`.
+ * Negative stock is therefore representable in the database, and a schema that rejected it
+ * would make the *reader* fail on a row the writer stored happily — the exact failure mode
+ * `catalog.ts`'s `btrim` note warns about. Whether negative stock should be *permitted*
+ * is a write-path policy question (roadmap P4.2, "negative-stock policy"); it is not this
+ * schema's business, and guessing it here would silently break oversold-stock reads.
+ */
+export const signedQuantitySchema = exactDecimalString
+  .regex(QUANTITY_PATTERN, QUANTITY_MESSAGE)
+  .transform((value): Quantity => unsafeQuantity(value));
+
+/**
+ * `NUMERIC(18,4) CHECK (value <> 0)` — `stock_movements.quantity_delta`.
+ *
+ * Signed, because the ledger's direction *is* the sign: `purchase`, `production_output`,
+ * `transfer_in` and `opening_balance` are `> 0`; `production_consume`, `sale`, `waste`
+ * and `transfer_out` are `< 0` (live CHECK `stock_movements_sign_matches_reason`).
+ * `adjustment` may be either, which is why the per-reason sign rule is not reproduced
+ * here — see `inventory.ts`, where it is enforced against the reason.
+ */
+export const nonZeroQuantitySchema = exactDecimalString
+  .regex(QUANTITY_PATTERN, QUANTITY_MESSAGE)
+  .refine((value) => !isZeroDecimalString(value), 'must not be 0')
   .transform((value): Quantity => unsafeQuantity(value));
 
 /** A `uuid` column. */
