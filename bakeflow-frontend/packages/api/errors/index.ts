@@ -228,6 +228,43 @@ function classify42501(message: string): BakeflowErrorCode {
     : 'insufficient_role';
 }
 
+/**
+ * `P0001` (raise_exception) with **no** JSON `detail`.
+ *
+ * `API-CONTRACT.md` §3's envelope — a machine `code` inside `DETAIL` — is honoured by the
+ * trigger path (`apply_stock_movement()` embeds `insufficient_stock`), and `codeFromDetail`
+ * catches those before this function is reached. But several deployed `SECURITY DEFINER`
+ * functions raise with a bare message and no detail at all. `adjust_stock()` is the one
+ * the inventory write path calls, verified live: it raises `authentication required`,
+ * `invalid item_type: …`, `invalid stock adjustment reason`, `target quantity cannot be
+ * negative`, `an increase cannot be recorded as waste`, `warehouse not found or branch
+ * access denied`, and two `insufficient_role: …` variants.
+ *
+ * Without this, every one of those became `unexpected_error` — indistinguishable from a
+ * genuine bug, and impossible for a screen to respond to. Matching on message text is
+ * unattractive, but the alternative is silently losing the distinction; the durable fix is
+ * for those functions to carry a `DETAIL` code, which is a database change.
+ *
+ * `warehouse not found or branch access denied` deliberately conflates a missing warehouse
+ * with a denied one, so it is reported as an authorization failure rather than a not-found:
+ * treating it as "no such row" would let a caller probe which warehouse ids exist in other
+ * branches.
+ */
+function classifyP0001(message: string): BakeflowErrorCode {
+  if (/^insufficient_role\b|insufficient_role:/i.test(message)) return 'insufficient_role';
+  if (/authentication required/i.test(message)) return 'session_expired';
+  if (/branch access denied|access denied/i.test(message)) return 'insufficient_role';
+  if (/insufficient_stock/i.test(message)) return 'insufficient_stock';
+  if (
+    /invalid item_type|invalid stock adjustment reason|cannot be negative|cannot be recorded as waste|not found/i.test(
+      message,
+    )
+  ) {
+    return 'invalid_request';
+  }
+  return 'unexpected_error';
+}
+
 /** Transport failures arrive with an empty code and a JS error name in the message. */
 const TRANSPORT_MESSAGE =
   /^(TypeError|FetchError|AbortError|Error):|network request failed|failed to fetch|load failed|timeout|abort/i;
@@ -245,7 +282,9 @@ export function normalizePostgrestError(error: PostgrestErrorLike): BakeflowApiE
       ? undefined
       : sqlstate === '42501'
         ? classify42501(error.message)
-        : ownLookup(CODE_MAP, sqlstate);
+        : sqlstate === 'P0001'
+          ? classifyP0001(error.message)
+          : ownLookup(CODE_MAP, sqlstate);
 
   const code: BakeflowErrorCode =
     fromDetail ??
@@ -256,7 +295,10 @@ export function normalizePostgrestError(error: PostgrestErrorLike): BakeflowApiE
 
   return new BakeflowApiError({
     code,
-    message: `catalog request failed (${code}${sqlstate === undefined ? '' : `, ${sqlstate}`})`,
+    // Deliberately domain-neutral: this normalizer serves the catalog reads, the
+    // inventory reads and the inventory ledger writes. Naming one domain here put
+    // "catalog request failed" on a stock-movement rejection.
+    message: `request failed (${code}${sqlstate === undefined ? '' : `, ${sqlstate}`})`,
     sqlstate,
     serverMessage: truncate(error.message),
     // A transport failure's `details` is a JS stack, not something a caller can act on.

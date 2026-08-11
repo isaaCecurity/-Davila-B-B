@@ -1,6 +1,31 @@
 # BakeFlow — Current Task
 
 ```
+TASK: P4.2b — Inventory WRITE path
+STATUS: PARTIAL — production code complete; behavioural suite NOT executed
+OWNER: claude
+PREREQS: P4.2a (implemented)
+EVIDENCE: npm run typecheck -> exit 0
+          npx eslint packages --max-warnings=0 -> exit 0
+          tests/sql/inventory_write_rls.sql -> NOT EXECUTED (connection lost:
+          getaddrinfo ENOTFOUND mcp.supabase.com)
+```
+
+**To finish P4.2b:** run `tests/sql/inventory_write_rls.sql` (A0-A12) once the database is
+reachable. If it passes, P4.2b becomes COMPLETE; nothing else is outstanding.
+
+**Mechanism correction.** The milestone assumed a direct insert into `stock_movements`.
+Verified live, that is impossible for any application user — `authenticated` holds SELECT
+only, and GRANTs precede RLS. Writes go through the SECURITY DEFINER `adjust_stock()` RPC,
+which takes an **absolute target quantity**, accepts only `adjustment`/`waste`/
+`opening_balance`, and owns `created_by`, `branch_id` and the audit entry. A direct-insert
+implementation was written and discarded rather than shipped.
+
+---
+
+## Previous task — P4.2a Inventory READ path (implemented, 15/15 executed)
+
+```
 TASK: P4.2a — Inventory domain, READ PATH
 STATUS: IMPLEMENTED (tests executed; awaiting independent review)
 OWNER: claude

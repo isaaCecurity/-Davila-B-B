@@ -12,6 +12,7 @@ import {
   STOCK_MOVEMENT_REASONS,
   STOCK_REFERENCE_TYPES,
   isNegativeDecimalString,
+  type StockMovementReason,
 } from '@bakeflow/types';
 import { z } from 'zod';
 
@@ -50,6 +51,32 @@ export const warehouseSchema = z.object({
   name: trimmedNonEmpty,
   is_default: z.boolean(),
 });
+
+/**
+ * Reproduces the live CHECK `stock_movements_sign_matches_reason`.
+ *
+ * Shared by the read schema and the insert schema so one rule governs both directions;
+ * a row we would refuse to write is also a row we would refuse to believe.
+ */
+function signMatchesReason(row: {
+  reason: StockMovementReason;
+  quantity_delta: string;
+}): boolean {
+  const negative = isNegativeDecimalString(row.quantity_delta);
+  if ((POSITIVE_STOCK_REASONS as readonly string[]).includes(row.reason)) return !negative;
+  if ((NEGATIVE_STOCK_REASONS as readonly string[]).includes(row.reason)) return negative;
+  // 'adjustment' — either sign is legal; zero is already rejected upstream.
+  return true;
+}
+
+// `path` is deliberately not `as const`: zod's refine options declare it as a mutable
+// PropertyKey[], and a readonly tuple is not assignable to it.
+const SIGN_RULE_ISSUE = {
+  error:
+    'quantity_delta sign does not match reason (live CHECK ' +
+    'stock_movements_sign_matches_reason); only "adjustment" permits either sign',
+  path: ['quantity_delta'],
+};
 
 /** Columns shared by both `stock_movements` variants. */
 const movementBase = {
@@ -99,25 +126,7 @@ const productMovementSchema = z.object({
  */
 export const stockMovementSchema = z
   .discriminatedUnion('item_type', [ingredientMovementSchema, productMovementSchema])
-  .refine(
-    (row) => {
-      const negative = isNegativeDecimalString(row.quantity_delta);
-      if ((POSITIVE_STOCK_REASONS as readonly string[]).includes(row.reason)) {
-        return !negative;
-      }
-      if ((NEGATIVE_STOCK_REASONS as readonly string[]).includes(row.reason)) {
-        return negative;
-      }
-      // 'adjustment' — either sign is legal; zero is already rejected upstream.
-      return true;
-    },
-    {
-      error:
-        'quantity_delta sign does not match reason (live CHECK ' +
-        'stock_movements_sign_matches_reason); only "adjustment" permits either sign',
-      path: ['quantity_delta'],
-    },
-  );
+  .refine(signMatchesReason, SIGN_RULE_ISSUE);
 
 /**
  * `ingredient_stock_levels`.
@@ -141,3 +150,11 @@ export const productStockLevelSchema = z.object({
   product_variant_id: uuidSchema,
   quantity_on_hand: signedQuantitySchema,
 });
+
+// No insert schema for `stock_movements` lives here, deliberately.
+//
+// An application user cannot insert into that table at all: `authenticated` holds SELECT
+// only (verified live), so writes go through the SECURITY DEFINER `adjust_stock()` RPC.
+// Its input is validated in `packages/api/mutations/inventory.ts` against the function's
+// own signature. A schema mirroring a direct-insert payload would be surface that nothing
+// can ever exercise -- exactly what the note at the foot of catalog.ts warns against.

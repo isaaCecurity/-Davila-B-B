@@ -50,6 +50,18 @@ export {
   type StockMovementFilters,
 } from './queries/inventory';
 
+// P4.2b — the inventory WRITE path. Exactly one operation, because the database grants
+// exactly one: `authenticated` cannot INSERT into `stock_movements` (SELECT only), so all
+// writes go through the SECURITY DEFINER `adjust_stock()` RPC, which owns `created_by`,
+// `branch_id` and the audit entry.
+export {
+  ADJUSTABLE_STOCK_REASONS,
+  adjustStock,
+  type AdjustStockInput,
+  type AdjustStockResult,
+  type AdjustableStockReason,
+} from './mutations/inventory';
+
 // `Page` and the paging constants come from the shared read primitives rather than from
 // either domain module, so both surface the same type and the same limits.
 export { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from './internal/read';

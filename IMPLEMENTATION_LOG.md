@@ -242,3 +242,75 @@ This vindicates `signedQuantitySchema`: an opted-in bakery legitimately stores a
 **Not verified:** full-repo `npm run lint` could not complete — Node aborts
 (`0xC0000409`) with 0.35 GB free RAM on this machine. Both scopes pass when run
 separately; CI runners are unaffected. Recorded as TD-014.
+
+---
+
+## 2026-08-11 · P4.2b — Inventory WRITE path (PARTIAL — code done, suite NOT executed)
+
+**Zero migrations, zero schema changes.**
+
+### The mechanism was not what the milestone assumed, and the database said so
+
+The plan was a direct `INSERT INTO stock_movements` via PostgREST. That is **impossible
+for an application user**, verified live:
+
+| Fact | Evidence |
+|---|---|
+| `authenticated` holds **SELECT only** on `stock_movements` | `information_schema.role_table_grants` |
+| GRANTs are checked before RLS, so `stock_movements_insert` is unreachable from a client | every test insert returned `42501` |
+| `adjust_stock(...)` is SECURITY DEFINER and IS EXECUTE-able by `authenticated` | `has_function_privilege` |
+
+This is deliberate, not a gap. Routing writes through the function is what lets the server
+own `created_by` (`auth.uid()`), derive `branch_id` from the warehouse, and write the
+`audit_log` row in the same transaction. An INSERT grant would make all three forgeable.
+A first implementation built on direct inserts was written and then **discarded** once the
+grants were read — it would have failed for every user in production.
+
+### The contract, read from the live function body
+
+```
+adjust_stock(p_warehouse_id uuid, p_item_type text, p_item_id uuid,
+             p_new_quantity numeric, p_reason text = 'adjustment',
+             p_note text = null) RETURNS jsonb
+```
+
+- **`p_new_quantity` is an ABSOLUTE TARGET, not a delta.** Reads the level `FOR UPDATE`,
+  computes `delta = target - current`. Passing a delta would set stock *to* the delta.
+- Accepts only `adjustment`, `waste`, `opening_balance`. The other six reasons belong to
+  their own domain flows.
+- Target equal to current is a **no-op** returning `unchanged: true` — absolute-target
+  semantics give idempotency without any client token.
+- Negative target refused. Roles: adjustment/opening_balance need
+  owner/admin/branch_manager; waste additionally allows `baker`.
+- Returns `to_jsonb(v_movement)`, which renders `numeric` **unquoted** — so every quantity
+  in the envelope is already a double. `adjustStock` therefore reads only the `id` from it
+  and re-reads the row through `getStockMovementById`, whose projection casts `::text`.
+
+### Production code
+
+| File | Change |
+|---|---|
+| `packages/api/mutations/inventory.ts` | **new**, 196 lines — `adjustStock()` |
+| `packages/api/errors/index.ts` | `classifyP0001()` added; normalizer message made domain-neutral |
+| `packages/validation/inventory.ts` | sign rule factored out; direct-insert schema removed as unreachable |
+| `packages/api/index.ts`, `packages/validation/index.ts` | exports |
+
+`classifyP0001` matters: `adjust_stock` raises plain-text `P0001` with **no** JSON detail,
+so without it every authorization and validation failure normalized to `unexpected_error`
+— indistinguishable from a bug. The durable fix is for those functions to carry a `DETAIL`
+code; that is a database change and was not made.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `tests/sql/inventory_write_rls.sql` | **NOT EXECUTED** |
+
+The write suite (A0–A12) is written and committed but **was never run**: the database
+connection failed with `getaddrinfo ENOTFOUND mcp.supabase.com` immediately after the
+contract was read. No assertion in it may be cited as evidence until it is executed.
+
+**P4.2b is therefore PARTIAL, not COMPLETE.** The contract facts above were each read from
+the live database before the outage; the behavioural assertions were not.

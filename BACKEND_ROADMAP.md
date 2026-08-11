@@ -371,8 +371,16 @@ permanently consumed — fixing it is a migration and needs approval;
 consumer. Executed: `tests/sql/inventory_read_rls.sql` **15/15**, typecheck exit 0,
 packages lint exit 0.
 
-**P4.2b WRITE PATH — not started.** A write here is an insert into `stock_movements`,
-never an update to a level (`CLAUDE.md` rule 7).
+**P4.2b WRITE PATH — PARTIAL (2026-08-11).** `packages/api/mutations/inventory.ts`
+implements `adjustStock()`. Typecheck and lint pass; **`tests/sql/inventory_write_rls.sql`
+is written but NOT executed** (connection lost), so the milestone is not COMPLETE.
+
+The mechanism is **not** a direct insert, contrary to this milestone's original wording.
+Verified live: `authenticated` holds **SELECT only** on `stock_movements`, and GRANTs are
+checked before RLS, so the `stock_movements_insert` policy is unreachable from a client.
+Writes go through the SECURITY DEFINER `adjust_stock()` RPC, which takes an **absolute
+target quantity** (not a delta), accepts only `adjustment`/`waste`/`opening_balance`, and
+owns `created_by`, `branch_id` and the `audit_log` entry.
 
 **Blockers: none.** The earlier note that "negative-stock policy may become one if
 unspecified" is **withdrawn — the policy is already implemented server-side** in
