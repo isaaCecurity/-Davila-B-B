@@ -4,6 +4,21 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-007
+
+**Question:** Should `sync_conflicts` be created (or the sync spec corrected), and
+which ticket document is wrong — `API-CONTRACT.md` or `STATE-MACHINES.md`?
+
+**Affected:** P3.7 per-entity sync, P4.4 tickets, documentation accuracy
+
+**Status:** BLOCKED — planning only; no implementation depends on it today
+
+**Why it matters:** the sync model names a conflict table that does not exist, and the
+API contract advertises ticket RPCs that provably cannot succeed. Both would mislead
+the next implementer.
+
+---
+
 ## ACTION REQUIRED: BLOCKER-005
 
 **Question:** May the ticket-guard remediation migration be written, or is ticket sync
