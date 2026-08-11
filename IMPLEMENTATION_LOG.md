@@ -132,3 +132,56 @@ an option.
 contract), with matching NOTIFICATIONS entries. `CURRENT_TASK.md` marks B5 BLOCKED.
 
 **B7 was not started**, per the human's explicit gate.
+
+---
+
+## 2026-08-11 · P11.1 — Lint/typecheck/spec CI gate (PARTIAL)
+
+Established the quality gate the loop depends on. **No database logic, business rule,
+sync behaviour, financial rule or frontend feature was touched. Zero migrations.**
+
+**Problem.** Zero files in the repository were being linted. `npm run lint` exited 2
+because `expo lint` globs `apps/mobile/components`, a directory that does not exist, so
+ESLint aborted before reading a file (TD-011). Separately, `packages/*` sat outside the
+only flat config's base path, leaving all 1,713 lines of the P4.1a catalog read path
+unlinted (TD-010).
+
+**Changed.**
+
+| File | Change |
+|---|---|
+| `bakeflow-frontend/eslint.config.js` | new — root flat config for `packages/*`, ignoring `apps/**` |
+| `bakeflow-frontend/apps/mobile/package.json` | `lint`: `expo lint` → `eslint . --max-warnings=0` |
+| `bakeflow-frontend/package.json` | root `lint` also runs `eslint . --max-warnings=0` |
+| `.github/workflows/ci.yml` | new — lint + typecheck + pytest on push to `main` and every PR |
+
+Two configs rather than one because flat config does **not** merge across directories:
+ESLint resolves exactly one config walking up from the cwd. They own disjoint paths so
+they can never both claim a file.
+
+**Executed evidence.**
+
+| Command | Result |
+|---|---|
+| `npm run lint` (root) | exit 0 |
+| `npm run lint --workspace apps/mobile` | exit 0, **7 files** |
+| `npx eslint . --format json` (root) | exit 0, **17 files**, incl. all 8 P4.1a sources |
+| `npm run typecheck` | exit 0 |
+| `.venv/Scripts/python.exe -m pytest -q` | **12 passed** |
+
+**Negative control.** Exit 0 does not prove a gate works, so a probe file with an unused
+variable and an undefined identifier was linted deliberately. ESLint reported the unused
+variable as a **warning and still exited 0** — which is why `--max-warnings=0` was added.
+It did not flag the undefined identifier at all (`typescript-eslint` disables `no-undef`
+and defers to `tsc`); `tsc` raised `TS2304`, confirming lint and typecheck are
+complementary and CI must run both. Probe deleted; suites re-run clean.
+
+**Not done, deliberately.** The SQL suites are **not** in CI, so P11.1 is PARTIAL, not
+COMPLETE. They need a live Postgres and credentials; the repo cannot rebuild the schema
+(BLOCKER-002) and pointing CI at production would mean storing a privileged key in
+GitHub secrets. Both are human decisions.
+
+**Not verified.** The workflow has never run on GitHub. Its commands pass locally; the
+YAML itself is unproven until a push triggers it.
+
+**TD-010 and TD-011 marked RESOLVED.** No blocker was opened or closed.
