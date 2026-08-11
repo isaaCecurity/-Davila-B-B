@@ -19,11 +19,13 @@ import {
   QUANTITY_PATTERN,
   isNegativeDecimalString,
   isZeroDecimalString,
-  unsafeMoney,
-  unsafeQuantity,
   type Money,
   type Quantity,
 } from '@bakeflow/types';
+// Deep import on purpose: the unsafe branding helpers are kept out of the
+// '@bakeflow/types' barrel so this module is their only realistic caller. See the note
+// in packages/types/index.ts.
+import { unsafeMoney, unsafeQuantity } from '@bakeflow/types/scalars';
 import { z } from 'zod';
 
 const MONEY_MESSAGE =
@@ -51,21 +53,15 @@ const exactDecimalString = z.string({
       : undefined,
 });
 
-/** Any `NUMERIC(19,4)` money value, including negatives. */
-export const moneySchema = exactDecimalString
-  .regex(MONEY_PATTERN, MONEY_MESSAGE)
-  .transform((value): Money => unsafeMoney(value));
+// Signed `moneySchema`/`quantitySchema` variants are deliberately absent: no catalog
+// column permits a negative value, and an exported schema with no caller is surface that
+// gets adopted without ever having been exercised. Add them when a signed column exists.
 
 /** `NUMERIC(19,4) CHECK (value >= 0)` — e.g. `product_variants.unit_price`. */
 export const nonNegativeMoneySchema = exactDecimalString
   .regex(MONEY_PATTERN, MONEY_MESSAGE)
   .refine((value) => !isNegativeDecimalString(value), 'must be >= 0')
   .transform((value): Money => unsafeMoney(value));
-
-/** Any `NUMERIC(18,4)` quantity value. */
-export const quantitySchema = exactDecimalString
-  .regex(QUANTITY_PATTERN, QUANTITY_MESSAGE)
-  .transform((value): Quantity => unsafeQuantity(value));
 
 /** `NUMERIC(18,4) CHECK (value >= 0)` — e.g. `ingredients.reorder_level`. */
 export const nonNegativeQuantitySchema = exactDecimalString

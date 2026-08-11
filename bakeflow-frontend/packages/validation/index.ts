@@ -4,11 +4,9 @@
 // verified by direct `pg_constraint` inspection, never from documentation.
 
 export {
-  moneySchema,
   nonNegativeMoneySchema,
   nonNegativeQuantitySchema,
   positiveQuantitySchema,
-  quantitySchema,
   timestamptzSchema,
   uuidSchema,
 } from './decimal';
@@ -18,9 +16,6 @@ export {
   productCategorySchema,
   productSchema,
   productVariantSchema,
-  productWithVariantsSchema,
-  recipeBillOfMaterialsSchema,
-  recipeIngredientDetailSchema,
   recipeIngredientSchema,
   recipeSchema,
 } from './catalog';

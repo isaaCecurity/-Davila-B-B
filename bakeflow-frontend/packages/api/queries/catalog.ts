@@ -23,33 +23,38 @@
  *
  * - **A denied read is an empty set, not an error.** Postgres RLS filters `SELECT`; it
  *   does not raise. Cross-organization isolation is therefore proven by asserting row
- *   counts, never by expecting an exception. `tests/sql/catalog_read_rls.sql` tests it
- *   that way.
+ *   counts, never by expecting an exception.
  * - **A revoked membership yields a null `tenant_id` claim**, and `NULL = anything` is
  *   `NULL`, so every policy denies and every catalog list comes back empty. That is the
  *   correct behaviour, and it is why the UI needs a distinct "no organization selected"
  *   state rather than rendering an empty catalog (P8.1).
  *
- * The `.is('deleted_at', null)` filter each query below adds is therefore redundant with
- * RLS. It is kept because `API-CONTRACT.md` §4 requires every read to filter it
- * explicitly: RLS is the safety net, not the query's contract, and the day a policy is
- * loosened the queries should not start showing deleted rows.
+ * The `.is('deleted_at', null)` filter each query adds is redundant with RLS. It is kept
+ * because `API-CONTRACT.md` §4 requires every read to filter it explicitly: RLS is the
+ * safety net, not the query's contract.
  *
  * ## AD-006 is not violated here
  *
  * AD-006 forbids `current_tenant_id()` in any **sync** path, because a queued operation
  * belongs to the organization it was created under, not the active one. This is the
- * **interactive read** path, where "what the user is looking at now" is exactly the
- * right question, so `current_tenant_id()` is correct. The distinction is deliberate;
- * the catalog policies are not to be "fixed".
+ * **interactive read** path, where "what the user is looking at now" is exactly the right
+ * question. The distinction is deliberate; the catalog policies are not to be "fixed".
  *
  * ## Money precision
  *
- * Every `NUMERIC` column is selected with a `::text` cast. Without it PostgreSQL renders
- * `numeric` as an unquoted JSON number and `JSON.parse` destroys the scale before any
- * application code runs — verified live, see `@bakeflow/types` `scalars.ts`. The Zod
- * schemas reject a JSON number in these positions, so dropping a cast fails loudly at
- * the boundary instead of silently corrupting money.
+ * Every `NUMERIC` column is selected with a `::text` cast, because PostgreSQL renders
+ * `numeric` unquoted in JSON and `JSON.parse` collapses it to a double — see
+ * `@bakeflow/types` `scalars.ts` for the executed evidence. **The projection is derived
+ * from the Zod schema** (`projectionFor`) rather than hand-written beside it, so a column
+ * cannot be selected without its cast, and schema and projection cannot drift apart.
+ *
+ * ## Caller responsibility this layer cannot discharge
+ *
+ * A returned row carries its `tenant_id`. Cache keys derived only from arguments would be
+ * **identical across organizations**, so a TanStack Query cache must be keyed on (or
+ * invalidated by) the active organization — otherwise switching bakeries serves the
+ * previous one's catalog from cache. That belongs to the P8.1 hook layer; this note is
+ * here because nothing in these signatures forces the issue.
  */
 
 import type {
@@ -83,38 +88,59 @@ import {
 } from '../errors';
 
 /* -------------------------------------------------------------------------- */
-/* Column projections                                                          */
+/* Column projections, derived from the schemas                                */
 /* -------------------------------------------------------------------------- */
 
 /**
- * `API-CONTRACT.md` §4: select explicit columns, never `*`.
- *
- * `created_by`, `deleted_at` and `deleted_by` are omitted deliberately — the read path
- * can never observe a soft-deleted row, and `created_by` is an audit column no catalog
- * screen renders.
+ * Columns that must be cast to text so their exact decimal scale survives transport.
+ * Every `NUMERIC` column across the six catalog tables appears here.
  */
-const CATEGORY_COLUMNS = 'id,tenant_id,name,sort_order,created_at,updated_at';
+const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set([
+  'unit_price',
+  'reorder_level',
+  'last_unit_cost',
+  'yield_quantity',
+  'quantity',
+]);
 
-const PRODUCT_COLUMNS =
-  'id,tenant_id,category_id,name,description,image_url,is_active,created_at,updated_at';
+/** Structural shape of a Zod object — avoids importing Zod's generics for one lookup. */
+interface SchemaShape {
+  readonly shape: Readonly<Record<string, unknown>>;
+}
 
-/** `unit_price::text` — see the money-precision note above. */
-const VARIANT_COLUMNS =
-  'id,tenant_id,product_id,name,sku,unit_price::text,is_active,created_at,updated_at';
+/**
+ * Build a PostgREST `select` list from a schema's keys.
+ *
+ * This is the single point where "which columns do we read" is decided, and it is the
+ * same object that decides "which columns do we validate". Hand-maintaining the two
+ * beside each other meant a dropped `::text` cast was caught only at runtime, on a
+ * user's phone, by the Zod tripwire. Deriving one from the other makes it unrepresentable.
+ *
+ * Satisfies `API-CONTRACT.md` §4's requirement to select explicit columns, never `*`.
+ */
+function projectionFor(schema: SchemaShape): string {
+  return Object.keys(schema.shape)
+    .map((column) => (TEXT_CAST_COLUMNS.has(column) ? `${column}::text` : column))
+    .join(',');
+}
 
-/** `reorder_level::text`, `last_unit_cost::text`. */
-const INGREDIENT_COLUMNS =
-  'id,tenant_id,name,unit_of_measure,reorder_level::text,last_unit_cost::text,' +
-  'is_active,created_at,updated_at';
+/** A catalog table paired with the schema that both projects and validates it. */
+interface CatalogEntity<T> {
+  readonly table: string;
+  readonly schema: z.ZodType<T>;
+  readonly columns: string;
+}
 
-/** `yield_quantity::text`. */
-const RECIPE_COLUMNS =
-  'id,tenant_id,product_variant_id,name,yield_quantity::text,version,is_active,' +
-  'created_at,updated_at';
+function entity<T>(table: string, schema: z.ZodType<T> & SchemaShape): CatalogEntity<T> {
+  return { table, schema, columns: projectionFor(schema) };
+}
 
-/** `quantity::text`. */
-const RECIPE_INGREDIENT_COLUMNS =
-  'id,tenant_id,recipe_id,ingredient_id,quantity::text,created_at,updated_at';
+const CATEGORIES = entity<ProductCategory>('product_categories', productCategorySchema);
+const PRODUCTS = entity<Product>('products', productSchema);
+const VARIANTS = entity<ProductVariant>('product_variants', productVariantSchema);
+const INGREDIENTS = entity<Ingredient>('ingredients', ingredientSchema);
+const RECIPES = entity<Recipe>('recipes', recipeSchema);
+const RECIPE_LINES = entity<RecipeIngredient>('recipe_ingredients', recipeIngredientSchema);
 
 /* -------------------------------------------------------------------------- */
 /* Paging                                                                      */
@@ -127,32 +153,52 @@ export const MAX_PAGE_SIZE = 200;
  * Keyset paging options.
  *
  * `API-CONTRACT.md` §4 mandates keyset rather than offset, because offset drifts when
- * rows are inserted mid-scroll. Each paged list below orders by a column that is
- * **unique within a tenant** (`products.name`, `product_variants.sku`,
- * `ingredients.name` — all backed by unique indexes verified live), so a single-column
- * cursor is sufficient and no `(sort_key, id)` tiebreak is needed.
+ * rows are inserted mid-scroll. Each paged list orders by a column that is **unique
+ * within a tenant** (`products.name`, `product_variants.sku`, `ingredients.name`, all
+ * backed by non-partial unique indexes verified live), so a single-column cursor is
+ * sufficient and no `(sort_key, id)` tiebreak is needed.
  *
  * Categories, variants-of-a-product and recipe lines are not paged: each is bounded by
- * its parent, and paging them would add a cursor round-trip for a list of ten.
+ * its parent.
  */
 export interface KeysetPageOptions {
-  /** Rows per page. Clamped to `MAX_PAGE_SIZE`. */
+  /** Rows per page. Must not exceed `MAX_PAGE_SIZE` — see `resolveLimit`. */
   limit?: number;
-  /** Exclusive cursor — return rows whose sort key sorts strictly after this. */
+  /**
+   * Exclusive cursor. Pass the previous page's `nextCursor`; never construct one by hand,
+   * because the column it refers to differs per list (`name` for products and
+   * ingredients, `sku` for variants).
+   */
   after?: string;
   /** Restrict to `is_active = true`. Omitted means both. */
   activeOnly?: boolean;
 }
 
-function clampLimit(limit: number | undefined): number {
+/**
+ * One page, with the cursor for the next.
+ *
+ * `nextCursor` is `null` when the end has been reached, determined by fetching one row
+ * beyond `limit` rather than by comparing `rows.length` to the requested limit. That
+ * distinction matters: an earlier version clamped an over-large `limit` silently, so a
+ * caller asking for 500 got 200 back, concluded `200 < 500` meant "last page", and
+ * stopped — dropping the rest of the catalog with no error anywhere.
+ */
+export interface Page<T> {
+  rows: T[];
+  nextCursor: string | null;
+}
+
+function resolveLimit(limit: number | undefined): number {
   if (limit === undefined) return DEFAULT_PAGE_SIZE;
-  if (!Number.isInteger(limit) || limit < 1) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+    // Rejected rather than clamped: silently returning fewer rows than asked for is
+    // indistinguishable from reaching the end of the list.
     throw new BakeflowApiError({
       code: 'invalid_request',
-      message: `limit must be a positive integer, received ${String(limit)}`,
+      message: `limit must be an integer between 1 and ${MAX_PAGE_SIZE}, received ${String(limit)}`,
     });
   }
-  return Math.min(limit, MAX_PAGE_SIZE);
+  return limit;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -162,10 +208,13 @@ function clampLimit(limit: number | undefined): number {
 /**
  * Narrow an untrusted PostgREST payload to a typed array.
  *
- * The payload is `unknown`, never `any`. `BakeflowClient` is intentionally not
- * parameterised with the generated `Database` type (see `../client`), so this is the one
- * place the boundary is crossed, and it is crossed by a checked parse rather than an
- * assertion.
+ * `BakeflowClient` is intentionally not parameterised with the generated `Database` type
+ * (see `../client`), so this is the one place the boundary is crossed — and it is crossed
+ * by a checked parse rather than an assertion.
+ *
+ * Note `Array.isArray` narrows an `unknown` to `any[]`, not `unknown[]`, so the result is
+ * rebound to `unknown[]` immediately; otherwise every element access below would silently
+ * be `any` and the guarantee this function exists to provide would be hollow.
  */
 function parseRows<T>(schema: z.ZodType<T>, payload: unknown, context: string): T[] {
   if (!Array.isArray(payload)) {
@@ -174,10 +223,11 @@ function parseRows<T>(schema: z.ZodType<T>, payload: unknown, context: string): 
       message: `${context}: expected an array of rows, received ${typeof payload}`,
     });
   }
+  const items: unknown[] = payload;
 
   const rows: T[] = [];
-  for (let index = 0; index < payload.length; index += 1) {
-    const result = schema.safeParse(payload[index]);
+  for (let index = 0; index < items.length; index += 1) {
+    const result = schema.safeParse(items[index]);
     if (!result.success) {
       const detail = result.error.issues
         .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
@@ -194,26 +244,40 @@ function parseRows<T>(schema: z.ZodType<T>, payload: unknown, context: string): 
   return rows;
 }
 
-/** Narrow a single-row payload, treating an absent row as `not_found`. */
-function parseMaybeRow<T>(schema: z.ZodType<T>, payload: unknown, context: string): T | null {
+/** Narrow a single-row payload. An absent row is `null`, not an error. */
+function parseRow<T>(schema: z.ZodType<T>, payload: unknown, context: string): T | null {
   if (payload === null || payload === undefined) return null;
-  const rows = parseRows(schema, [payload], context);
-  return rows[0] ?? null;
+  const result = schema.safeParse(payload);
+  if (!result.success) {
+    const detail = result.error.issues
+      .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new BakeflowApiError({
+      code: 'response_shape_invalid',
+      message: `${context}: row did not match its schema`,
+      details: detail,
+      cause: result.error,
+    });
+  }
+  return result.data;
 }
 
 /** Shape of what `supabase-js` resolves to. Declared structurally — this package has no
  *  runtime dependency on `@supabase/supabase-js`. */
 interface PostgrestResultLike {
   data: unknown;
-  error: PostgrestErrorLike | null;
+  /** `undefined` is accepted alongside `null` so the `== null` guard below is honest
+   *  about what it handles rather than narrowing a case it would then crash on. */
+  error?: PostgrestErrorLike | null | undefined;
 }
 
 /**
- * Run a query, normalizing both failure modes.
+ * Run a query, normalizing every failure mode.
  *
- * `supabase-js` reports a database error in `{ error }` but **rejects** when `fetch`
- * itself fails, so offline is a throw. Mobile is offline routinely
- * (`API-CONTRACT.md` §6), so both paths are handled rather than only the tidy one.
+ * Note that a `fetch` failure does **not** reject here: postgrest-js 2.110.9 converts it
+ * into `{ error: { code: "" } }` and resolves. Offline therefore flows through
+ * `normalizePostgrestError`, which is where it is classified. The `catch` remains for
+ * programming faults and for callers that opt into `.throwOnError()`.
  */
 async function run(query: PromiseLike<PostgrestResultLike>): Promise<unknown> {
   let result: PostgrestResultLike;
@@ -222,8 +286,67 @@ async function run(query: PromiseLike<PostgrestResultLike>): Promise<unknown> {
   } catch (thrown) {
     throw normalizeThrown(thrown);
   }
-  if (result.error !== null) throw normalizePostgrestError(result.error);
+  if (result.error != null) throw normalizePostgrestError(result.error);
   return result.data;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared read shapes                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Fetch one row by primary key. */
+async function getById<T>(
+  client: BakeflowClient,
+  target: CatalogEntity<T>,
+  id: Uuid,
+  context: string,
+): Promise<T | null> {
+  const data = await run(
+    client
+      .from(target.table)
+      .select(target.columns)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .maybeSingle(),
+  );
+  return parseRow(target.schema, data, context);
+}
+
+/**
+ * Fetch one keyset page, ordered by `sortColumn`.
+ *
+ * Fetches `limit + 1` rows and uses the surplus row purely as the has-more signal, so
+ * `nextCursor` is exact rather than inferred from page length.
+ */
+async function getPage<T extends Record<string, unknown>>(
+  client: BakeflowClient,
+  target: CatalogEntity<T>,
+  sortColumn: string,
+  options: KeysetPageOptions,
+  context: string,
+  /** Extra equality filters, as data rather than a builder callback — the builder's type
+   *  changes after `.select()`, and threading that through a callback buys nothing. */
+  eqFilters: Readonly<Record<string, string>> = {},
+): Promise<Page<T>> {
+  const limit = resolveLimit(options.limit);
+
+  let query = client.from(target.table).select(target.columns).is('deleted_at', null);
+  for (const [column, value] of Object.entries(eqFilters)) query = query.eq(column, value);
+  if (options.activeOnly === true) query = query.eq('is_active', true);
+  if (options.after !== undefined) query = query.gt(sortColumn, options.after);
+
+  const data = await run(query.order(sortColumn, { ascending: true }).limit(limit + 1));
+  const rows = parseRows(target.schema, data, context);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page.length > 0 ? page[page.length - 1] : undefined;
+  const cursorValue = last === undefined ? undefined : last[sortColumn];
+
+  return {
+    rows: page,
+    nextCursor: hasMore && typeof cursorValue === 'string' ? cursorValue : null,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -241,13 +364,13 @@ export async function listProductCategories(
 ): Promise<ProductCategory[]> {
   const data = await run(
     client
-      .from('product_categories')
-      .select(CATEGORY_COLUMNS)
+      .from(CATEGORIES.table)
+      .select(CATEGORIES.columns)
       .is('deleted_at', null)
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
   );
-  return parseRows(productCategorySchema, data, 'listProductCategories');
+  return parseRows(CATEGORIES.schema, data, 'listProductCategories');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -255,41 +378,22 @@ export async function listProductCategories(
 /* -------------------------------------------------------------------------- */
 
 /** One page of products, ordered by `name` (unique per tenant, so a safe cursor). */
-export async function listProducts(
+export function listProducts(
   client: BakeflowClient,
   options: KeysetPageOptions = {},
-): Promise<Product[]> {
-  let query = client
-    .from('products')
-    .select(PRODUCT_COLUMNS)
-    .is('deleted_at', null)
-    .order('name', { ascending: true })
-    .limit(clampLimit(options.limit));
-
-  if (options.activeOnly === true) query = query.eq('is_active', true);
-  if (options.after !== undefined) query = query.gt('name', options.after);
-
-  return parseRows(productSchema, await run(query), 'listProducts');
+): Promise<Page<Product>> {
+  return getPage(client, PRODUCTS, 'name', options, 'listProducts');
 }
 
-/** Products in one category. Same paging contract as `listProducts`. */
-export async function listProductsByCategory(
+/** Products in one category. Same cursor column as `listProducts`. */
+export function listProductsByCategory(
   client: BakeflowClient,
   categoryId: Uuid,
   options: KeysetPageOptions = {},
-): Promise<Product[]> {
-  let query = client
-    .from('products')
-    .select(PRODUCT_COLUMNS)
-    .eq('category_id', categoryId)
-    .is('deleted_at', null)
-    .order('name', { ascending: true })
-    .limit(clampLimit(options.limit));
-
-  if (options.activeOnly === true) query = query.eq('is_active', true);
-  if (options.after !== undefined) query = query.gt('name', options.after);
-
-  return parseRows(productSchema, await run(query), 'listProductsByCategory');
+): Promise<Page<Product>> {
+  return getPage(client, PRODUCTS, 'name', options, 'listProductsByCategory', {
+    category_id: categoryId,
+  });
 }
 
 /**
@@ -297,19 +401,11 @@ export async function listProductsByCategory(
  * soft-deleted. All three are indistinguishable to the client by design — telling them
  * apart would leak the existence of another organization's row.
  */
-export async function getProductById(
+export function getProductById(
   client: BakeflowClient,
   productId: Uuid,
 ): Promise<Product | null> {
-  const data = await run(
-    client
-      .from('products')
-      .select(PRODUCT_COLUMNS)
-      .eq('id', productId)
-      .is('deleted_at', null)
-      .maybeSingle(),
-  );
-  return parseMaybeRow(productSchema, data, 'getProductById');
+  return getById(client, PRODUCTS, productId, 'getProductById');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -317,8 +413,8 @@ export async function getProductById(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Variants of one product, ordered by name. Unpaged: a product has a handful of
- * variants, bounded by the parent.
+ * Variants of one product, ordered by name. Unpaged: a product has a handful of variants,
+ * bounded by the parent.
  */
 export async function listVariantsByProduct(
   client: BakeflowClient,
@@ -326,15 +422,15 @@ export async function listVariantsByProduct(
   options: { activeOnly?: boolean } = {},
 ): Promise<ProductVariant[]> {
   let query = client
-    .from('product_variants')
-    .select(VARIANT_COLUMNS)
+    .from(VARIANTS.table)
+    .select(VARIANTS.columns)
     .eq('product_id', productId)
-    .is('deleted_at', null)
-    .order('name', { ascending: true });
+    .is('deleted_at', null);
 
   if (options.activeOnly === true) query = query.eq('is_active', true);
 
-  return parseRows(productVariantSchema, await run(query), 'listVariantsByProduct');
+  const data = await run(query.order('name', { ascending: true }));
+  return parseRows(VARIANTS.schema, data, 'listVariantsByProduct');
 }
 
 /**
@@ -342,37 +438,19 @@ export async function listVariantsByProduct(
  * cursor). This is the export/administrative path; a catalog screen wants
  * `listVariantsByProduct`.
  */
-export async function listProductVariants(
+export function listProductVariants(
   client: BakeflowClient,
   options: KeysetPageOptions = {},
-): Promise<ProductVariant[]> {
-  let query = client
-    .from('product_variants')
-    .select(VARIANT_COLUMNS)
-    .is('deleted_at', null)
-    .order('sku', { ascending: true })
-    .limit(clampLimit(options.limit));
-
-  if (options.activeOnly === true) query = query.eq('is_active', true);
-  if (options.after !== undefined) query = query.gt('sku', options.after);
-
-  return parseRows(productVariantSchema, await run(query), 'listProductVariants');
+): Promise<Page<ProductVariant>> {
+  return getPage(client, VARIANTS, 'sku', options, 'listProductVariants');
 }
 
 /** One variant, or `null`. See `getProductById` on why the null cases are merged. */
-export async function getProductVariantById(
+export function getProductVariantById(
   client: BakeflowClient,
   variantId: Uuid,
 ): Promise<ProductVariant | null> {
-  const data = await run(
-    client
-      .from('product_variants')
-      .select(VARIANT_COLUMNS)
-      .eq('id', variantId)
-      .is('deleted_at', null)
-      .maybeSingle(),
-  );
-  return parseMaybeRow(productVariantSchema, data, 'getProductVariantById');
+  return getById(client, VARIANTS, variantId, 'getProductVariantById');
 }
 
 /**
@@ -380,19 +458,30 @@ export async function getProductVariantById(
  *
  * Two round trips rather than one PostgREST embed. An embed would need a nested
  * `deleted_at` filter on the embedded resource, and getting that subtly wrong fails
- * open — it shows soft-deleted variants — which is the failure direction that matters
- * here. Two explicitly filtered, independently validated queries cost one round trip and
- * cannot fail that way.
+ * open — it shows soft-deleted variants — which is the failure direction that matters.
+ * Two explicitly filtered, independently validated queries cost one *extra* round trip
+ * and cannot fail that way.
+ *
+ * The `tenant_id` equality check is defence in depth, not RLS duplication: RLS already
+ * guarantees it for an `authenticated` client, but this function would otherwise join
+ * across organizations without complaint if ever handed a `service_role` client, which
+ * bypasses RLS entirely. Failing closed costs one comparison.
  */
 export async function getProductWithVariants(
   client: BakeflowClient,
   productId: Uuid,
-  options: { activeOnly?: boolean } = {},
+  options: { activeVariantsOnly?: boolean } = {},
 ): Promise<ProductWithVariants | null> {
   const product = await getProductById(client, productId);
   if (product === null) return null;
-  const variants = await listVariantsByProduct(client, productId, options);
-  return { ...product, variants };
+
+  const variants = await listVariantsByProduct(client, productId, {
+    ...(options.activeVariantsOnly === undefined
+      ? {}
+      : { activeOnly: options.activeVariantsOnly }),
+  });
+
+  return { ...product, variants: variants.filter((v) => v.tenant_id === product.tenant_id) };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -400,37 +489,19 @@ export async function getProductWithVariants(
 /* -------------------------------------------------------------------------- */
 
 /** One page of ingredients, ordered by `name` (unique per tenant). */
-export async function listIngredients(
+export function listIngredients(
   client: BakeflowClient,
   options: KeysetPageOptions = {},
-): Promise<Ingredient[]> {
-  let query = client
-    .from('ingredients')
-    .select(INGREDIENT_COLUMNS)
-    .is('deleted_at', null)
-    .order('name', { ascending: true })
-    .limit(clampLimit(options.limit));
-
-  if (options.activeOnly === true) query = query.eq('is_active', true);
-  if (options.after !== undefined) query = query.gt('name', options.after);
-
-  return parseRows(ingredientSchema, await run(query), 'listIngredients');
+): Promise<Page<Ingredient>> {
+  return getPage(client, INGREDIENTS, 'name', options, 'listIngredients');
 }
 
 /** One ingredient, or `null`. */
-export async function getIngredientById(
+export function getIngredientById(
   client: BakeflowClient,
   ingredientId: Uuid,
 ): Promise<Ingredient | null> {
-  const data = await run(
-    client
-      .from('ingredients')
-      .select(INGREDIENT_COLUMNS)
-      .eq('id', ingredientId)
-      .is('deleted_at', null)
-      .maybeSingle(),
-  );
-  return parseMaybeRow(ingredientSchema, data, 'getIngredientById');
+  return getById(client, INGREDIENTS, ingredientId, 'getIngredientById');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -442,10 +513,13 @@ export async function getIngredientById(
  *
  * At most one row can come back: the live partial unique index
  * `recipes_one_active_per_variant ON (tenant_id, product_variant_id) WHERE is_active`
- * makes "one active recipe per variant" a database guarantee, not a convention. Note the
- * index is partial on `is_active` and **not** on `deleted_at` — a soft-deleted but still
- * `is_active` recipe therefore still occupies the slot. That is the schema defect
- * recorded as BLOCKER-010(a); it is designed around here, not fixed.
+ * makes "one active recipe per variant" a database guarantee, not a convention. If that
+ * invariant were ever broken the read surfaces `multiple_rows_returned` rather than
+ * silently picking one — which is why `PGRST116` must not be mapped to `not_found`.
+ *
+ * Note the index is partial on `is_active` and **not** on `deleted_at`, so a soft-deleted
+ * but still-`is_active` recipe occupies the slot. That is BLOCKER-010(a); it is designed
+ * around here, not fixed.
  */
 export async function getActiveRecipeForVariant(
   client: BakeflowClient,
@@ -453,14 +527,14 @@ export async function getActiveRecipeForVariant(
 ): Promise<Recipe | null> {
   const data = await run(
     client
-      .from('recipes')
-      .select(RECIPE_COLUMNS)
+      .from(RECIPES.table)
+      .select(RECIPES.columns)
       .eq('product_variant_id', variantId)
       .eq('is_active', true)
       .is('deleted_at', null)
       .maybeSingle(),
   );
-  return parseMaybeRow(recipeSchema, data, 'getActiveRecipeForVariant');
+  return parseRow(RECIPES.schema, data, 'getActiveRecipeForVariant');
 }
 
 /** Every recipe version for a variant, newest version first. Bounded, so unpaged. */
@@ -470,45 +544,59 @@ export async function listRecipeVersionsForVariant(
 ): Promise<Recipe[]> {
   const data = await run(
     client
-      .from('recipes')
-      .select(RECIPE_COLUMNS)
+      .from(RECIPES.table)
+      .select(RECIPES.columns)
       .eq('product_variant_id', variantId)
       .is('deleted_at', null)
       .order('version', { ascending: false }),
   );
-  return parseRows(recipeSchema, data, 'listRecipeVersionsForVariant');
+  return parseRows(RECIPES.schema, data, 'listRecipeVersionsForVariant');
 }
 
 /** One recipe, or `null`. */
-export async function getRecipeById(
+export function getRecipeById(
   client: BakeflowClient,
   recipeId: Uuid,
 ): Promise<Recipe | null> {
-  const data = await run(
-    client
-      .from('recipes')
-      .select(RECIPE_COLUMNS)
-      .eq('id', recipeId)
-      .is('deleted_at', null)
-      .maybeSingle(),
-  );
-  return parseMaybeRow(recipeSchema, data, 'getRecipeById');
+  return getById(client, RECIPES, recipeId, 'getRecipeById');
 }
 
-/** The raw BOM lines for a recipe, without the ingredients resolved. */
+/**
+ * The raw BOM lines for a recipe, without the ingredients resolved.
+ *
+ * Ordered by `(created_at, id)`: `created_at` alone is not unique, so ties would reorder
+ * between fetches and a baker's checklist would appear to shuffle.
+ */
 export async function listRecipeIngredients(
   client: BakeflowClient,
   recipeId: Uuid,
 ): Promise<RecipeIngredient[]> {
   const data = await run(
     client
-      .from('recipe_ingredients')
-      .select(RECIPE_INGREDIENT_COLUMNS)
+      .from(RECIPE_LINES.table)
+      .select(RECIPE_LINES.columns)
       .eq('recipe_id', recipeId)
       .is('deleted_at', null)
-      .order('created_at', { ascending: true }),
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
   );
-  return parseRows(recipeIngredientSchema, data, 'listRecipeIngredients');
+  return parseRows(RECIPE_LINES.schema, data, 'listRecipeIngredients');
+}
+
+/**
+ * PostgREST serialises `.in()` as one `id=in.(…)` query parameter. Each percent-encoded
+ * UUID costs ~40 characters, so an unbounded list overruns the server's URL limit and
+ * 414s. Chunking keeps every request well inside it.
+ *
+ * Deliberately *not* solved by putting a `.limit()` on `listRecipeIngredients`:
+ * truncating there would drop real BOM lines and under-report what a recipe consumes.
+ */
+const IN_CLAUSE_CHUNK = 100;
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 /**
@@ -517,40 +605,58 @@ export async function listRecipeIngredients(
  * Lines whose ingredient is not visible are returned in `unresolvedLines` rather than
  * dropped. That is a reachable state, not paranoia: AD-012 soft-deletes an ingredient
  * instead of deleting it, so `ON DELETE RESTRICT` never fires and the line outlives its
- * ingredient's visibility. Silently omitting those lines would under-report what a
- * recipe consumes.
+ * ingredient's visibility. Silently omitting those lines would under-report what a recipe
+ * consumes.
+ *
+ * A line whose ingredient belongs to a different organization is also treated as
+ * unresolved. The composite FK makes that unstorable and RLS makes it unreadable, so it
+ * is unreachable today — but it is the correct fail-closed behaviour if this is ever
+ * handed a `service_role` client, which bypasses RLS.
  */
 export async function getRecipeBillOfMaterials(
   client: BakeflowClient,
   recipeId: Uuid,
 ): Promise<RecipeBillOfMaterials | null> {
-  const recipe = await getRecipeById(client, recipeId);
+  // Independent reads, so they overlap rather than queue. At a realistic mobile RTT this
+  // is the difference between two round trips and three.
+  const [recipe, lines] = await Promise.all([
+    getRecipeById(client, recipeId),
+    listRecipeIngredients(client, recipeId),
+  ]);
   if (recipe === null) return null;
-
-  const lines = await listRecipeIngredients(client, recipeId);
   if (lines.length === 0) return { ...recipe, lines: [], unresolvedLines: [] };
 
   const ingredientIds = [...new Set(lines.map((line) => line.ingredient_id))];
-  const ingredients = parseRows(
-    ingredientSchema,
-    await run(
-      client
-        .from('ingredients')
-        .select(INGREDIENT_COLUMNS)
-        .in('id', ingredientIds)
-        .is('deleted_at', null),
+  const batches = await Promise.all(
+    chunk(ingredientIds, IN_CLAUSE_CHUNK).map(async (ids) =>
+      parseRows(
+        INGREDIENTS.schema,
+        await run(
+          client
+            .from(INGREDIENTS.table)
+            .select(INGREDIENTS.columns)
+            .in('id', ids)
+            .is('deleted_at', null),
+        ),
+        'getRecipeBillOfMaterials.ingredients',
+      ),
     ),
-    'getRecipeBillOfMaterials.ingredients',
   );
 
-  const byId = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const byId = new Map(
+    batches.flat().map((ingredient) => [ingredient.id, ingredient] as const),
+  );
+
   const resolved: RecipeIngredientDetail[] = [];
   const unresolved: RecipeIngredient[] = [];
 
   for (const line of lines) {
     const ingredient = byId.get(line.ingredient_id);
-    if (ingredient === undefined) unresolved.push(line);
-    else resolved.push({ ...line, ingredient });
+    if (ingredient === undefined || ingredient.tenant_id !== recipe.tenant_id) {
+      unresolved.push(line);
+    } else {
+      resolved.push({ ...line, ingredient });
+    }
   }
 
   return { ...recipe, lines: resolved, unresolvedLines: unresolved };

@@ -27,15 +27,33 @@ import {
 } from './decimal';
 
 /**
- * Live: `CHECK (length(btrim(name)) > 0)` on all six tables. Postgres tests the
- * *trimmed* length, so `"   "` is rejected there and must be rejected here too.
+ * Postgres `btrim(s)` with no second argument, reproduced exactly.
+ *
+ * **It strips the space character only** — not tabs, newlines, or Unicode whitespace.
+ * JavaScript's `String.prototype.trim()` strips all of those, so using it here would
+ * make the client *stricter than the database*. Executed live:
+ *
+ * ```
+ * length(btrim(E'\t'))        = 1     length(btrim(E'\n'))    = 1
+ * length(btrim(U&'\00A0'))    = 1     length(btrim(' '))      = 0
+ * ```
+ *
+ * A product legitimately named `"\t"` therefore satisfies
+ * `CHECK (length(btrim(name)) > 0)` and stores fine — but `.trim()` would score it
+ * blank, `parseRows` would reject the row, and the **entire product list** would fail to
+ * load. With no write path yet, the only read that could find the offending row is the
+ * one that breaks. That is the failure this function exists to prevent, and it is
+ * exactly what this file's header warns against.
  */
+const btrim = (value: string): string => value.replace(/^ +| +$/g, '');
+
+/** Live: `CHECK (length(btrim(name)) > 0)` on all six tables, plus a per-table cap. */
 const trimmedNonEmpty = (maxLength?: number) => {
-  const base = z.string().refine((v) => v.trim().length > 0, 'must not be blank');
+  const base = z.string().refine((v) => btrim(v).length > 0, 'must not be blank');
   return maxLength === undefined
     ? base
     : base.refine(
-        (v) => v.trim().length <= maxLength,
+        (v) => btrim(v).length <= maxLength,
         `must be at most ${maxLength} characters`,
       );
 };
@@ -124,19 +142,8 @@ export const recipeIngredientSchema = z.object({
   quantity: positiveQuantitySchema,
 });
 
-/** A recipe line with its ingredient embedded, as returned by the BOM read. */
-export const recipeIngredientDetailSchema = recipeIngredientSchema.extend({
-  ingredient: ingredientSchema,
-});
-
-/** A product with its variants attached. */
-export const productWithVariantsSchema = productSchema.extend({
-  variants: z.array(productVariantSchema),
-});
-
-/** A recipe with its bill of materials resolved. See `RecipeBillOfMaterials` for why
- *  unresolved lines are surfaced rather than dropped. */
-export const recipeBillOfMaterialsSchema = recipeSchema.extend({
-  lines: z.array(recipeIngredientDetailSchema),
-  unresolvedLines: z.array(recipeIngredientSchema),
-});
+// No composed schemas (product+variants, recipe+BOM) are defined here on purpose.
+// Those shapes are assembled in TypeScript from parts that were each already validated
+// on the way in, so a composed schema would never run — and an unexercised schema
+// duplicating the same columns is just a third mirror free to drift from the other two.
+// If a composed shape ever arrives from the server in one payload, validate it then.

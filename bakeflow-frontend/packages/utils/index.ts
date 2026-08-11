@@ -1,4 +1,9 @@
-// @bakeflow/utils — placeholder entry point.
-// Declared as "main" in package.json; without it the package cannot resolve.
-// Real exports land when this package is built per docs/FRONTEND-STRUCTURE.md.
-export {};
+// @bakeflow/utils — shared helpers with no domain or transport knowledge.
+
+export {
+  formatDecimalString,
+  formatMoney,
+  formatNaira,
+  formatQuantity,
+  type FormatDecimalOptions,
+} from './money';

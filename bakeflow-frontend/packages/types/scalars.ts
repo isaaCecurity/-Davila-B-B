@@ -14,15 +14,20 @@
  * database:
  *
  * ```
- * select row_to_json(t) from (select 184500.0000::numeric(19,4) as unit_price) t;
- * -- {"unit_price":184500}          <-- unquoted JSON number, scale LOST
- * select (184500.0000::numeric(19,4))::text;
- * -- "184500.0000"                  <-- scale preserved
+ * select json_agg(t) from (
+ *   select 184500.0000::numeric(19,4)::text as unit_price,
+ *          184500.0000::numeric(19,4)       as unit_price_raw) t;
+ * -- [{"unit_price":"184500.0000","unit_price_raw":184500.0000}]
  * ```
  *
- * PostgreSQL renders `numeric` unquoted in JSON, so `JSON.parse` inside `supabase-js`
- * produces the double `184500`. The declared scale is gone before any application code
- * runs, and for values beyond 2^53 the digits are gone too.
+ * Read that carefully — the loss is **not** in PostgreSQL. Postgres serialises the full
+ * scale into the JSON *text*; it simply emits it **unquoted**, as a JSON number. The
+ * destruction happens one layer later, in `JSON.parse` inside `supabase-js`, which has no
+ * choice but to turn `184500.0000` into the IEEE-754 double `184500`. The declared scale
+ * is gone before any application code runs, and beyond 2^53 the digits go too — the SQL
+ * suite's C7b shows `12345678901234.5678` arriving as `12345678901234.6`.
+ *
+ * The `::text` form is quoted, so `JSON.parse` yields a string and never touches it.
  *
  * The consequence, which the read service implements: **every money and quantity column
  * is cast with `::text` in the PostgREST `select`**, and the resulting string is carried
