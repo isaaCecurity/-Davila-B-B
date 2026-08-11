@@ -80,7 +80,6 @@ import {
 import type { z } from 'zod';
 
 import type { BakeflowClient } from '../client';
-import { BakeflowApiError } from '../errors';
 import {
   parseRow,
   parseRows,

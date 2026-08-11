@@ -1,6 +1,41 @@
 # BakeFlow — Current Task
 
 ```
+TASK: P4.2a — Inventory domain, READ PATH
+STATUS: IMPLEMENTED (tests executed; awaiting independent review)
+OWNER: claude
+PREREQS: P1, P2 (COMPLETE), P4.1a (implemented)
+QUALITY GATE: plan -> implement -> test -> security review -> code review
+              -> fix -> retest -> document
+EVIDENCE: tests/sql/inventory_read_rls.sql -> 15/15 passed (live, BEGIN...ROLLBACK)
+          post-run row counts across 10 tables -> 0
+          npm run typecheck -> exit 0
+          npx eslint packages --max-warnings=0 -> exit 0
+```
+
+**Production code:** `packages/types/inventory.ts` (253), `packages/validation/inventory.ts`
+(143), `packages/api/queries/inventory.ts` (418), `packages/api/internal/read.ts` (196).
+`packages/api/queries/catalog.ts` 663 -> 513 as its private read primitives moved into the
+shared module. **Zero migrations.**
+
+**Security proven, not asserted:** organization isolation (I1), **branch isolation** via
+`has_branch_access` (I2, with I2b/I3 preventing a vacuous pass), owner authority not
+crossing organizations (I3b), soft-delete invisibility (I4), FORCE RLS (I5), money/quantity
+scale surviving only under `::text` (I6a/b/c), null-tenant denial (I7).
+
+**Finding, no blocker opened:** the negative-stock policy is **already implemented** in
+`apply_stock_movement()` — `sale`/`production_consume` may never go negative;
+`waste`/`adjustment` only where `organizations.allow_negative_stock` is true (I10, I11).
+The roadmap's "may become a blocker if unspecified" note is withdrawn.
+
+**P4.2b write path:** not started. A write is an insert into `stock_movements`, never an
+update to a level (`CLAUDE.md` rule 7). No decision is outstanding for it.
+
+---
+
+## Previous task — P11.1 lint/CI gate (PARTIAL, accepted)
+
+```
 TASK: P11.1 — Lint/typecheck/spec CI quality gate
 STATUS: PARTIAL — lint/typecheck/pytest delivered; SQL suites deferred (BLOCKER-002)
 OWNER: claude

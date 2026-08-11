@@ -26,9 +26,15 @@
  * ## Why the write path is absent
  *
  * `CLAUDE.md` rule 7: stock levels are never updated directly — every change is an insert
- * into the immutable `stock_movements` ledger, with levels maintained by trigger. A write
- * path also depends on the negative-stock policy (roadmap P4.2), which is unspecified.
- * Neither is this module's business.
+ * into the immutable `stock_movements` ledger, with levels maintained by
+ * `apply_stock_movement()`. A write path here would therefore be an *insert into the
+ * ledger*, never an update to a level, and the negative-stock policy it must respect is
+ * already enforced server-side by that trigger (`sale`/`production_consume` may never go
+ * negative; `waste`/`adjustment` only where `organizations.allow_negative_stock` is set).
+ *
+ * That policy being enforced in the database is precisely why this module does not
+ * reimplement it: a client-side copy would be a second authority free to drift from the
+ * one that actually binds.
  *
  * ## Money and quantity precision
  *

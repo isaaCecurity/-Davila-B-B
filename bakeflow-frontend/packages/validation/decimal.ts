@@ -89,12 +89,20 @@ export const positiveQuantitySchema = exactDecimalString
  * `NUMERIC(18,4)` with **no sign constraint** — e.g. `ingredient_stock_levels
  * .quantity_on_hand`, `product_stock_levels.quantity_on_hand`.
  *
- * Verified live 2026-08-11: neither level table has a `>= 0` CHECK on `quantity_on_hand`.
- * Negative stock is therefore representable in the database, and a schema that rejected it
- * would make the *reader* fail on a row the writer stored happily — the exact failure mode
- * `catalog.ts`'s `btrim` note warns about. Whether negative stock should be *permitted*
- * is a write-path policy question (roadmap P4.2, "negative-stock policy"); it is not this
- * schema's business, and guessing it here would silently break oversold-stock reads.
+ * Verified live 2026-08-11: neither level table has a `>= 0` CHECK on `quantity_on_hand`,
+ * and negative levels are genuinely reachable. The policy is enforced in
+ * `apply_stock_movement()`, not by a constraint, and it is conditional:
+ *
+ * - `sale` and `production_consume` may **never** drive stock negative, whatever the
+ *   organization setting — the trigger raises `insufficient_stock` (P0001).
+ * - `waste` and `adjustment` may, but only where `organizations.allow_negative_stock`
+ *   is true.
+ *
+ * So an opted-in bakery legitimately stores a negative `quantity_on_hand`, and a schema
+ * rejecting negatives would make the *reader* fail on a row the writer stored happily —
+ * the exact failure mode `catalog.ts`'s `btrim` note warns about. Proven by
+ * `tests/sql/inventory_read_rls.sql` I10 (a waste movement takes a level to `-42.5000`)
+ * and I11 (a sale is refused even with the setting on), both executed.
  */
 export const signedQuantitySchema = exactDecimalString
   .regex(QUANTITY_PATTERN, QUANTITY_MESSAGE)

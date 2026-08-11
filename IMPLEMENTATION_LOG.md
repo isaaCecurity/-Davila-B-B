@@ -185,3 +185,60 @@ GitHub secrets. Both are human decisions.
 YAML itself is unproven until a push triggers it.
 
 **TD-010 and TD-011 marked RESOLVED.** No blocker was opened or closed.
+
+---
+
+## 2026-08-11 · P4.2a — Inventory READ path (production code)
+
+Second domain read service. **Zero migrations, zero schema changes.** Live row counts 0
+before and after.
+
+**Production code added**
+
+| File | Lines | Provides |
+|---|---|---|
+| `packages/types/inventory.ts` | 253 | Row + read models for the 4 inventory tables; `StockMovement` as a discriminated union on `item_type`; reason/reference literal unions |
+| `packages/validation/inventory.ts` | 143 | Zod schemas mirroring live constraints, incl. the per-reason sign rule |
+| `packages/api/queries/inventory.ts` | 418 | The read service: warehouses, both stock-level tables, the ledger |
+| `packages/api/internal/read.ts` | 196 | Shared read primitives extracted from catalog |
+
+`packages/api/queries/catalog.ts` shrank 663 → 513 lines: its private copies of
+`parseRows`/`parseRow`/`run`/`resolveLimit`/`projectionFor`/`Page` moved into
+`internal/read.ts` rather than being duplicated. One response gate, not two.
+
+**Two paging hazards catalog did not have, both handled**
+
+1. `stock_movements.created_at` is **not unique** — a production batch writes every
+   consumption and its output in one transaction sharing `now()`. A single-column cursor
+   would silently drop siblings. The ledger uses a composite `(created_at, id)` keyset
+   cursor. Proven necessary by suite assertion I9.
+2. `warehouses.name` is unique per `(tenant_id, branch_id)`, **not** per tenant, so two
+   branches may both hold a "Main Store". That list is unpaged instead.
+
+**Executed evidence**
+
+| Command | Result |
+|---|---|
+| `tests/sql/inventory_read_rls.sql` (live, BEGIN…ROLLBACK) | **15/15 passed** |
+| post-run row counts, 10 tables | **0 rows** |
+| `npm run typecheck` | exit 0 |
+| `npx eslint packages --max-warnings=0` | exit 0 |
+
+**Finding: the negative-stock policy is already implemented, and the roadmap was wrong
+to call it unspecified.** `apply_stock_movement()` enforces it: `sale` and
+`production_consume` may never drive stock negative whatever the setting (raises
+`insufficient_stock`, P0001); `waste` and `adjustment` may, but only where
+`organizations.allow_negative_stock` is true. Found by a fixture failing, then read from
+the live function body and proven by assertions I10/I11. The roadmap's "may become a
+blocker if unspecified" note is withdrawn. **No blocker was opened** — the rule exists,
+it simply was not written down here.
+
+This vindicates `signedQuantitySchema`: an opted-in bakery legitimately stores a negative
+`quantity_on_hand`, so a non-negative read schema would have failed on real rows.
+
+**Also fixed:** the P11.1 lint gate immediately caught `BakeflowApiError` left unused in
+`catalog.ts` by the extraction — the first defect that gate has paid for.
+
+**Not verified:** full-repo `npm run lint` could not complete — Node aborts
+(`0xC0000409`) with 0.35 GB free RAM on this machine. Both scopes pass when run
+separately; CI runners are unaffected. Recorded as TD-014.

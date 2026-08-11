@@ -356,7 +356,7 @@ permanently consumed — fixing it is a migration and needs approval;
 (c) confirmation that PostgREST + RLS, not an RPC, is the write mechanism.
 **Parallelizable:** P4.1a with P6.1, P6.3.
 
-## P4.2 · Inventory — NOT_STARTED
+## P4.2 · Inventory — READ PATH IMPLEMENTED (P4.2a) / write path NOT_STARTED (P4.2b)
 **Objective:** Warehouses and the immutable stock ledger.
 **Dependencies:** P4.1.
 **Schema:** `warehouses`, `stock_movements`, `ingredient_stock_levels`, `product_stock_levels`.
@@ -364,7 +364,22 @@ permanently consumed — fixing it is a migration and needs approval;
 **Tests:** ledger immutability; trigger-maintained levels; negative-stock policy.
 **Security checks:** no direct UPDATE path to level tables.
 **Completion gate:** ledger invariant proven by test.
-**Blockers:** none known. Negative-stock policy may become one if unspecified.
+
+**P4.2a READ PATH — implemented 2026-08-11.** `packages/types/inventory.ts`,
+`packages/validation/inventory.ts`, `packages/api/queries/inventory.ts`, and the shared
+`packages/api/internal/read.ts` extracted from catalog when inventory became the second
+consumer. Executed: `tests/sql/inventory_read_rls.sql` **15/15**, typecheck exit 0,
+packages lint exit 0.
+
+**P4.2b WRITE PATH — not started.** A write here is an insert into `stock_movements`,
+never an update to a level (`CLAUDE.md` rule 7).
+
+**Blockers: none.** The earlier note that "negative-stock policy may become one if
+unspecified" is **withdrawn — the policy is already implemented server-side** in
+`apply_stock_movement()` and was proven by execution: `sale` and `production_consume` may
+never drive stock negative whatever the setting (raises `insufficient_stock`, P0001),
+while `waste` and `adjustment` may only where `organizations.allow_negative_stock` is
+true. Suite assertions I10 and I11. No decision is outstanding.
 
 ## P4.3 · Production — NOT_STARTED
 **Dependencies:** P4.1, P4.2.
