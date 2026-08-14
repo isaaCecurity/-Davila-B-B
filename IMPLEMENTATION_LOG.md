@@ -509,3 +509,74 @@ invariant. Blurring the two is the specific mistake avoided here.
 **P4.5 is IMPLEMENTED, not COMPLETE.** D5/D6/D7 are the roadmap's stated completion gate —
 that the `ready → delivered` rule is enforced by the database rather than by convention —
 and they have not run.
+
+---
+
+## 2026-08-15 · Live verification pass — BLOCKER-011 resolved, BLOCKER-012 found
+
+**Scope:** no migrations (migration rule in force). Six production files corrected against
+the live schema, two SQL suites corrected and executed, one P0 live defect found.
+
+### Connection
+
+The project-scoped connector was reauthorized. `execute_sql` against
+`tvfyxpafbpnkneujcnvr` returns 37 public tables with the BakeFlow schema present.
+**BLOCKER-011 RESOLVED.** Identity was checked, not assumed — the previously-authorized
+account reached a workforce-scheduling schema that also answered MCP calls successfully.
+
+### Executed against the live database
+
+| Suite / check | Result |
+|---|---|
+| Sales structural (S1, S3, S4, S4b, S5, S6, S8, S12a–d, S19) | **12/12 passed** |
+| Customers RLS (S13c, S13d, S16b, S16c, S18c, S20) | **6/6 passed** |
+| `inventory_write_rls.sql` A0–A12 | **14/15**, then **17/17** after the A11 fix below |
+| `production_batches` / `production_batch_ingredients` columns, CHECKs, policies | read column-for-column |
+| `customers` / `tickets` / `ticket_items` / `deliveries` columns, CHECKs, policies | read column-for-column |
+| `npm run typecheck` / `npx eslint packages --max-warnings=0` | **exit 0 / exit 0**, captured directly rather than through a pipe |
+
+**P4.2b is COMPLETE.** **P4.4a (customers) is COMPLETE.**
+
+### A11 — a test defect, not a product defect
+
+A11 failed with `audit rows = 0`. `adjust_stock()` does call `log_audit_event`, and the row
+was there: visible as `postgres`, invisible to the assertion because it ran as
+`authenticated` holding `branch_manager`, and `audit_log`'s SELECT policy is
+`tenant_id = current_tenant_id() AND has_role('owner','admin','accountant') AND deleted_at IS NULL`.
+
+Measuring an invariant *through* a policy that hides it tests the policy. A11 now measures
+with RLS bypassed; **A11c asserts the restriction deliberately** — a branch_manager sees 0
+audit rows — so the property is locked in rather than papered over.
+
+### Six corrections the live schema forced on already-committed code
+
+| # | Was | Live truth |
+|---|---|---|
+| 1 | `softDeleted: false` on `production_batches`, `production_batch_ingredients`, `ticket_items`, `deliveries` | **All 16 domain tables carry `deleted_at`.** All flags are `true`. |
+| 2 | `sale_customer_type: string \| null` | `NOT NULL`, `CHECK IN ('REGISTERED','ROADSIDE')` |
+| 3 | `signedMoneySchema` for `subtotal_amount`, `amount_paid`, `unit_price` | all three carry `CHECK >= 0`; **no money column permits a negative** — the schema was removed |
+| 4 | `line_total` a written column with a ROUND identity CHECK | `GENERATED ALWAYS ... STORED` — unwritable, and the fixtures raised `428C9` until they stopped supplying it |
+| 5 | delivery proof rule treated as a transition precondition only | `deliveries_delivered_needs_proof` is a **standing CHECK**; also `deliveries_assigned_needs_driver` |
+| 6 | `production` `actual_quantity` signed, ingredient `planned_quantity` non-negative | `actual_quantity >= 0`, `planned_quantity > 0` on **both** tables |
+
+**Correction #1 reverses a change made the previous day.** P4.3a's original unconditional
+`deleted_at` filter was right; it was "fixed" by reconciling two documents against each
+other because the database was unreachable. `SCHEMA-REFERENCE.md`'s `[std]` shorthand simply
+does not enumerate the soft-delete pair even where it exists, so its absence carries no
+information. `CLAUDE.md` already says the live database outranks every document here.
+
+### One policy worth knowing before the frontend
+
+`deliveries_select` is the only policy in the system with a disjunction:
+`tenant_id = current_tenant_id() AND (driver_id = auth.uid() OR has_branch_access(branch_id)) AND deleted_at IS NULL`.
+A driver sees deliveries assigned to them **outside their assigned branches**. Correct for
+the job, but it means `listDeliveries({ branchId })` is a filter and never a boundary.
+Tenant isolation is unaffected.
+
+### BLOCKER-012 — no ticket can be created (migration-dependent)
+
+`assign_order_number()` passes `'ticket'` to `next_document_number()`, whose CASE maps it to
+`TKT`, but `document_sequences_doc_type_check` still allows only
+`('order','invoice','production_batch')`. `'ticket'` fails the constraint; `'order'` fails
+the function. **Every ticket INSERT raises 23514** — which is why `tickets` holds zero rows.
+Fixing it is a constraint swap, deliberately not applied in this pass. See BLOCKER-012.

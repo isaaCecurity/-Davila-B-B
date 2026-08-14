@@ -1,5 +1,25 @@
 # BakeFlow — Current Task
 
+## Live verification pass complete — 2026-08-15
+
+**BLOCKER-011 RESOLVED.** The connector reaches `tvfyxpafbpnkneujcnvr`. Executed live:
+sales structural **12/12**, customers RLS **6/6**, inventory write suite **17/17**.
+`npm run typecheck` and `npx eslint packages --max-warnings=0` both exit 0 (captured
+directly — an earlier run had them piped into `tail`, which masked the exit code).
+
+**P4.2b COMPLETE. P4.4a (customers) COMPLETE.** Production, sales and delivery
+types/schemas are now live-verified, which forced **six corrections** to already-committed
+code — including reverting the previous day's `softDeleted` change: all 16 domain tables
+carry `deleted_at`, so every flag is `true`. See `IMPLEMENTATION_LOG.md`.
+
+## 🛑 BLOCKER-012 — no ticket can be created (migration-dependent)
+
+`assign_order_number()` emits `'ticket'`; `document_sequences_doc_type_check` still allows
+only `('order','invoice','production_batch')`. Every ticket INSERT raises 23514. The fix is
+a one-line constraint swap, **deliberately not applied** under this pass's migration rule.
+Everything ticket-shaped is downstream: sales behaviour, delivery behaviour, payments,
+ticket sync.
+
 ## 🚦 NEXT TASK IS FRONTEND: P8.1 — first vertical slice
 
 **Backend implementation work that is genuinely unblocked is exhausted.** Read paths now

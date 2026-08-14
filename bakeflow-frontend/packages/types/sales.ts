@@ -131,9 +131,29 @@ export function areTicketItemsLocked(status: TicketStatus): boolean {
   return (TICKET_ITEMS_LOCKED_STATUSES as readonly string[]).includes(status);
 }
 
-/** Live `CHECK (fulfilment_type = ANY (ARRAY['pickup','delivery']))` — §4. */
+/** Live `tickets_fulfilment_type_check` — verified 2026-08-15. */
 export const TICKET_FULFILMENT_TYPES = ['pickup', 'delivery'] as const;
 export type TicketFulfilmentType = (typeof TICKET_FULFILMENT_TYPES)[number];
+
+/**
+ * Live `tickets_sale_customer_type_check` — verified 2026-08-15:
+ *
+ * ```sql
+ * CHECK (sale_customer_type = ANY (ARRAY['REGISTERED','ROADSIDE']))
+ * ```
+ *
+ * **The values are upper-case, and the column is `NOT NULL`.** Both facts were wrong in
+ * the first version of this file, which typed it `string | null` on the strength of
+ * `SCHEMA-REFERENCE.md` §4 recording the column but no constraint. §4 was incomplete; the
+ * live constraint is the authority (`CLAUDE.md`: the live database outranks every document
+ * in this repo).
+ *
+ * `ROADSIDE` is the walk-in counter sale. Note it is a *sale* classification and is
+ * independent of `customer_id` being null and of `customers.is_walk_in` — a registered
+ * customer can buy at the roadside, and all three exist in the schema at once.
+ */
+export const SALE_CUSTOMER_TYPES = ['REGISTERED', 'ROADSIDE'] as const;
+export type SaleCustomerType = (typeof SALE_CUSTOMER_TYPES)[number];
 
 /* -------------------------------------------------------------------------- */
 /* Read models                                                                 */
@@ -220,14 +240,8 @@ export interface Ticket {
    * always a new ticket pointing back, never an edit of the original (clarification §4).
    */
   correction_of_ticket_id: Uuid | null;
-  /**
-   * Walk-in vs registered classification. Deliberately `string | null` and **not** a
-   * string-literal union: §4 records the column but not its permitted values, and no CHECK
-   * is documented. Inventing an enum here would make the reader stricter than the
-   * database — the failure mode that would reject legitimately stored rows and break the
-   * whole list. Narrow it when the live constraint has been read.
-   */
-  sale_customer_type: string | null;
+  /** `NOT NULL`, one of two upper-case values. See `SALE_CUSTOMER_TYPES`. */
+  sale_customer_type: SaleCustomerType;
   archived_at: Timestamptz | null;
   archived_by: Uuid | null;
   archive_reason: string | null;
@@ -250,10 +264,14 @@ export interface Ticket {
  * displayed the variant's current price beside a historical line would be showing two
  * different numbers and calling both "price".
  *
- * `line_total` carries a live `CHECK (line_total = ROUND(quantity * unit_price, 4))` as
- * well as `CHECK (line_total >= 0)`. It is therefore **read, never computed** here: the
- * database has already done the rounding, at the one scale `CLAUDE.md` rule 5 permits, and
- * recomputing it in JavaScript would require float arithmetic on money.
+ * `line_total` is **`GENERATED ALWAYS ... STORED`** (verified live 2026-08-15), not a
+ * written column with a CHECK as `SCHEMA-REFERENCE.md` §4 describes. Nothing can write it,
+ * so it is read and never computed here: the database has already done the rounding at the
+ * one scale `CLAUDE.md` rule 5 permits, and recomputing it in JavaScript would require
+ * float arithmetic on money.
+ *
+ * It needs no `>= 0` constraint of its own — `quantity > 0` and `unit_price >= 0` are both
+ * checked, so the product cannot be negative.
  */
 export interface TicketItem {
   id: Uuid;

@@ -86,6 +86,7 @@ export {
 
 export type {
   Customer,
+  SaleCustomerType,
   Ticket,
   TicketFulfilmentType,
   TicketItem,
@@ -93,6 +94,7 @@ export type {
   TicketWithItems,
 } from './sales';
 export {
+  SALE_CUSTOMER_TYPES,
   TERMINAL_TICKET_STATUSES,
   TICKET_FULFILMENT_TYPES,
   TICKET_ITEMS_LOCKED_STATUSES,

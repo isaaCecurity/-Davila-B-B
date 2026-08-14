@@ -24,13 +24,16 @@
  * ever be less correct.
  */
 
-import { TICKET_FULFILMENT_TYPES, TICKET_STATUSES } from '@bakeflow/types';
+import {
+  SALE_CUSTOMER_TYPES,
+  TICKET_FULFILMENT_TYPES,
+  TICKET_STATUSES,
+} from '@bakeflow/types';
 import { z } from 'zod';
 
 import {
   nonNegativeMoneySchema,
   positiveQuantitySchema,
-  signedMoneySchema,
   timestamptzSchema,
   uuidSchema,
 } from './decimal';
@@ -49,51 +52,64 @@ const readModelBase = {
  * Documented constraints: `full_name TEXT NOT NULL`, `is_walk_in BOOLEAN NOT NULL DEFAULT
  * false`, everything else nullable, index on `(tenant_id, phone)`. No `branch_id`.
  *
- * `full_name` is `.min(1)` rather than a trimmed-length check. `SCHEMA-REFERENCE.md` §4
- * records `NOT NULL` and no `btrim` CHECK, and the catalog milestone established what
- * happens when a read schema invents one: a legitimately stored `" "` would fail the read
- * of a row the database was happy to write.
+ * Verified live 2026-08-15 — the constraints are tighter than §4 described:
  *
- * `email` is **not** `z.email()`. It is `TEXT` with no format constraint live, and bakery
- * staff enter partial or malformed addresses; rejecting them at read time would hide the
- * customer entirely rather than surface a bad field. Format checking belongs to the write
- * path, against the value being submitted.
+ * ```
+ * customers_full_name_check  CHECK (length(btrim(full_name)) > 0)
+ * customers_name_length      CHECK (length(btrim(full_name)) BETWEEN 1 AND 200)
+ * customers_phone_length     CHECK (phone IS NULL OR length(phone) <= 40)
+ * customers_email_length     CHECK (email IS NULL OR length(email) <= 320)
+ * customers_notes_length     CHECK (notes IS NULL OR length(notes) <= 2000)
+ * ```
+ *
+ * A `btrim` CHECK **does** exist, so `full_name` is checked on its trimmed length rather
+ * than with `.min(1)`. The lengths are mirrored because they are cheap and they turn a
+ * silently truncated or corrupted payload into a boundary error.
+ *
+ * `email` is deliberately **not** `z.email()`. The live constraint is a length bound, not
+ * a format one, and bakery staff enter partial addresses; rejecting them at read time
+ * would hide the customer entirely rather than surface a bad field. Format checking
+ * belongs to the write path, against the value being submitted.
  */
 export const customerSchema = z.object({
   ...readModelBase,
-  full_name: z.string().min(1),
-  phone: z.string().nullable(),
-  email: z.string().nullable(),
+  full_name: z.string().trim().min(1).max(200),
+  phone: z.string().max(40).nullable(),
+  email: z.string().max(320).nullable(),
   address_line: z.string().nullable(),
-  notes: z.string().nullable(),
+  notes: z.string().max(2000).nullable(),
   is_walk_in: z.boolean(),
 });
 
 /**
  * `tickets`.
  *
- * ### Money
+ * ### Money — every column is non-negative, verified live 2026-08-15
  *
- * `discount_amount`, `tax_amount` and `total_amount` carry documented `CHECK >= 0` and use
- * `nonNegativeMoneySchema`. `subtotal_amount` and `amount_paid` carry no documented check
- * and use `signedMoneySchema` — see the note on that schema for why the asymmetry is
- * preserved.
+ * `subtotal_amount`, `discount_amount`, `tax_amount`, `total_amount` and `amount_paid` all
+ * carry `CHECK (... >= 0)`. §4 listed the check on only some of them; that was an
+ * omission, and the briefly-added `signedMoneySchema` has been removed.
+ *
+ * `tickets_discount_within_subtotal CHECK (discount_amount <= subtotal_amount)` also
+ * exists and is **not** mirrored: comparing two money values needs decimal arithmetic on
+ * branded strings, which `@bakeflow/types` `scalars.ts` forbids without a decimal library.
+ * Same reason `total_amount = subtotal - discount + tax` is not re-derived — and
+ * `total_amount` is `GENERATED ALWAYS ... STORED`, so the database is the only writer.
  *
  * ### `revision`
  *
- * `BIGINT`, and the one column in this domain deliberately typed as a JavaScript `number`.
- * PostgREST renders `int8` unquoted, so it arrives already parsed; there is nothing a
- * `::text` cast could rescue that has not already happened. Unlike money this is safe: a
- * per-ticket monotonic edit counter cannot approach 2^53, and `.int()` is asserted so a
- * value that somehow lost integrality is caught rather than carried.
+ * `BIGINT NOT NULL CHECK (revision > 0)`, and the one column in this domain deliberately
+ * typed as a JavaScript `number`. PostgREST renders `int8` unquoted, so it arrives already
+ * parsed; there is nothing a `::text` cast could rescue that has not already happened.
+ * Unlike money this is safe: a per-ticket monotonic edit counter cannot approach 2^53.
  *
  * ### `cancelled_reason`
  *
- * §4 records "Required when status = 'cancelled'", the same phrasing that justified the
- * `failure_reason` refinement on production batches, so it is mirrored here. The check is
- * scoped to `cancelled` alone and deliberately not extended to `archived`: that a ticket
- * can only reach `archived` *through* `cancelled` is an inference from the state machine,
- * not a documented constraint, and this schema does not enforce inferences.
+ * Two live constraints say the same thing — `tickets_cancelled_needs_reason` and
+ * `tickets_cancel_reason_required`, both `status <> 'cancelled' OR btrim(...) <> ''`. The
+ * refinement mirrors them, scoped to `cancelled` alone and deliberately not extended to
+ * `archived`: that a ticket reaches `archived` only *through* `cancelled` is an inference
+ * from the state machine, not a constraint, and this schema does not enforce inferences.
  */
 export const ticketSchema = z
   .object({
@@ -104,21 +120,21 @@ export const ticketSchema = z
     status: z.enum(TICKET_STATUSES),
     fulfilment_type: z.enum(TICKET_FULFILMENT_TYPES),
     due_at: timestamptzSchema.nullable(),
-    subtotal_amount: signedMoneySchema,
+    subtotal_amount: nonNegativeMoneySchema,
     discount_amount: nonNegativeMoneySchema,
     tax_amount: nonNegativeMoneySchema,
     total_amount: nonNegativeMoneySchema,
-    amount_paid: signedMoneySchema,
+    amount_paid: nonNegativeMoneySchema,
     cancelled_reason: z.string().nullable(),
     assigned_to: uuidSchema.nullable(),
     correction_of_ticket_id: uuidSchema.nullable(),
-    sale_customer_type: z.string().nullable(),
+    sale_customer_type: z.enum(SALE_CUSTOMER_TYPES),
     archived_at: timestamptzSchema.nullable(),
     archived_by: uuidSchema.nullable(),
     archive_reason: z.string().nullable(),
     device_created_at: timestamptzSchema.nullable(),
     server_received_at: timestamptzSchema.nullable(),
-    revision: z.number().int(),
+    revision: z.number().int().positive(),
   })
   .refine(
     (row) =>
@@ -135,22 +151,28 @@ export const ticketSchema = z
 /**
  * `ticket_items`.
  *
- * Documented constraints: `quantity NUMERIC(18,4) CHECK > 0`, `unit_price NUMERIC(19,4)
- * NOT NULL` (no sign check documented), `line_total NUMERIC(19,4)` with both
- * `CHECK (line_total = ROUND(quantity * unit_price, 4))` and `CHECK (line_total >= 0)`.
+ * Live constraints, verified 2026-08-15:
  *
- * The rounding identity is not re-checked — see the module note. `line_total >= 0` is,
- * because it needs no arithmetic: `nonNegativeMoneySchema` inspects the digit characters.
+ * ```
+ * ticket_items_quantity_check    CHECK (quantity   > 0)
+ * ticket_items_unit_price_check  CHECK (unit_price >= 0)
+ * ```
  *
- * No `deleted_at`. §4 lists `[std]` alone for this table, unlike `tickets` which lists
- * `[std] + deleted_at, deleted_by` explicitly. That distinction drives the read query, so
- * it is recorded here rather than left implicit.
+ * `line_total` has **no constraint of its own because it is `GENERATED ALWAYS ... STORED`**
+ * — not, as §4 describes, a written column carrying a `ROUND(quantity * unit_price, 4)`
+ * identity CHECK. It cannot be negative, since it is the product of a positive quantity and
+ * a non-negative price, and `nonNegativeMoneySchema` states that without arithmetic by
+ * inspecting the digit characters.
+ *
+ * `deleted_at` **does** exist on this table (verified live), contrary to §4 listing `[std]`
+ * alone for it. Its SELECT policy filters `deleted_at IS NULL` and reaches through the
+ * parent ticket for branch access, so the read query filters it explicitly.
  */
 export const ticketItemSchema = z.object({
   ...readModelBase,
   ticket_id: uuidSchema,
   product_variant_id: uuidSchema,
   quantity: positiveQuantitySchema,
-  unit_price: signedMoneySchema,
+  unit_price: nonNegativeMoneySchema,
   line_total: nonNegativeMoneySchema,
 });

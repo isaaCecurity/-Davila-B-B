@@ -17,7 +17,6 @@ import { z } from 'zod';
 import {
   nonNegativeQuantitySchema,
   positiveQuantitySchema,
-  signedQuantitySchema,
   timestamptzSchema,
   uuidSchema,
 } from './decimal';
@@ -37,12 +36,27 @@ const readModelBase = {
  * unique per tenant, `status` one of five values, `failure_reason` required when
  * `status = 'failed'`.
  *
- * `actual_quantity` uses `signedQuantitySchema` rather than a non-negative one. Nothing
- * in `SCHEMA-REFERENCE.md` §5 records a `>= 0` CHECK on it, and the inventory milestone
- * established what happens when a read schema invents a bound the database does not have:
- * `quantity_on_hand` turned out to be legitimately negative for opted-in organizations,
- * and a non-negative schema would have failed on real rows. If a live check later shows
- * the constraint exists, tighten it then — with the constraint as evidence.
+ * Verified live 2026-08-15 — the constraint set is richer than §5 records:
+ *
+ * ```
+ * CHECK (planned_quantity > 0)
+ * CHECK (actual_quantity  >= 0)
+ * CHECK (status <> 'failed'    OR btrim(failure_reason) <> '')
+ * CHECK (status <> 'completed' OR actual_quantity IS NOT NULL)
+ * CHECK (status =  'completed' AND completed_at IS NOT NULL AND actual_quantity IS NOT NULL
+ *        OR status <> 'completed')
+ * CHECK (actual_quantity IS NULL OR actual_quantity <= planned_quantity)
+ * UNIQUE (tenant_id, batch_number)
+ * ```
+ *
+ * `actual_quantity` was `signedQuantitySchema` on the reasoning that §5 recorded no bound
+ * and that `quantity_on_hand` had already burned that assumption once. **The bound exists**
+ * — that was the right instinct applied to the wrong column — so it is now non-negative,
+ * with the constraint as the evidence the earlier comment asked for.
+ *
+ * `actual_quantity <= planned_quantity` is **not** mirrored: comparing two branded decimal
+ * strings needs a decimal library, which `@bakeflow/types` `scalars.ts` forbids reaching
+ * for casually. The database enforces it; a reader cannot improve on that.
  */
 export const productionBatchSchema = z
   .object({
@@ -52,7 +66,7 @@ export const productionBatchSchema = z
     recipe_id: uuidSchema,
     ticket_id: uuidSchema.nullable(),
     planned_quantity: positiveQuantitySchema,
-    actual_quantity: signedQuantitySchema.nullable(),
+    actual_quantity: nonNegativeQuantitySchema.nullable(),
     status: z.enum(PRODUCTION_BATCH_STATUSES),
     started_at: timestamptzSchema.nullable(),
     completed_at: timestamptzSchema.nullable(),
@@ -69,7 +83,13 @@ export const productionBatchSchema = z
         'violating this cannot exist in the database, so the payload is not what it claims',
       path: ['failure_reason'],
     },
-  );
+  )
+  .refine((row) => row.status !== 'completed' || row.actual_quantity !== null, {
+    error:
+      'a completed batch must carry an actual_quantity (two live CHECKs enforce this); a ' +
+      'row violating it cannot exist in the database, so the payload is not what it claims',
+    path: ['actual_quantity'],
+  });
 
 /**
  * `production_batch_ingredients`.
@@ -78,16 +98,20 @@ export const productionBatchSchema = z
  * `waste_quantity NUMERIC(18,4) NOT NULL DEFAULT 0 CHECK >= 0`, unique
  * `(batch_id, ingredient_id)`. No `branch_id` — the row is reached through its batch.
  *
- * `planned_quantity` is `nonNegative` rather than `positive`: §5 records `NOT NULL` but no
- * `> 0` CHECK, unlike `production_batches.planned_quantity` which explicitly has one. The
- * asymmetry is preserved rather than smoothed over, because a zero-planned line is how a
- * recipe ingredient that turned out not to be needed would legitimately appear.
+ * Verified live 2026-08-15: `planned_quantity > 0`, `actual_quantity >= 0`,
+ * `waste_quantity >= 0`, `UNIQUE (batch_id, ingredient_id)`.
+ *
+ * `planned_quantity` was `nonNegative` here, on the reading that §5 records `NOT NULL` but
+ * no `> 0` CHECK for this table while stating one for `production_batches` — an asymmetry
+ * deliberately preserved on the theory that a zero-planned line was how an unneeded recipe
+ * ingredient would appear. **There is no asymmetry**: both carry `> 0`, so a zero-planned
+ * line cannot exist and the schema now says so.
  */
 export const productionBatchIngredientSchema = z.object({
   ...readModelBase,
   batch_id: uuidSchema,
   ingredient_id: uuidSchema,
-  planned_quantity: nonNegativeQuantitySchema,
+  planned_quantity: positiveQuantitySchema,
   actual_quantity: nonNegativeQuantitySchema.nullable(),
   waste_quantity: nonNegativeQuantitySchema,
 });

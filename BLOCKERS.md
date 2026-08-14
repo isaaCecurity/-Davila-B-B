@@ -258,7 +258,9 @@ Then correct BLOCKER-005 and `docs/STATE-MACHINES.md` §63 in the same change.
 ---
 
 ## BLOCKER-011 · The authorized Supabase account cannot reach the BakeFlow project
-**Status:** OPEN · **Affects:** every live verification — P4.2b, P4.3, P4.4 · **Type:** missing external access
+**Status:** **RESOLVED 2026-08-15** — the project-scoped connector was reauthorized; `execute_sql` against `tvfyxpafbpnkneujcnvr` now succeeds (37 public tables, BakeFlow schema). Five suites became runnable; P4.2b and P4.4a are now behaviourally verified. Original text below.
+
+**Superseded status:** OPEN · **Affects:** every live verification — P4.2b, P4.3, P4.4 · **Type:** missing external access
 
 The Supabase MCP connector is now reachable — the earlier `getaddrinfo ENOTFOUND` and
 HTTP 401 are both gone, and `list_projects` succeeds. It is authorized against **the wrong
@@ -293,6 +295,45 @@ executed, and none of their assertions may be cited as evidence:
 **Needed:** either authorize the MCP connector with the account that owns organization
 `tkrygyuxqyqbxgqaodjq`, or add the currently authorized account to that organization as a
 member with database access.
+
+---
+
+## BLOCKER-012 · No ticket can be created: the Order->Ticket rename is half-applied
+**Status:** OPEN · **Affects:** P4.4 (all ticket behaviour), P4.5, P3.7, P5 · **Type:** live defect, **migration-dependent**
+
+**Severity: the `tickets` table is unusable in production.** Every INSERT fails. Discovered
+2026-08-15 while running `tests/sql/sales_read_rls.sql`; reproduced from a bare fixture.
+
+```
+ERROR: 23514 new row for relation "document_sequences"
+       violates check constraint "document_sequences_doc_type_check"
+DETAIL: Failing row contains (..., 'ticket', 'TKT', 1, ...)
+CONTEXT: PL/pgSQL function next_document_number(uuid,text) line 6
+         PL/pgSQL function assign_order_number() line 4
+```
+
+The rename was applied to the **functions** but not to the **constraint**:
+
+| Object | State |
+|---|---|
+| `assign_order_number()` | passes `'ticket'` — renamed |
+| `next_document_number()` | `CASE p_doc_type WHEN 'ticket' THEN 'TKT' ...` — renamed, and **no longer accepts `'order'`** (it would raise `unknown document type`) |
+| `document_sequences_doc_type_check` | `CHECK (doc_type = ANY (ARRAY['order','invoice','production_batch']))` — **not renamed** |
+
+So `'ticket'` is rejected by the constraint and `'order'` is rejected by the function: the
+two are disjoint and no value satisfies both. `tickets` holding zero rows is a symptom, not
+a coincidence. `invoice` and `production_batch` are unaffected — both are still spelled the
+same on each side.
+
+**Required migration (NOT applied in this pass, per the migration rule):** drop and recreate
+`document_sequences_doc_type_check` as `CHECK (doc_type = ANY (ARRAY['ticket','invoice',
+'production_batch']))`. Any existing `doc_type='order'` rows must be migrated to `'ticket'`
+in the same migration or the new constraint will not validate — there are currently **0**
+such rows, so today it is a pure constraint swap.
+
+**Blocked until then:** S7, S9, S10, S11, S13-S18 of the sales suite; D3-D10 of the delivery
+suite; every ticket, delivery and payment write path; P3.7 ticket sync. Customers (P4.4a) is
+unaffected and is verified.
 
 ---
 

@@ -140,23 +140,30 @@ const TICKETS: ReadEntity<Ticket> = {
 };
 
 /**
- * `ticket_items` has **no** `deleted_at`.
+ * `ticket_items` **does** carry `deleted_at`, despite §4 listing `[std]` alone for it.
  *
- * §4 lists `[std]` alone for it — the `created_at`/`updated_at`/`created_by` trio from §0 —
- * where the `tickets` row three lines above spells out `+ deleted_at, deleted_by`. The
- * distinction is load-bearing rather than an editing slip: §11 makes financial and audit
- * records non-deletable, and a ticket line's lifecycle belongs to its parent ticket, which
- * `guard_ticket_item_mutation()` locks at `ready` anyway.
+ * Verified live 2026-08-15, along with its SELECT policy, which is the most interesting one
+ * in the domain:
  *
- * Filtering a column that does not exist would fail the whole read with `42703`, so the
- * flag drives the predicate rather than the predicate being assumed. See
- * `withSoftDeleteFilter`.
+ * ```sql
+ * tenant_id = current_tenant_id()
+ *   AND deleted_at IS NULL
+ *   AND EXISTS (SELECT 1 FROM tickets o
+ *                WHERE o.id = ticket_items.ticket_id
+ *                  AND o.tenant_id = ticket_items.tenant_id
+ *                  AND has_branch_access(o.branch_id))
+ * ```
+ *
+ * The table has no `branch_id` of its own, so branch isolation reaches **through the parent
+ * ticket**. A line is invisible whenever its ticket is — which is why `getTicketWithItems`
+ * returning `null` for an invisible ticket, rather than a ticket-shaped shell with an empty
+ * array, matches what the database actually does.
  */
 const TICKET_ITEMS: ReadEntity<TicketItem> = {
   table: 'ticket_items',
   schema: ticketItemSchema,
   columns: projectionFor(ticketItemSchema, TEXT_CAST_COLUMNS),
-  softDeleted: false,
+  softDeleted: true,
 };
 
 /* -------------------------------------------------------------------------- */

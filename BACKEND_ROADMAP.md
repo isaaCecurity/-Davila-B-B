@@ -33,8 +33,14 @@ slice** ("sign in → pick organization → see catalog"). Its full prerequisite
 a human decision or restored database access, so backend expansion pauses here by design
 rather than by exhaustion of ideas.
 
-**BLOCKER-011 is the single highest-value unblock**: it alone would let five committed but
-unexecuted SQL suites run and would reopen four write paths for contract reading.
+**BLOCKER-011 RESOLVED 2026-08-15.** The suites ran. P4.2b and P4.4a are now COMPLETE, and
+six schema-drift defects in already-committed code were found and fixed against the live
+contract.
+
+**🛑 BLOCKER-012 is now the single highest-value unblock, and it is migration-dependent.**
+`document_sequences_doc_type_check` still allows `'order'` while the functions emit
+`'ticket'`, so **no ticket can be inserted at all** — the sales, delivery, payment and
+ticket-sync paths are all downstream of that one constraint.
 
 > **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
 > gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
@@ -541,15 +547,16 @@ milestone is stopped on either an unmade business decision or live-database acce
 | Remaining backend milestone | Stopped on |
 |---|---|
 | P4.1b catalog write | BLOCKER-003 (pricing), BLOCKER-010b/c |
-| P4.2b inventory write | code complete; verification needs BLOCKER-011 |
-| P4.3b production write | `complete_production_batch()` signature unread — BLOCKER-011 |
-| P4.4 ticket write | BLOCKER-003, BLOCKER-009, BLOCKER-011 |
-| P4.5 delivery write | return-movement RPC signatures unread — BLOCKER-011 |
+| P4.2b inventory write | ✅ **COMPLETE** — 17/17 executed live 2026-08-15 |
+| P4.3 production | types/schemas now **live-verified**; write path still needs the `complete_production_batch()` signature |
+| P4.4a customers | ✅ **COMPLETE** — 6/6 RLS + 12/12 structural executed live |
+| P4.4b ticket read/write | **BLOCKER-012** (no ticket can be created at all), BLOCKER-003, BLOCKER-009 |
+| P4.5 delivery | schema live-verified; behaviour blocked by **BLOCKER-012** (a delivery requires a ticket) |
 | P5 (all financial) | BLOCKER-003 |
-| P6.1 Edge Function scaffold | writable, but its only approved consumer P6.2 is blocked on BLOCKER-001, and deployment needs BLOCKER-011 |
+| P6.1 Edge Function scaffold | writable, but its only approved consumer P6.2 is blocked on BLOCKER-001 |
 | P6.2 invitations | BLOCKER-001 |
-| P6.4 audit coverage | needs migrations — BLOCKER-011 |
-| P6.6 rate limiting / prod config | needs Supabase project config — BLOCKER-011 |
+| P6.4 audit coverage | needs migrations |
+| P6.6 rate limiting / prod config | needs Supabase project config |
 | P3.7 per-entity sync | BLOCKER-006, BLOCKER-009 |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 

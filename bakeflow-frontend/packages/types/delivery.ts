@@ -27,11 +27,23 @@
  *
  * ## Tenancy
  *
- * `branch_id NOT NULL`, so tenant- *and* branch-scoped like inventory and tickets.
- * `STATE-MACHINES.md` §3 adds a third restriction on the **write** side: "a driver may only
- * transition deliveries where `driver_id = auth.uid()`. This is enforced in the policy, not
- * only in the UI." Whether the *read* policy carries the same predicate has not been read
- * from the live database, so no read model here assumes either answer.
+ * `branch_id NOT NULL`, but the SELECT policy is **weaker than `tickets`'** by design.
+ * Verified live 2026-08-15:
+ *
+ * ```sql
+ * tenant_id = current_tenant_id()
+ *   AND (driver_id = auth.uid() OR has_branch_access(branch_id))
+ *   AND deleted_at IS NULL
+ * ```
+ *
+ * The disjunction is the point: a driver sees a delivery assigned to them **even outside
+ * the branches they are assigned to**. That is correct for the job — a driver crossing town
+ * for one drop should not need a branch assignment — but it means branch isolation on this
+ * table is conditional, unlike every other branch-scoped table in the schema, where the
+ * predicate is a plain `has_branch_access(branch_id)`.
+ *
+ * Tenant isolation is **not** weakened: `tenant_id = current_tenant_id()` is conjoined and
+ * no driver clause can escape it.
  *
  * ## No money
  *

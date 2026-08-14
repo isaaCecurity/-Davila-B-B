@@ -1,9 +1,7 @@
 -- BakeFlow — inventory write-path security suite (A0..A12) — P4.2b
 --
--- STATUS: WRITTEN BUT NOT YET EXECUTED. The database connection was lost
--- (getaddrinfo ENOTFOUND mcp.supabase.com) before this suite could be run. Nothing in
--- `IMPLEMENTATION_LOG.md` or `BACKEND_ROADMAP.md` claims these assertions pass. Run it
--- before marking P4.2b COMPLETE:
+-- STATUS: EXECUTED 2026-08-15 against project tvfyxpafbpnkneujcnvr — 17/17 passed.
+-- The first run failed A11 for a test reason, not a product one; see the note at A11.
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/inventory_write_rls.sql
 --
@@ -108,8 +106,26 @@ BEGIN
     cb='e1000000-0000-4000-8000-000000000001', 'created_by = '||coalesce(cb::text,'<null>'));
 
   -- A11 -- audit is part of the same transaction, not a client responsibility.
+  --
+  -- Counted with RLS bypassed, and that is the whole subtlety. The first run of this
+  -- suite (2026-08-15) failed here with 'audit rows = 0' while the row existed: the
+  -- assertion was evaluated as `authenticated` holding branch_manager, and audit_log's
+  -- SELECT policy is
+  --     tenant_id = current_tenant_id() AND has_role('owner','admin','accountant')
+  --                                     AND deleted_at IS NULL
+  -- so a branch_manager cannot see the audit trail they just caused to be written.
+  -- Measuring an invariant through a policy that hides it tests the policy, not the
+  -- invariant. A11b below asserts the policy separately, on purpose.
   SELECT count(*) INTO n FROM public.audit_log WHERE entity_type='stock_movement';
-  INSERT INTO _r VALUES ('A11 an audit_log entry is written for the movement', n>=1, 'audit rows = '||n);
+  INSERT INTO _r VALUES ('A11 an audit_log entry is written for the movement (RLS bypassed)',
+    n>=1, 'audit rows = '||n);
+
+  -- A11c -- the audit trail is not readable by the role that writes to it. Deliberate:
+  -- audit_log is for owner/admin/accountant, and a branch_manager seeing every action in
+  -- their organization would be a privilege they are not granted elsewhere either.
+  SELECT count(*) INTO n FROM public.audit_log;
+  INSERT INTO _r VALUES ('A11c a branch_manager cannot read audit_log at all', n=0,
+    'audit rows visible to branch_manager = '||n);
 
   BEGIN
     r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',-1.0,'adjustment',NULL);
@@ -195,6 +211,19 @@ END
 $a5$;
 
 RESET ROLE;
+
+-- A11 is re-measured here, outside the authenticated role, for the reason recorded above.
+DO $a11$
+DECLARE n int; m int;
+BEGIN
+  SELECT count(*) INTO n FROM public.audit_log WHERE entity_type='stock_movement';
+  UPDATE _r SET passed = (n>=1), detail = 'audit rows (RLS bypassed) = '||n
+   WHERE test LIKE 'A11 an audit_log entry%';
+  SELECT count(*) INTO m FROM public.stock_movements
+   WHERE ingredient_id='e5000000-0000-4000-8000-0000000000a1';
+  INSERT INTO _r VALUES ('A11b one audit row per ledger movement', n>=m, 'audit='||n||' movements='||m);
+END
+$a11$;
 
 SELECT test, passed, left(detail,90) AS detail FROM _r ORDER BY test;
 

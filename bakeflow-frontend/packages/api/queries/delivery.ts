@@ -60,17 +60,27 @@ import {
 const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set<string>();
 
 /**
- * `softDeleted: false` — `SCHEMA-REFERENCE.md` §6 lists `[std]` alone for `deliveries`,
- * the `created_at`/`updated_at`/`created_by` trio from §0, where §4 spells out
- * `+ deleted_at, deleted_by` for `tickets` explicitly. Filtering a column that does not
- * exist would fail the whole read with `42703`, so the flag drives the predicate rather
- * than the predicate being assumed. Verified by D1c in `tests/sql/delivery_read_rls.sql`.
+ * `softDeleted: true`, verified live 2026-08-15 — `deliveries` carries the pair despite
+ * `SCHEMA-REFERENCE.md` §6 listing `[std]` alone for it.
+ *
+ * Its SELECT policy is the only one in the system with a **disjunction**:
+ *
+ * ```sql
+ * tenant_id = current_tenant_id()
+ *   AND (driver_id = auth.uid() OR has_branch_access(branch_id))
+ *   AND deleted_at IS NULL
+ * ```
+ *
+ * A driver sees a delivery assigned to them **even outside the branches they are assigned
+ * to**, which is correct — a driver crossing town for one drop should not need a branch
+ * assignment to see it — but it means branch isolation is deliberately weaker here than on
+ * `tickets`, and `listDeliveries({ branchId })` is a filter, never a security boundary.
  */
 const DELIVERIES: ReadEntity<Delivery> = {
   table: 'deliveries',
   schema: deliverySchema,
   columns: projectionFor(deliverySchema as unknown as SchemaShape, TEXT_CAST_COLUMNS),
-  softDeleted: false,
+  softDeleted: true,
 };
 
 /** Filters for the delivery list. All optional, combined with AND. */

@@ -21,19 +21,32 @@ import { timestamptzSchema, uuidSchema } from './decimal';
  * Documented constraints: `ticket_id NOT NULL UNIQUE`, `branch_id NOT NULL`,
  * `address_line TEXT NOT NULL`, `status` one of six values with default `'pending'`.
  *
- * ### One refinement, and one deliberately omitted
+ * ### Three refinements, all mirroring live CHECK constraints
  *
- * `failure_reason` is required when `status = 'failed'` — the same shape as
- * `production_batches.failure_reason` and `tickets.cancelled_reason`, and refined the same
- * way.
+ * Verified 2026-08-15:
  *
- * The `proof_url` **or** `recipient_name` requirement on a `delivered` row is **not**
- * refined here, even though §3 states it. It is a *transition* precondition, checked by the
- * guard at the moment of the `in_transit → delivered` hop, not a table CHECK. Nothing stops
- * a legitimately delivered row later having its `proof_url` cleared — a storage object
- * expiring, a retention job, a correction — and a reader enforcing it would then hide a
- * completed delivery entirely. The distinction between a transition precondition and a
- * standing invariant is exactly what a read schema must not blur.
+ * ```
+ * deliveries_failed_needs_reason   CHECK (status <> 'failed'    OR btrim(failure_reason) <> '')
+ * deliveries_delivered_needs_proof CHECK (status <> 'delivered' OR btrim(proof_url) <> ''
+ *                                                               OR btrim(recipient_name) <> '')
+ * deliveries_assigned_needs_driver CHECK (status NOT IN ('assigned','in_transit')
+ *                                                               OR driver_id IS NOT NULL)
+ * ```
+ *
+ * The proof rule was initially left out of this schema on the reasoning that §3 states it
+ * as a *transition* precondition — checked at the `in_transit → delivered` hop — and that a
+ * delivered row could later lose its `proof_url` to an expiring storage object, which a
+ * reader enforcing it would then hide entirely.
+ *
+ * **That reasoning was wrong: it is a standing table CHECK**, so the row that would have
+ * been hidden cannot exist. Postgres re-validates the constraint on every UPDATE, so
+ * clearing `proof_url` on a delivered row is itself refused unless `recipient_name` is set.
+ * The distinction between a transition precondition and a standing invariant is real and
+ * worth drawing — this just is not an instance of it, and only the database could say so.
+ *
+ * `deliveries_assigned_needs_driver` is modelled as a discriminated pairing rather than a
+ * bare refinement: an `assigned` or `in_transit` delivery always has a driver, so callers
+ * get a non-null `driver_id` by narrowing on `status` instead of asserting.
  *
  * ### No `::text` casts
  *
@@ -49,14 +62,14 @@ export const deliverySchema = z
     ticket_id: uuidSchema,
     driver_id: uuidSchema.nullable(),
     status: z.enum(DELIVERY_STATUSES),
-    address_line: z.string().min(1),
+    address_line: z.string().trim().min(1).max(1000),
     contact_phone: z.string().nullable(),
     scheduled_at: timestamptzSchema.nullable(),
     dispatched_at: timestamptzSchema.nullable(),
     delivered_at: timestamptzSchema.nullable(),
     proof_url: z.string().nullable(),
-    recipient_name: z.string().nullable(),
-    failure_reason: z.string().nullable(),
+    recipient_name: z.string().max(200).nullable(),
+    failure_reason: z.string().max(1000).nullable(),
     created_at: timestamptzSchema,
     updated_at: timestamptzSchema,
   })
@@ -66,8 +79,32 @@ export const deliverySchema = z
       (row.failure_reason !== null && row.failure_reason.trim().length > 0),
     {
       error:
-        'a failed delivery must carry a failure_reason (STATE-MACHINES.md §3); a row ' +
-        'violating this cannot exist in the database, so the payload is not what it claims',
+        'a failed delivery must carry a failure_reason (deliveries_failed_needs_reason); a ' +
+        'row violating this cannot exist in the database, so the payload is not what it claims',
       path: ['failure_reason'],
+    },
+  )
+  .refine(
+    (row) =>
+      row.status !== 'delivered' ||
+      (row.proof_url ?? '').trim().length > 0 ||
+      (row.recipient_name ?? '').trim().length > 0,
+    {
+      error:
+        'a delivered delivery must carry a proof_url or a recipient_name ' +
+        '(deliveries_delivered_needs_proof); a row violating this cannot exist in the ' +
+        'database, so the payload is not what it claims',
+      path: ['proof_url'],
+    },
+  )
+  .refine(
+    (row) =>
+      (row.status !== 'assigned' && row.status !== 'in_transit') || row.driver_id !== null,
+    {
+      error:
+        'an assigned or in-transit delivery must carry a driver_id ' +
+        '(deliveries_assigned_needs_driver); a row violating this cannot exist in the ' +
+        'database, so the payload is not what it claims',
+      path: ['driver_id'],
     },
   );

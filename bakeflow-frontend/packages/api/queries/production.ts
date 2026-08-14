@@ -90,40 +90,35 @@ const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set([
  * compiler should be allowed to say so.
  */
 /**
- * ## `softDeleted: false` — a correction to the first implementation of this module
+ * ## `softDeleted: true` — settled by a live read, after one wrong turn
  *
- * Both queries below originally filtered `.is('deleted_at', null)` unconditionally, copied
- * from catalog and inventory. **Neither production table documents that column.**
- * `SCHEMA-REFERENCE.md` §5 lists `[std]` alone for `production_batches` and
- * `production_batch_ingredients` — the audit trio `created_at`/`updated_at`/`created_by`
- * defined in §0 — where §4 lists `[std] + deleted_at, deleted_by` for `tickets`
- * explicitly, and §11 says only that *most* tables carry the pair.
+ * These were briefly set to `false`. `SCHEMA-REFERENCE.md` §5 lists `[std]` alone for both
+ * production tables — the audit trio from §0 — where §4 spells out `+ deleted_at,
+ * deleted_by` for `tickets`, and §11 says only that *most* tables carry the pair. The
+ * module appeared to contradict its own source document by filtering a column it did not
+ * select, and the contradiction was resolved toward the document.
  *
- * That made the module contradict the one document it was written from: it selected a
- * column set with no `deleted_at` in it while filtering on `deleted_at`. If the column is
- * in fact absent, PostgREST answers `42703 column production_batches.deleted_at does not
- * exist` and **every production read fails** — an outage, not a degradation.
+ * **The document was wrong.** Read live on 2026-08-15, *all sixteen* domain tables carry
+ * `deleted_at`/`deleted_by`, production included. `[std]` in `SCHEMA-REFERENCE.md` simply
+ * does not enumerate the soft-delete pair even where it exists, so its absence there
+ * carries no information at all — and the original unconditional filter was correct.
  *
- * Resolving an internal contradiction in favour of the source document is not a guess, so
- * the filter is now driven by the declaration below rather than assumed. It is still
- * unverified in the other direction: if a live read shows the columns do exist, flip these
- * to `true` — the RLS policy would then already be filtering them, so nothing leaks in the
- * interim, but the explicit contract `API-CONTRACT.md` §4 requires would be missing.
- *
- * **This is on the P4.3 verification checklist. Do not mark P4.3 COMPLETE without it.**
+ * The lesson is the one `CLAUDE.md` already states: **the live database outranks every
+ * document in this repo.** Reconciling two documents against each other is not verification
+ * when the database is available to answer directly.
  */
 const BATCHES: ReadEntity<ProductionBatch> = {
   table: 'production_batches',
   schema: productionBatchSchema,
   columns: projectionFor(productionBatchSchema as unknown as SchemaShape, TEXT_CAST_COLUMNS),
-  softDeleted: false,
+  softDeleted: true,
 };
 
 const BATCH_INGREDIENTS: ReadEntity<ProductionBatchIngredient> = {
   table: 'production_batch_ingredients',
   schema: productionBatchIngredientSchema,
   columns: projectionFor(productionBatchIngredientSchema, TEXT_CAST_COLUMNS),
-  softDeleted: false,
+  softDeleted: true,
 };
 
 /** Filters for the batch list. All optional, combined with AND. */

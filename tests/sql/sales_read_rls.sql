@@ -2,21 +2,9 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/sales_read_rls.sql
 --
--- ############################################################################
--- ## NOT EXECUTED. No assertion below may be cited as evidence.             ##
--- ##                                                                        ##
--- ## The Supabase MCP connector available to the authoring session is       ##
--- ## authorized against a different Supabase account ("Undeify's Org",      ##
--- ## one project: etodmfsmvhewihboxcrp, a workforce-scheduling schema with  ##
--- ## no BakeFlow table in it). Every call against project                   ##
--- ## tvfyxpafbpnkneujcnvr returns "You do not have permission to perform    ##
--- ## this action". See BLOCKER-011.                                         ##
--- ##                                                                        ##
--- ## Expect fixture-level debugging on first execution: the trigger set on  ##
--- ## `tickets` (assign_order_number, guard_order_actor_and_assignment,      ##
--- ## guard_driver_created_order_assignment, guard_ticket_status_transition) ##
--- ## has not been read column-for-column, only from SCHEMA-REFERENCE.md §9. ##
--- ############################################################################
+-- EXECUTED 2026-08-15 against project tvfyxpafbpnkneujcnvr (BLOCKER-011 resolved).
+-- See IMPLEMENTATION_LOG.md for the run and for the four schema corrections S2/S3/S12
+-- forced on the read layer.
 --
 -- Same conventions as tests/sql/catalog_read_rls.sql and inventory_read_rls.sql: no psql
 -- meta-commands, every assertion records into a temp table rather than raising, verdict
@@ -118,13 +106,14 @@ INSERT INTO public.tickets
   ('e6000000-0000-4000-8000-0000000000a9','e0000000-0000-4000-8000-0000000000a1','ea000000-0000-4000-8000-0000000000a1',NULL,'pickup','e1000000-0000-4000-8000-000000000001','2026-08-14T09:40:00+00:00'),
   ('e6000000-0000-4000-8000-0000000000b1','e0000000-0000-4000-8000-0000000000b1','eb000000-0000-4000-8000-0000000000b1','e5000000-0000-4000-8000-0000000000b1','pickup','e1000000-0000-4000-8000-000000000002','2026-08-14T11:00:00+00:00');
 
--- unit_price is snapshotted from the variant (guard_order_item_price enforces this);
--- line_total must equal ROUND(quantity * unit_price, 4).
+-- unit_price is snapshotted from the variant (guard_order_item_price enforces this).
+-- line_total is NOT supplied: it is GENERATED ALWAYS AS (round(quantity * unit_price, 4))
+-- STORED, and supplying it raises 428C9. S5/S6 read back 2 x 184500.0000 = 369000.0000.
 INSERT INTO public.ticket_items
-  (id, tenant_id, ticket_id, product_variant_id, quantity, unit_price, line_total) VALUES
-  ('e7000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a1','e4000000-0000-4000-8000-0000000000a1',2.0000,184500.0000,369000.0000),
-  ('e7000000-0000-4000-8000-0000000000a3','e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a3','e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000,184500.0000),
-  ('e7000000-0000-4000-8000-0000000000b1','e0000000-0000-4000-8000-0000000000b1','e6000000-0000-4000-8000-0000000000b1','e4000000-0000-4000-8000-0000000000b1',3.0000,600.0000,1800.0000);
+  (id, tenant_id, ticket_id, product_variant_id, quantity, unit_price) VALUES
+  ('e7000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a1','e4000000-0000-4000-8000-0000000000a1',2.0000,184500.0000),
+  ('e7000000-0000-4000-8000-0000000000a3','e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a3','e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000),
+  ('e7000000-0000-4000-8000-0000000000b1','e0000000-0000-4000-8000-0000000000b1','e6000000-0000-4000-8000-0000000000b1','e4000000-0000-4000-8000-0000000000b1',3.0000,600.0000);
 
 UPDATE public.customers SET deleted_at = now() WHERE id = 'e5000000-0000-4000-8000-0000000000a9';
 UPDATE public.tickets   SET deleted_at = now() WHERE id = 'e6000000-0000-4000-8000-0000000000a9';
@@ -162,7 +151,7 @@ BEGIN
   WHERE table_schema='public' AND table_name='tickets' AND column_name='deleted_at';
 
   INSERT INTO _results
-  SELECT 'S2c ticket_items has NO deleted_at (softDeleted: false)', count(*) = 0,
+  SELECT 'S2c ticket_items.deleted_at exists (softDeleted: true)', count(*) = 1,
          'matching columns = ' || count(*)
   FROM information_schema.columns
   WHERE table_schema='public' AND table_name='ticket_items' AND column_name='deleted_at';
@@ -172,17 +161,15 @@ BEGIN
   -- column set that contained neither. If either count is 1, flip that module's flag to
   -- true; if 0, the correction applied on 2026-08-14 was right.
   INSERT INTO _results
-  SELECT 'S3a production_batches deleted_at presence (P4.3a correction)', count(*) = 0,
-         'matching columns = ' || count(*) || ' (0 confirms softDeleted: false)'
+  SELECT 'S3 every domain table carries deleted_at (all softDeleted flags are true)',
+         count(*) = 16, 'tables with deleted_at = ' || count(*) || ' of 16'
   FROM information_schema.columns
-  WHERE table_schema='public' AND table_name='production_batches' AND column_name='deleted_at';
-
-  INSERT INTO _results
-  SELECT 'S3b production_batch_ingredients deleted_at presence', count(*) = 0,
-         'matching columns = ' || count(*) || ' (0 confirms softDeleted: false)'
-  FROM information_schema.columns
-  WHERE table_schema='public' AND table_name='production_batch_ingredients'
-    AND column_name='deleted_at';
+  WHERE table_schema='public' AND column_name='deleted_at'
+    AND table_name IN ('product_categories','products','product_variants','ingredients',
+                       'recipes','recipe_ingredients','warehouses','stock_movements',
+                       'ingredient_stock_levels','product_stock_levels',
+                       'production_batches','production_batch_ingredients',
+                       'customers','tickets','ticket_items','deliveries');
 
   -- ---- S4: total_amount is generated, so nothing may write it ----
   INSERT INTO _results
@@ -247,9 +234,9 @@ BEGIN
   v_raised := 'no exception';
   BEGIN
     INSERT INTO public.ticket_items
-      (tenant_id, ticket_id, product_variant_id, quantity, unit_price, line_total)
+      (tenant_id, ticket_id, product_variant_id, quantity, unit_price)
     VALUES ('e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a1',
-            'e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000,184500.0000);
+            'e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000);
   EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
   END;
   INSERT INTO _results VALUES (
@@ -263,24 +250,42 @@ BEGIN
   v_raised := 'no exception';
   BEGIN
     INSERT INTO public.ticket_items
-      (tenant_id, ticket_id, product_variant_id, quantity, unit_price, line_total)
+      (tenant_id, ticket_id, product_variant_id, quantity, unit_price)
     VALUES ('e0000000-0000-4000-8000-0000000000a1','e6000000-0000-4000-8000-0000000000a1',
-            'e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000,184500.0000);
+            'e4000000-0000-4000-8000-0000000000a1',1.0000,184500.0000);
   EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
   END;
   INSERT INTO _results VALUES (
     'S11b items are locked at `ready` (order_locked)',
     v_raised LIKE '%order_locked%', 'raised: ' || left(v_raised, 90));
 
-  -- ---- S12: sale_customer_type carries no CHECK, so the type must stay `string` ----
-  -- packages/types/sales.ts deliberately does NOT model it as a string-literal union.
-  -- If this fails, a constraint now exists and the type should be narrowed to match it.
+  -- ---- S12: sale_customer_type IS constrained, and NOT NULL ----
+  -- SCHEMA-REFERENCE.md §4 records neither. packages/types/sales.ts models it as the
+  -- two-value union SALE_CUSTOMER_TYPES; this is the assertion that keeps them in step.
   INSERT INTO _results
-  SELECT 'S12 sale_customer_type has no CHECK constraint (type stays `string`)',
-         count(*) = 0, 'check constraints mentioning sale_customer_type = ' || count(*)
+  SELECT 'S12a sale_customer_type CHECK is exactly (REGISTERED, ROADSIDE)', count(*) = 1,
+         'matching check constraints = ' || count(*)
   FROM pg_constraint
   WHERE conrelid = 'public.tickets'::regclass AND contype = 'c'
-    AND pg_get_constraintdef(oid) LIKE '%sale_customer_type%';
+    AND pg_get_constraintdef(oid) LIKE '%sale_customer_type%'
+    AND pg_get_constraintdef(oid) LIKE '%REGISTERED%'
+    AND pg_get_constraintdef(oid) LIKE '%ROADSIDE%';
+
+  INSERT INTO _results
+  SELECT 'S12b sale_customer_type is NOT NULL', count(*) = 1,
+         'is_nullable = ' || coalesce(max(is_nullable),'<no column>')
+  FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='tickets'
+    AND column_name='sale_customer_type' AND is_nullable='NO';
+
+  -- ---- S12c: every ticket money column is non-negative ----
+  -- Five CHECKs, which is why signedMoneySchema was removed rather than kept unused.
+  INSERT INTO _results
+  SELECT 'S12c all five ticket money columns carry CHECK >= 0', count(*) >= 5,
+         'non-negative money checks on tickets = ' || count(*)
+  FROM pg_constraint
+  WHERE conrelid = 'public.tickets'::regclass AND contype='c'
+    AND pg_get_constraintdef(oid) ~ '(subtotal_amount|discount_amount|tax_amount|total_amount|amount_paid) >= \(0\)';
 END
 $structural$;
 

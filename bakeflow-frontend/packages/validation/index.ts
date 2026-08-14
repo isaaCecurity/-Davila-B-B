@@ -8,7 +8,6 @@ export {
   nonNegativeQuantitySchema,
   nonZeroQuantitySchema,
   positiveQuantitySchema,
-  signedMoneySchema,
   signedQuantitySchema,
   timestamptzSchema,
   uuidSchema,
