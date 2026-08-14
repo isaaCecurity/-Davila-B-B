@@ -1,5 +1,56 @@
 # BakeFlow — Current Task
 
+## 🚦 NEXT TASK IS FRONTEND: P8.1 — first vertical slice
+
+**Backend implementation work that is genuinely unblocked is exhausted.** Read paths now
+exist for all five core domains — catalog, inventory, production, sales, delivery — and
+**every remaining backend milestone is stopped on a human decision or on database access**.
+The table under P8.0 in `BACKEND_ROADMAP.md` lists which blocker stops each one.
+
+`BACKEND_ROADMAP.md` P8.0 requires **P2 + P4.1 (read path)** and nothing else. Both are met,
+so the checkpoint is open. P8.1 is "sign in → pick organization → see catalog": sign-in
+screen, organization switcher, catalog list, catalog detail, encrypted session storage per
+AD-014 (**no AsyncStorage**), and a token refresh on organization switch that invalidates
+every cached query.
+
+Two things P8.1 must not inherit by accident:
+
+- **A cache key derived only from arguments is identical across organizations.** Nothing in
+  the `packages/api` signatures forces the issue — every read returns rows carrying their
+  own `tenant_id`, and the query layer deliberately does not key caches. Switching bakeries
+  will serve the previous one's data from cache unless the hook layer invalidates on switch.
+- **A revoked membership mints a null `tenant_id` claim**, and `NULL = anything` is `NULL`,
+  so every policy denies and every list returns empty. That needs its own UI state; rendering
+  it as "no products yet" would be wrong and alarming.
+
+**BLOCKER-011 remains the highest-value unblock.** It alone would let five committed but
+unexecuted SQL suites run and reopen four write paths for contract reading.
+
+---
+
+## Previous task — P4.5 Delivery READ path (IMPLEMENTED)
+
+```
+TASK: P4.5 — Delivery READ path
+STATUS: IMPLEMENTED (behavioural suite NOT executed — BLOCKER-011)
+OWNER: claude
+PREREQS: P4.4 (implemented)
+EVIDENCE: npm run typecheck --workspace apps/mobile -> exit 0
+          npx eslint packages --max-warnings=0 -> exit 0
+          .venv/Scripts/python.exe -m pytest -q -> 12 passed
+          zod probe (executed) -> 16 cols, 0 ::text (no NUMERIC column exists);
+            failed-without-reason REJECTED; delivered-without-proof ACCEPTED
+            (transition precondition, not a standing invariant); bad status REJECTED
+          tests/sql/delivery_read_rls.sql (D1-D10) -> NOT EXECUTED
+```
+
+D5/D6/D7 are the roadmap's stated completion gate for P4.5 — that the `ready -> delivered`
+rule is enforced by the database rather than by convention — and they have not run.
+
+---
+
+## Previous task — P4.4a + P4.4b Sales READ path (IMPLEMENTED)
+
 ```
 TASK: P4.4a + P4.4b — Sales READ path (customers, tickets, ticket_items)
 STATUS: IMPLEMENTED (behavioural suite NOT executed — BLOCKER-011)

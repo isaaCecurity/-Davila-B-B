@@ -19,18 +19,22 @@ tracked separately and must never be conflated:
 
 ---
 
-## Current State
+## Current State — updated 2026-08-14
 
 **Completed phases:** P0 (partial — see P0.5), P1, P2, P3.1–P3.6
-**Active work:** P4.1 Catalog — **read path IN_PROGRESS**, write path BLOCKED
-**Blocked:** P3.7, P6.2 (invitations), P5.x (financial rules), P0.5 (migration reproducibility),
-P4.1 write path (BLOCKER-010)
-**Standing blocked:** P3.7 (per-entity sync application) — BLOCKED at PLAN
+**Read paths IMPLEMENTED across all five core domains:** P4.1a catalog, P4.2a inventory,
+P4.3a production, P4.4a/b sales, P4.5 delivery
+**Every write path is BLOCKED**, and every remaining backend milestone with it — see the
+table under P8.0 for which blocker stops each one.
 
-**Current recommended next task:** **P4.1 — Catalog domain** (`product_categories`,
-`products`, `product_variants`, `ingredients`, `recipes`, `recipe_ingredients`). Its
-prerequisites (P1, P2) are verified complete, and it is a prerequisite for most of
-Phase 4 **and for P3.7**.
+**🚦 P8.0 IS OPEN. The current recommended next task is P8.1 — the first frontend vertical
+slice** ("sign in → pick organization → see catalog"). Its full prerequisite set is
+**P2 + P4.1 (read path)**, and both are met. No further backend milestone can start without
+a human decision or restored database access, so backend expansion pauses here by design
+rather than by exhaustion of ideas.
+
+**BLOCKER-011 is the single highest-value unblock**: it alone would let five committed but
+unexecuted SQL suites run and would reopen four write paths for contract reading.
 
 > **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
 > gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
@@ -522,10 +526,40 @@ sits on a deliberately small prerequisite set.
 | Membership + active-org switching RPC | P2.4, P2.5 | COMPLETE |
 | Organization enumeration for the switcher | P2.6 | COMPLETE |
 | Role/permission read model | P2.3 | COMPLETE |
-| At least one readable domain | P4.1 Catalog (**read path**) | IN_PROGRESS |
+| At least one readable domain | P4.1 Catalog (**read path**) | **IMPLEMENTED** — 15/15 executed |
 
-**Five of six are already met.** The checkpoint opens as soon as **P4.1's read path**
-lands. **P4.4 is not a prerequisite** — confirmed 2026-08-11 in resolving BLOCKER-008(a).
+## ✅ P8.0 IS OPEN — 2026-08-14
+
+**All six requirements are met.** The last one, P4.1's catalog read path, landed and was
+executed live (15/15, `tests/sql/catalog_read_rls.sql`). Four domains are now readable, not
+one: catalog (P4.1a), inventory (P4.2a), production (P4.3a), sales (P4.4a/b) and delivery
+(P4.5).
+
+**Backend implementation work that is genuinely unblocked is exhausted.** Every remaining
+milestone is stopped on either an unmade business decision or live-database access:
+
+| Remaining backend milestone | Stopped on |
+|---|---|
+| P4.1b catalog write | BLOCKER-003 (pricing), BLOCKER-010b/c |
+| P4.2b inventory write | code complete; verification needs BLOCKER-011 |
+| P4.3b production write | `complete_production_batch()` signature unread — BLOCKER-011 |
+| P4.4 ticket write | BLOCKER-003, BLOCKER-009, BLOCKER-011 |
+| P4.5 delivery write | return-movement RPC signatures unread — BLOCKER-011 |
+| P5 (all financial) | BLOCKER-003 |
+| P6.1 Edge Function scaffold | writable, but its only approved consumer P6.2 is blocked on BLOCKER-001, and deployment needs BLOCKER-011 |
+| P6.2 invitations | BLOCKER-001 |
+| P6.4 audit coverage | needs migrations — BLOCKER-011 |
+| P6.6 rate limiting / prod config | needs Supabase project config — BLOCKER-011 |
+| P3.7 per-entity sync | BLOCKER-006, BLOCKER-009 |
+| P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
+
+**Frontend work (P8.1) is therefore the next thing to build**, exactly as this phase was
+designed to allow. It does not wait on any of the above.
+
+---
+
+**Five of six were already met before 2026-08-14.** The checkpoint opens as soon as
+**P4.1's read path** lands. **P4.4 is not a prerequisite** — confirmed 2026-08-11 in resolving BLOCKER-008(a).
 The full prerequisite set is therefore **P2 + P4.1**, stated identically here, in the
 dependency graph above, and in P8.1 below. A catalog *list and detail* screen needs the
 read path only, so P4.1b's block does not hold the checkpoint shut either.
