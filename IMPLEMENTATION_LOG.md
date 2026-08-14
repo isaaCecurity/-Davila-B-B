@@ -314,3 +314,53 @@ contract was read. No assertion in it may be cited as evidence until it is execu
 
 **P4.2b is therefore PARTIAL, not COMPLETE.** The contract facts above were each read from
 the live database before the outage; the behavioural assertions were not.
+
+---
+
+## 2026-08-11 · P11.1 CI — diagnosed and fixed; lint/typecheck now actually run
+
+**The failing check was never about production code.** Every CI run since the workflow
+was added failed at the **install** step, so `Typecheck` and `Lint` were *skipped* and had
+**never executed remotely** — the red mark was an install failure wearing the job's name.
+
+**Evidence gathered before changing anything:**
+
+| Check | Result |
+|---|---|
+| Was `ci.yml` modified after it was written? | `git diff 3b991e8d HEAD -- .github/workflows/ci.yml` → empty |
+| Which step failed? | Runs 31468310603 … 31690359337: all `FAILURE` on `Install`, `SKIPPED` on Typecheck/Lint |
+| Lockfile out of sync? | **Excluded** — `corepack npm ci --dry-run` locally → exit 0 |
+| Corepack broken locally? | No — `corepack npm --version` → 10.8.2 on Node 24 |
+| pytest job | Passed on every run |
+
+Job logs were not readable (`403 Must have admin rights`), so the cause was isolated by
+elimination and then by two empirical CI runs.
+
+**Classification: CI workflow problem** (our repository configuration), in two parts:
+
+1. `corepack npm ci` without a prior `corepack enable` fails on the runner. Enabling
+   Corepack explicitly fixed that step — run 31822022702 shows it green.
+2. `corepack enable` does **not** win the PATH race: measured on the runner, bare
+   `npm --version` still reports the version Node 22.13 ships, not 10.8.2. The assertion
+   added in the first fix caught this rather than letting a mismatched npm resolve the
+   lockfile. The pinned npm is now invoked through `corepack npm` explicitly.
+
+**Result — run 31822495609, all green:**
+
+```
+Enable Corepack and activate the pinned npm   SUCCESS
+Verify the pinned npm resolves                SUCCESS
+Install (pinned npm, ignore-scripts)          SUCCESS
+Typecheck                                     SUCCESS
+Lint                                          SUCCESS
+Spec coverage (pytest)                        SUCCESS
+```
+
+Nothing was weakened: `--max-warnings=0`, the npm pin, and `.npmrc ignore-scripts` are all
+unchanged. No production code was touched. This is also the first independent confirmation
+that the P4.1a/P4.2a/P4.2b packages pass lint and typecheck on a clean machine, which
+matters because the combined lint cannot run locally (TD-014).
+
+**Still outstanding for P4.2b:** `tests/sql/inventory_write_rls.sql` remains **NOT
+EXECUTED**. The Supabase MCP server disconnected and now requires re-authentication, and
+`mcp.supabase.com` does not resolve. P4.2b stays **PARTIAL**.

@@ -14,6 +14,14 @@ EVIDENCE: npm run typecheck -> exit 0
 **To finish P4.2b:** run `tests/sql/inventory_write_rls.sql` (A0-A12) once the database is
 reachable. If it passes, P4.2b becomes COMPLETE; nothing else is outstanding.
 
+**Blocked on:** Supabase MCP disconnected and requires re-authentication;
+`mcp.supabase.com` does not resolve. This is the ONLY thing keeping P4.2b from COMPLETE.
+
+**CI is resolved.** The failing GitHub check was an install-step failure, not lint and not
+production code -- Typecheck and Lint had never executed remotely at all. Fixed in
+d0528698 + 2bf5fe6d; run **31822495609** is fully green with `--max-warnings=0` and the
+npm pin intact.
+
 **Mechanism correction.** The milestone assumed a direct insert into `stock_movements`.
 Verified live, that is impossible for any application user — `authenticated` holds SELECT
 only, and GRANTs precede RLS. Writes go through the SECURITY DEFINER `adjust_stock()` RPC,

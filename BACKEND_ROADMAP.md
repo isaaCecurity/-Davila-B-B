@@ -623,8 +623,15 @@ cannot rebuild the schema (**BLOCKER-002**), and pointing CI at production would
 storing a privileged key in GitHub secrets. Both halves are human decisions, so they
 were left undone rather than guessed. `tests/sql/*.sql` remain a manual local gate.
 
-**Not verified.** The workflow has never executed on GitHub — no run exists yet. Every
-command it invokes was executed locally and passed; the YAML itself is unproven in situ.
+**Verified on GitHub 2026-08-11.** Run **31822495609** is green: `Typecheck` and `Lint`
+both executed and passed on a Linux runner with `--max-warnings=0` and the npm pin intact.
+
+Getting there took two fixes, because **every earlier run had failed at the install step,
+so lint and typecheck had never once executed remotely** — the red check was never about
+production code. `corepack npm ci` without a prior `corepack enable` fails on the runner,
+and after enabling, `corepack enable` does not win the PATH race (bare `npm` still reports
+the version Node 22.13 ships), so the pinned npm is now invoked through `corepack npm`
+explicitly and asserted before install.
 
 **Blockers:** BLOCKER-002 (for the SQL half only).
 **Parallelizable:** with everything — it changes no runtime code.
