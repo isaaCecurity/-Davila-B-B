@@ -63,16 +63,27 @@ jobs:
           corepack enable
           corepack prepare npm@10.8.2 --activate
 
-      # Deliberately BEFORE the install: if the pin silently stops working, this fails
-      # with an obvious cause rather than letting a mismatched npm resolve the lockfile.
-      # Still an assertion, not a log line — a wrong version fails the job.
-      - name: Verify npm version is pinned
+      # `corepack enable` does not put the pinned npm ahead of the runner's own on PATH:
+      # measured on this runner, bare `npm --version` still reports the version Node
+      # 22.13 ships, not 10.8.2. So the pinned npm is invoked through Corepack
+      # explicitly, and the assertion checks that same entry point — asserting on bare
+      # `npm` only proved the shim was not winning the PATH race.
+      #
+      # Deliberately BEFORE the install: if the pin stops working, this fails with an
+      # obvious cause rather than letting a mismatched npm resolve the lockfile. Both
+      # versions are printed so the log shows the difference rather than hiding it.
+      - name: Verify the pinned npm resolves
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: |
-          npm --version
-          test "$(npm --version)" = "10.8.2"
+          echo "bare npm on PATH : $(npm --version)"
+          echo "corepack npm     : $(corepack npm --version)"
+          test "$(corepack npm --version)" = "10.8.2"
 
-      - name: Install (lifecycle scripts denied by .npmrc)
-        run: npm ci
+      - name: Install (pinned npm, lifecycle scripts denied by .npmrc)
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: corepack npm ci
 
       # tsc covers packages/* as well as apps/mobile: apps/mobile/tsconfig.json
       # includes them, verified by tsc resolving ../../packages/* into the program.
