@@ -43,8 +43,8 @@ Two things P8.1 must not inherit by accident:
   so every policy denies and every list returns empty. That needs its own UI state; rendering
   it as "no products yet" would be wrong and alarming.
 
-**BLOCKER-011 remains the highest-value unblock.** It alone would let five committed but
-unexecuted SQL suites run and reopen four write paths for contract reading.
+**BLOCKER-012 is now the highest-value unblock** (BLOCKER-011 was resolved 2026-08-15). It
+is a one-line constraint swap that reopens sales, delivery, payments and ticket sync.
 
 ---
 
