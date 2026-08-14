@@ -66,3 +66,15 @@ export {
 // either domain module, so both surface the same type and the same limits.
 export { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from './internal/read';
 export type { Page, PageOptions } from './internal/read';
+
+// P4.3a — production READ path. No batch mutation is exported: STATE-MACHINES.md §2
+// requires completion to be the single `complete_production_batch()` RPC, never a
+// sequence of client calls, and that signature has not been read from the live database
+// yet.
+export {
+  getProductionBatchById,
+  getProductionBatchWithIngredients,
+  listProductionBatchIngredients,
+  listProductionBatches,
+  type ProductionBatchFilters,
+} from './queries/production';

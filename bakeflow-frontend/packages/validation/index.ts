@@ -28,3 +28,8 @@ export {
   recipeIngredientSchema,
   recipeSchema,
 } from './catalog';
+
+export {
+  productionBatchIngredientSchema,
+  productionBatchSchema,
+} from './production';

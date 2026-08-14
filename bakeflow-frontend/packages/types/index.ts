@@ -71,3 +71,15 @@ export {
   STOCK_MOVEMENT_REASONS,
   STOCK_REFERENCE_TYPES,
 } from './inventory';
+
+export type {
+  ProductionBatch,
+  ProductionBatchIngredient,
+  ProductionBatchStatus,
+  ProductionBatchWithIngredients,
+} from './production';
+export {
+  PRODUCTION_BATCH_STATUSES,
+  TERMINAL_PRODUCTION_BATCH_STATUSES,
+  isTerminalProductionBatchStatus,
+} from './production';
