@@ -396,12 +396,17 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 **Tests:** state-machine transitions; ingredient consumption correctness.
 **Completion gate:** batch completion moves stock atomically.
 
-## P4.4 · Sales / Tickets — BLOCKED
+## P4.4 · Sales / Tickets — READ PATH IMPLEMENTED (P4.4a + P4.4b) / write path BLOCKED
 **Dependencies:** P4.1.
 **Schema:** `customers`, `tickets`, `ticket_items`.
-**Business rules:** 8-state lifecycle; ticket immutable once submitted; corrections via `correction_of_ticket_id`, never edits.
-**Blockers:** **BLOCKER-005** — `confirmed`…`completed` are unreachable and submitted-ticket money is not frozen. Any ticket service built now would be built on a broken lifecycle.
-**Note:** `customers` alone is *not* blocked and may be split out as **P4.4a** if a customer-only milestone is wanted (drivers create customers offline per clarification §11).
+**Business rules:** 10-state lifecycle; ticket money frozen once it leaves `draft`; corrections via `correction_of_ticket_id`, never edits.
+
+**Unblocked 2026-08-14.** BLOCKER-005 is **RESOLVED** — `prevent_submitted_ticket_update()` was dropped, every status is reachable, and `guard_ticket_status_transition()` now freezes `subtotal_amount`. The read path's premise is therefore sound and P4.4a/P4.4b were implemented in one milestone: `packages/types/sales.ts`, `packages/validation/sales.ts`, `packages/api/queries/sales.ts`, nine read functions, zero migrations.
+
+**Status is IMPLEMENTED, not COMPLETE.** `tests/sql/sales_read_rls.sql` (S1–S18) is written and committed but **NOT EXECUTED** — see **BLOCKER-011**, the authorized Supabase account cannot reach project `tvfyxpafbpnkneujcnvr`.
+
+**Write path stays BLOCKED**, on four independent grounds: the lifecycle RPC signatures have not been read from the live database; `draft → submitted` has no RPC at all (`API-CONTRACT.md` §2); `discount_amount`/`tax_amount` have no approved rules (**BLOCKER-003**); and **BLOCKER-009** leaves `cancelled → archived` unreachable.
+**Tests:** S1–S18 cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary.
 
 ## P4.5 · Delivery — NOT_STARTED
 **Dependencies:** P4.4.

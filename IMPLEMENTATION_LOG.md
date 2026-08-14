@@ -361,3 +361,102 @@ All anon-callable functions from the security audit are now closed. `archive_tic
 ### Remaining open items (unchanged)
 
 BLOCKER-001, BLOCKER-002, BLOCKER-003, BLOCKER-004, BLOCKER-006, BLOCKER-007, BLOCKER-009 (archive_ticket `ARCHIVE` operation_type issue — separate from BLOCKER-005), BLOCKER-010b, BLOCKER-010c all remain OPEN and are unaffected by this session.
+
+---
+
+## 2026-08-14 · P4.4a + P4.4b — Sales READ path
+
+**Scope:** three new files, three modified, one new SQL suite. **Zero migrations.** No
+mutation of any kind was added.
+
+### The session began by clearing the outstanding verification, and could not
+
+`CURRENT_TASK.md` carried one unblocked item: run `tests/sql/inventory_write_rls.sql` now
+that the Supabase MCP authorization was reported available. It is **still not runnable**,
+for a new and different reason, established by direct calls rather than inferred:
+
+| Call | Result |
+|---|---|
+| `list_organizations` | one org, `mwbgqqiifogmwdbhkbhd` — "Undeify's Org" |
+| `list_projects` | one project, `etodmfsmvhewihboxcrp` |
+| `list_tables` on it | 28 tables — `shifts`, `leave_requests`, `attendance_records`, `announcements`. A workforce-scheduling schema. **No BakeFlow table.** |
+| `execute_sql` on `tvfyxpafbpnkneujcnvr` | `MCP error -32600: You do not have permission to perform this action` |
+
+The connector works; it is pointed at the wrong account. BakeFlow is in organization
+`tkrygyuxqyqbxgqaodjq`, which this account does not belong to. Checked for a fallback and
+found none: no `.env` with a service-role key, no `psql` on PATH, no stored CLI token
+(`~/.supabase` holds only telemetry), no `supabase/.temp/pooler-url`.
+
+Recorded as **BLOCKER-011**. Work continued on the next independent milestone.
+
+### Why P4.4 was the next milestone
+
+`BACKEND_ROADMAP.md` listed P4.4 as BLOCKED on BLOCKER-005 — "any ticket service built now
+would be built on a broken lifecycle". **BLOCKER-005 was resolved on 2026-08-14** by
+dropping `prevent_submitted_ticket_update()`, so the read path's premise is sound: every
+status is now reachable and `subtotal_amount` is frozen once a ticket leaves `draft`. The
+roadmap's own note already split `customers` out as independently unblocked.
+
+### Production code
+
+| File | Change |
+|---|---|
+| `packages/types/sales.ts` | **new**, 280 lines — `Customer`, `Ticket`, `TicketItem`, the 10-state model, `areTicketItemsLocked` |
+| `packages/validation/sales.ts` | **new**, 156 lines |
+| `packages/api/queries/sales.ts` | **new**, 508 lines — 9 read functions |
+| `packages/api/internal/read.ts` | 196 → 281 — composite-cursor helpers extracted; `softDeleted` added to `ReadEntity` |
+| `packages/validation/decimal.ts` | `signedMoneySchema` added |
+| `packages/api/queries/{catalog,inventory,production}.ts` | `softDeleted` declared; inventory's private cursor helpers deleted |
+| `tests/sql/sales_read_rls.sql` | **new**, 391 lines, S1–S18 — **NOT EXECUTED** |
+
+### Three decisions worth the record
+
+**1. The item-freeze point is `ready`, not `confirmed`.** `SCHEMA-REFERENCE.md` §9
+explicitly corrects `STATE-MACHINES.md` §1 on this, and §9 wins per `CLAUDE.md`.
+`areTicketItemsLocked()` implements §9's version. Reproducing §1's would have greyed out an
+edit the database accepts. S11a/S11b test both halves.
+
+**2. `sale_customer_type` stays `string | null`.** §4 records the column but no CHECK.
+Inventing a `'walk_in' | 'registered'` union would make the reader stricter than the
+database — the failure the inventory milestone already paid for once with
+`quantity_on_hand`. S12 asserts no CHECK exists, so the type can be narrowed the day one
+does.
+
+**3. Signed money now exists.** Through P4.3 every money column carried `CHECK >= 0`. §4
+documents that check on `discount_amount`, `tax_amount`, `total_amount` and `line_total`
+and **not** on `subtotal_amount`, `amount_paid` or `ticket_items.unit_price`. The asymmetry
+is preserved rather than smoothed over, on the `signedQuantitySchema` precedent.
+
+### Defect found in already-committed P4.3a code
+
+`queries/production.ts` filtered `.is('deleted_at', null)` on `production_batches` and
+`production_batch_ingredients` while selecting a column set containing neither, and
+`SCHEMA-REFERENCE.md` §5 — the document those types were written from — lists `[std]` alone
+for both. The module contradicted its own source. Were the column absent, PostgREST would
+answer `42703` and **every production read would fail outright.**
+
+`ReadEntity` now carries a **required** `softDeleted: boolean`, applied through
+`withSoftDeleteFilter()`. All twelve entities across four domains now declare it beside the
+schema that says which columns they have. Catalog (6) and inventory (4) are `true` on live
+evidence — their SELECT policies reference `deleted_at`, which they could not if it did not
+exist. Production (2) is `false` per §5; `ticket_items` is `false` per §4; `customers` and
+`tickets` are `true`. **S2a–S2c and S3a–S3b verify all of it** and are the highest-value
+assertions in the new suite.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck --workspace apps/mobile` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `.venv/Scripts/python.exe -m pytest -q` | **12 passed** |
+| zod projection probe (executed, zod 4.1.12) | customers 10/0 ::text, tickets 25/5, ticket_items 9/3; JSON-number payload rejected; `"3000.0000"` survived intact; cancelled-without-reason rejected; negative subtotal accepted. Probe deleted. |
+| `tests/sql/sales_read_rls.sql` | **NOT EXECUTED** — BLOCKER-011 |
+
+The probe is not ceremony: P4.3a's near-miss was a `.def.innerType` lookup that typechecked
+through a cast and would have produced an empty column list at runtime. `ticketSchema` is
+also a refined object, so the same trap was live here. Executed, `.shape` resolves and the
+projection is 25 columns.
+
+**P4.4 is IMPLEMENTED, not COMPLETE.** Every behavioural claim above rests on the SQL suite,
+which has not run.
