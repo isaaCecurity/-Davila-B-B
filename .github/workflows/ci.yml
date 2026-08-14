@@ -43,14 +43,36 @@ jobs:
           cache: npm
           cache-dependency-path: bakeflow-frontend/package-lock.json
 
-      # `corepack npm` honours packageManager (npm@10.8.2) without a global
-      # `corepack enable`, which needs admin on Windows (TD-009). Using the same
-      # entry point locally and in CI keeps the npm version identical in both.
-      - name: Install (pinned npm, lifecycle scripts denied by .npmrc)
-        run: corepack npm ci
+      # Corepack is enabled explicitly rather than relying on `corepack npm <cmd>`.
+      #
+      # Locally we use the `corepack npm …` shim because a global `corepack enable`
+      # needs administrator rights on Windows (TD-009). That constraint does not exist
+      # on a Linux runner, and every CI run since this workflow was added failed at this
+      # step with the shim — lint and typecheck were skipped and have never executed
+      # remotely. `corepack enable` + `prepare --activate` is the documented path and
+      # puts the pinned npm on PATH for every later step.
+      #
+      # COREPACK_ENABLE_DOWNLOAD_PROMPT=0 is required because Corepack must fetch
+      # npm@10.8.2 (the runner ships a different version) and will not prompt in a
+      # non-interactive shell.
+      - name: Enable Corepack and activate the pinned npm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          corepack --version
+          corepack enable
+          corepack prepare npm@10.8.2 --activate
 
+      # Deliberately BEFORE the install: if the pin silently stops working, this fails
+      # with an obvious cause rather than letting a mismatched npm resolve the lockfile.
+      # Still an assertion, not a log line — a wrong version fails the job.
       - name: Verify npm version is pinned
-        run: corepack npm --version
+        run: |
+          npm --version
+          test "$(npm --version)" = "10.8.2"
+
+      - name: Install (lifecycle scripts denied by .npmrc)
+        run: npm ci
 
       # tsc covers packages/* as well as apps/mobile: apps/mobile/tsconfig.json
       # includes them, verified by tsc resolving ../../packages/* into the program.
