@@ -4,6 +4,33 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-011
+
+**Question:** Can the Supabase MCP connector be authorized with the account that owns
+organization `tkrygyuxqyqbxgqaodjq` (project `tvfyxpafbpnkneujcnvr`) — or the currently
+authorized account added to that organization?
+
+**Affected:** every live verification. P4.2b stays PARTIAL, P4.3 and P4.4 stay
+IMPLEMENTED-not-COMPLETE. Implementation itself is **not** blocked and is continuing.
+
+**Status:** BLOCKED — needs a Supabase account/permission action, not a code change
+
+**Why it matters:** the connector now works, which makes this easy to misread as fixed.
+It is authorized against a **different Supabase account** — one organization,
+*"Undeify's Org"*, one project, `etodmfsmvhewihboxcrp`, holding a workforce-scheduling
+schema (`shifts`, `leave_requests`, `attendance_records`) with no BakeFlow table in it.
+Any call against `tvfyxpafbpnkneujcnvr` returns *"You do not have permission to perform
+this action"*. No fallback route exists here: no service-role key, no `psql`, no stored
+CLI token.
+
+Three suites are written and committed but unexecuted — `inventory_write_rls.sql`,
+`sales_read_rls.sql`, and P4.3's schema verification. Under the Evidence rule none of
+their assertions counts until they run. The sales suite's S2/S3 in particular decide
+whether five `softDeleted` flags in the query layer are right; if they are wrong, the
+affected reads fail outright with `42703`.
+
+---
+
 ## ACTION REQUIRED: BLOCKER-009
 
 **Question:** Should `ARCHIVE` be added to the `operation_type` CHECK (or

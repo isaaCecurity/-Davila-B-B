@@ -78,3 +78,23 @@ export {
   listProductionBatches,
   type ProductionBatchFilters,
 } from './queries/production';
+
+// P4.4a/P4.4b — the sales READ path (customers, tickets, ticket_items). No ticket mutation
+// is exported. `guard_ticket_status_transition()` is the sole authority on status since
+// 2026-08-14, the four lifecycle RPCs (`confirm_ticket`, `complete_ticket`,
+// `cancel_ticket`, `archive_ticket`) have not had their signatures read from the live
+// database, `draft -> submitted` has no RPC at all, and `discount_amount`/`tax_amount` have
+// no approved rules (BLOCKER-003). See the module header for why none of that is guessed.
+export {
+  findCustomersByPhone,
+  getCustomerById,
+  getTicketById,
+  getTicketByNumber,
+  getTicketWithItems,
+  listCustomers,
+  listTicketCorrections,
+  listTicketItems,
+  listTickets,
+  type CustomerFilters,
+  type TicketFilters,
+} from './queries/sales';

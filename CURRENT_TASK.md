@@ -1,6 +1,63 @@
 # BakeFlow — Current Task
 
 ```
+TASK: P4.4a + P4.4b — Sales READ path (customers, tickets, ticket_items)
+STATUS: IMPLEMENTED (behavioural suite NOT executed — BLOCKER-011)
+OWNER: claude
+PREREQS: P4.1a (implemented); BLOCKER-005 RESOLVED 2026-08-14
+EVIDENCE: npm run typecheck --workspace apps/mobile -> exit 0
+          npx eslint packages --max-warnings=0 -> exit 0
+          .venv/Scripts/python.exe -m pytest -q -> 12 passed
+          zod projection probe (executed, zod 4.1.12) ->
+            customers 10 cols / 0 ::text (no NUMERIC column exists)
+            tickets 25 cols / 5 ::text
+            ticket_items 9 cols / 3 ::text
+            JSON-number payload REJECTED; ::text payload accepted, "3000.0000" intact
+            cancelled-without-reason REJECTED; negative subtotal ACCEPTED (signed money)
+          tests/sql/sales_read_rls.sql (S1-S18) -> NOT EXECUTED
+```
+
+**Production code.** `packages/types/sales.ts` (280), `packages/validation/sales.ts` (156),
+`packages/api/queries/sales.ts` (508). `packages/api/internal/read.ts` 196 -> 281 as the
+composite-cursor helpers moved out of `queries/inventory.ts` (its second consumer) and the
+soft-delete predicate became explicit. `packages/validation/decimal.ts` gained
+`signedMoneySchema`. **Zero migrations.**
+
+**No ticket mutation was written, deliberately.** Four reasons, none of them "not done
+yet": the lifecycle RPC signatures (`confirm_ticket`, `complete_ticket`, `cancel_ticket`,
+`archive_ticket`) have not been read from the live database; `draft -> submitted` has no
+RPC at all (`API-CONTRACT.md` §2); `discount_amount`/`tax_amount` have no approved rules
+(BLOCKER-003); and BLOCKER-009 leaves `cancelled -> archived` unreachable. The
+`adjust_stock()` episode is the precedent — a full implementation built on an assumed
+contract had to be discarded.
+
+**Defect found and fixed in P4.3a.** `queries/production.ts` filtered
+`.is('deleted_at', null)` on both production tables while selecting a column set
+containing neither — `SCHEMA-REFERENCE.md` §5 lists `[std]` alone for them, where §4 spells
+out `+ deleted_at, deleted_by` for `tickets`. If the column is absent, PostgREST answers
+`42703` and **every production read fails**. `ReadEntity` now carries a required
+`softDeleted: boolean`, so all twelve entities across four domains state it beside the
+schema that says which columns they have. S3a/S3b in the sales suite verify it.
+
+---
+
+## Blocked: all live verification — BLOCKER-011
+
+The Supabase MCP connector is **reachable now** (the old `ENOTFOUND` and 401 are gone) but
+is authorized against a **different Supabase account**: one organization, "Undeify's Org",
+one project `etodmfsmvhewihboxcrp`, holding a workforce-scheduling schema with no BakeFlow
+table in it. Every call against `tvfyxpafbpnkneujcnvr` returns *"You do not have permission
+to perform this action"*. No fallback exists — no service-role key, no `psql`, no stored
+CLI token, all checked.
+
+Three suites are written, committed and unexecuted: `inventory_write_rls.sql` (P4.2b),
+`sales_read_rls.sql` (P4.4), and P4.3's schema verification.
+
+---
+
+## Previous task — P4.2b Inventory WRITE path (PARTIAL)
+
+```
 TASK: P4.2b — Inventory WRITE path
 STATUS: PARTIAL — production code complete; behavioural suite NOT executed
 OWNER: claude

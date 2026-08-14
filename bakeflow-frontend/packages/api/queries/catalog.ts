@@ -108,8 +108,19 @@ const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set([
   'quantity',
 ]);
 
+/**
+ * All six catalog tables carry `deleted_at`/`deleted_by`, verified live 2026-08-11: the
+ * SELECT policy on every one is `tenant_id = current_tenant_id() AND deleted_at IS NULL`,
+ * and the 2026-08-14 migration `partial_unique_indexes_for_soft_delete_restore` rebuilt
+ * five of their unique indexes as `WHERE deleted_at IS NULL`.
+ */
 function entity<T>(table: string, schema: z.ZodType<T> & SchemaShape): ReadEntity<T> {
-  return { table, schema, columns: projectionFor(schema, TEXT_CAST_COLUMNS) };
+  return {
+    table,
+    schema,
+    columns: projectionFor(schema, TEXT_CAST_COLUMNS),
+    softDeleted: true,
+  };
 }
 
 const CATEGORIES = entity<ProductCategory>('product_categories', productCategorySchema);

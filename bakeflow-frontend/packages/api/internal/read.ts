@@ -55,6 +55,91 @@ export interface ReadEntity<T> {
   readonly table: string;
   readonly schema: z.ZodType<T>;
   readonly columns: string;
+  /**
+   * Whether the table carries the `deleted_at`/`deleted_by` soft-delete pair (AD-012).
+   *
+   * **Required, not optional, and that is the point.** `API-CONTRACT.md` §4 obliges every
+   * read to filter `deleted_at IS NULL` explicitly, but `SCHEMA-REFERENCE.md` §11 is
+   * equally clear that only *most* tables carry the column: ledger tables are append-only
+   * and never soft-deleted, and several child tables are reached through a parent that is.
+   *
+   * Filtering a column that does not exist is not a harmless extra predicate — PostgREST
+   * returns `42703 column ... does not exist` and the entire list fails. Omitting it where
+   * the column *does* exist leaks deleted rows past a query whose contract promised
+   * otherwise. Neither default is safe, so no default is offered: each entity states which
+   * it is, next to the schema that says which columns it has.
+   */
+  readonly softDeleted: boolean;
+}
+
+/**
+ * Apply the soft-delete predicate iff the entity has the column.
+ *
+ * Typed through the builder's own return type rather than a concrete PostgREST generic:
+ * this package takes no runtime dependency on `@supabase/supabase-js` (see `../client`),
+ * and `.is()` returns the same builder it was called on.
+ */
+export function withSoftDeleteFilter<Q extends { is(column: string, value: null): Q }>(
+  query: Q,
+  entity: ReadEntity<unknown>,
+): Q {
+  return entity.softDeleted ? query.is('deleted_at', null) : query;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Keyset cursors                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Separator for composite `(sortValue, id)` cursors.
+ *
+ * Extracted from `queries/inventory.ts` during P4.4, when sales became the second consumer
+ * — the same rule that moved the response gate here in P4.2. A cursor encoder and its
+ * decoder that exist in two copies are two formats waiting to drift, and the failure would
+ * be a page silently starting in the wrong place rather than an error.
+ *
+ * A composite cursor is required wherever the sort column is not unique within a tenant.
+ * `created_at` is the worst case: several rows written in one transaction share the exact
+ * instant, so `created_at < :last` would drop every sibling — silently, with no error.
+ * `customers.full_name` has the same shape for a duller reason (two customers may share a
+ * name). The `id` tiebreak makes the sort key total, which is what keyset paging requires.
+ *
+ * `NUL` is the separator because Postgres rejects it in `text` outright, so it can never
+ * occur inside either component and split the cursor in the wrong place.
+ */
+const CURSOR_SEPARATOR = '\u0000';
+
+export function encodeCursor(sortValue: string, id: string): string {
+  return `${sortValue}${CURSOR_SEPARATOR}${id}`;
+}
+
+export function decodeCursor(
+  cursor: string,
+  context: string,
+): { sortValue: string; id: string } {
+  const parts = cursor.split(CURSOR_SEPARATOR);
+  const sortValue = parts[0];
+  const id = parts[1];
+  if (parts.length !== 2 || sortValue === undefined || id === undefined || id === '') {
+    throw new BakeflowApiError({
+      code: 'invalid_request',
+      message:
+        `${context}: malformed cursor. Pass the previous page's nextCursor unmodified; ` +
+        'cursors are opaque and must not be constructed by hand.',
+    });
+  }
+  return { sortValue, id };
+}
+
+/**
+ * A PostgREST `or=` value containing a quoted literal.
+ *
+ * Values are wrapped in double quotes so reserved characters inside them — the `+` and `:`
+ * of a `timestamptz`, a `,` in a customer's name — are read as data rather than as
+ * PostgREST syntax. An embedded double quote is escaped by doubling, per PostgREST's rules.
+ */
+export function quoteFilterValue(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 /* -------------------------------------------------------------------------- */

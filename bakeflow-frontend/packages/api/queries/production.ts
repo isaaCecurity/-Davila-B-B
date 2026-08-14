@@ -57,6 +57,7 @@ import {
   projectionFor,
   resolveLimit,
   run,
+  withSoftDeleteFilter,
   type Page,
   type PageOptions,
   type ReadEntity,
@@ -88,16 +89,41 @@ const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set([
  * column list. Do not reintroduce the cast: if `.shape` ever stops resolving, the
  * compiler should be allowed to say so.
  */
+/**
+ * ## `softDeleted: false` — a correction to the first implementation of this module
+ *
+ * Both queries below originally filtered `.is('deleted_at', null)` unconditionally, copied
+ * from catalog and inventory. **Neither production table documents that column.**
+ * `SCHEMA-REFERENCE.md` §5 lists `[std]` alone for `production_batches` and
+ * `production_batch_ingredients` — the audit trio `created_at`/`updated_at`/`created_by`
+ * defined in §0 — where §4 lists `[std] + deleted_at, deleted_by` for `tickets`
+ * explicitly, and §11 says only that *most* tables carry the pair.
+ *
+ * That made the module contradict the one document it was written from: it selected a
+ * column set with no `deleted_at` in it while filtering on `deleted_at`. If the column is
+ * in fact absent, PostgREST answers `42703 column production_batches.deleted_at does not
+ * exist` and **every production read fails** — an outage, not a degradation.
+ *
+ * Resolving an internal contradiction in favour of the source document is not a guess, so
+ * the filter is now driven by the declaration below rather than assumed. It is still
+ * unverified in the other direction: if a live read shows the columns do exist, flip these
+ * to `true` — the RLS policy would then already be filtering them, so nothing leaks in the
+ * interim, but the explicit contract `API-CONTRACT.md` §4 requires would be missing.
+ *
+ * **This is on the P4.3 verification checklist. Do not mark P4.3 COMPLETE without it.**
+ */
 const BATCHES: ReadEntity<ProductionBatch> = {
   table: 'production_batches',
   schema: productionBatchSchema,
   columns: projectionFor(productionBatchSchema as unknown as SchemaShape, TEXT_CAST_COLUMNS),
+  softDeleted: false,
 };
 
 const BATCH_INGREDIENTS: ReadEntity<ProductionBatchIngredient> = {
   table: 'production_batch_ingredients',
   schema: productionBatchIngredientSchema,
   columns: projectionFor(productionBatchIngredientSchema, TEXT_CAST_COLUMNS),
+  softDeleted: false,
 };
 
 /** Filters for the batch list. All optional, combined with AND. */
@@ -124,7 +150,10 @@ export async function listProductionBatches(
 ): Promise<Page<ProductionBatch>> {
   const limit = resolveLimit(options.limit);
 
-  let query = client.from(BATCHES.table).select(BATCHES.columns).is('deleted_at', null);
+  let query = withSoftDeleteFilter(
+    client.from(BATCHES.table).select(BATCHES.columns),
+    BATCHES,
+  );
 
   if (filters.status !== undefined) query = query.eq('status', filters.status);
   if (filters.branchId !== undefined) query = query.eq('branch_id', filters.branchId);
@@ -155,12 +184,10 @@ export async function getProductionBatchById(
   batchId: Uuid,
 ): Promise<ProductionBatch | null> {
   const data = await run(
-    client
-      .from(BATCHES.table)
-      .select(BATCHES.columns)
-      .eq('id', batchId)
-      .is('deleted_at', null)
-      .maybeSingle(),
+    withSoftDeleteFilter(
+      client.from(BATCHES.table).select(BATCHES.columns).eq('id', batchId),
+      BATCHES,
+    ).maybeSingle(),
   );
   return parseRow(BATCHES.schema, data, 'getProductionBatchById');
 }
@@ -175,12 +202,13 @@ export async function listProductionBatchIngredients(
   batchId: Uuid,
 ): Promise<ProductionBatchIngredient[]> {
   const data = await run(
-    client
-      .from(BATCH_INGREDIENTS.table)
-      .select(BATCH_INGREDIENTS.columns)
-      .eq('batch_id', batchId)
-      .is('deleted_at', null)
-      .order('ingredient_id', { ascending: true }),
+    withSoftDeleteFilter(
+      client
+        .from(BATCH_INGREDIENTS.table)
+        .select(BATCH_INGREDIENTS.columns)
+        .eq('batch_id', batchId),
+      BATCH_INGREDIENTS,
+    ).order('ingredient_id', { ascending: true }),
   );
   return parseRows(BATCH_INGREDIENTS.schema, data, 'listProductionBatchIngredients');
 }

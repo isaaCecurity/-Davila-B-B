@@ -257,6 +257,45 @@ Then correct BLOCKER-005 and `docs/STATE-MACHINES.md` §63 in the same change.
 
 ---
 
+## BLOCKER-011 · The authorized Supabase account cannot reach the BakeFlow project
+**Status:** OPEN · **Affects:** every live verification — P4.2b, P4.3, P4.4 · **Type:** missing external access
+
+The Supabase MCP connector is now reachable — the earlier `getaddrinfo ENOTFOUND` and
+HTTP 401 are both gone, and `list_projects` succeeds. It is authorized against **the wrong
+Supabase account**.
+
+Verified 2026-08-14 by direct MCP calls:
+
+| Call | Result |
+|---|---|
+| `list_organizations` | one organization: `mwbgqqiifogmwdbhkbhd` — *"Undeify's Org"* |
+| `list_projects` | one project: `etodmfsmvhewihboxcrp` — *"UndeifyIT's Project"*, eu-central-1 |
+| `list_tables` on that project | 28 tables — `shifts`, `shift_assignments`, `leave_requests`, `attendance_records`, `announcements`… a **workforce-scheduling schema**, described in its own table comments as *"the ShiftOS platform"*. Not one BakeFlow table. |
+| `execute_sql` on `tvfyxpafbpnkneujcnvr` | `MCP error -32600: You do not have permission to perform this action` |
+
+BakeFlow lives in project `tvfyxpafbpnkneujcnvr`, organization `tkrygyuxqyqbxgqaodjq`
+(`supabase/.temp/linked-project.json`, `.mcp.json`). The authorized account is not a member
+of that organization, so this is an authorization gap, not a connectivity one — retrying,
+re-authorizing the same account, or waiting will not change it.
+
+No alternative route exists in this environment, each checked rather than assumed: no
+`.env` holding a service-role key or connection string, no `psql` on PATH, no stored
+Supabase CLI access token (`~/.supabase` contains only telemetry), and
+`supabase/.temp/pooler-url` is absent.
+
+**Consequence.** Three pieces of work are written, gated and committed but cannot be
+executed, and none of their assertions may be cited as evidence:
+
+- `tests/sql/inventory_write_rls.sql` (A0–A12) — P4.2b stays **PARTIAL**
+- P4.3's schema verification — production types remain documentation-derived
+- `tests/sql/sales_read_rls.sql` (S1–S18) — P4.4 stays **IMPLEMENTED, not COMPLETE**
+
+**Needed:** either authorize the MCP connector with the account that owns organization
+`tkrygyuxqyqbxgqaodjq`, or add the currently authorized account to that organization as a
+member with database access.
+
+---
+
 ## Template
 
 ```

@@ -83,3 +83,20 @@ export {
   TERMINAL_PRODUCTION_BATCH_STATUSES,
   isTerminalProductionBatchStatus,
 } from './production';
+
+export type {
+  Customer,
+  Ticket,
+  TicketFulfilmentType,
+  TicketItem,
+  TicketStatus,
+  TicketWithItems,
+} from './sales';
+export {
+  TERMINAL_TICKET_STATUSES,
+  TICKET_FULFILMENT_TYPES,
+  TICKET_ITEMS_LOCKED_STATUSES,
+  TICKET_STATUSES,
+  areTicketItemsLocked,
+  isTerminalTicketStatus,
+} from './sales';

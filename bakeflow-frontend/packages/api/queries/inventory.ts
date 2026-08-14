@@ -60,11 +60,13 @@ import {
 } from '@bakeflow/validation';
 
 import type { BakeflowClient } from '../client';
-import { BakeflowApiError } from '../errors';
 import {
+  decodeCursor,
+  encodeCursor,
   parseRow,
   parseRows,
   projectionFor,
+  quoteFilterValue,
   resolveLimit,
   run,
   type Page,
@@ -80,11 +82,27 @@ const TEXT_CAST_COLUMNS: ReadonlySet<string> = new Set([
   'unit_cost',
 ]);
 
+/**
+ * All four inventory tables carry `deleted_at`/`deleted_by`, verified live 2026-08-11:
+ * the SELECT policy on each is
+ * `tenant_id = current_tenant_id() AND has_branch_access(branch_id) AND deleted_at IS NULL`,
+ * which could not reference the column if it did not exist.
+ *
+ * `stock_movements` is included despite `SCHEMA-REFERENCE.md` §11 listing it among the
+ * append-only ledgers that "are not soft-deleted either". The column being present and
+ * referenced by its own policy is the stronger evidence; §11 describes the *policy* that
+ * nothing sets it, not the absence of the column.
+ */
 function entity<T>(
   table: string,
   schema: ReadEntity<T>['schema'] & SchemaShape,
 ): ReadEntity<T> {
-  return { table, schema, columns: projectionFor(schema, TEXT_CAST_COLUMNS) };
+  return {
+    table,
+    schema,
+    columns: projectionFor(schema, TEXT_CAST_COLUMNS),
+    softDeleted: true,
+  };
 }
 
 const WAREHOUSES = entity<Warehouse>('warehouses', warehouseSchema);
@@ -131,65 +149,8 @@ const MOVEMENTS = {
   table: 'stock_movements',
   schema: stockMovementSchema,
   columns: MOVEMENT_COLUMNS,
+  softDeleted: true,
 } as const satisfies ReadEntity<StockMovement>;
-
-/* -------------------------------------------------------------------------- */
-/* Composite keyset cursors                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Encode a two-column cursor.
- *
- * **Why a composite cursor is mandatory here, unlike catalog.** The catalog lists page on a
- * column that is unique within a tenant (`products.name`, `product_variants.sku`), so a
- * single-column cursor cannot skip a row. Neither paged inventory list has that property:
- *
- * - `stock_movements.created_at` is emphatically **not** unique. Completing a production
- *   batch writes every ingredient consumption and the finished-goods output in one
- *   transaction, so they share `now()` to the microsecond. A cursor of
- *   `created_at < :last` would drop every sibling movement sharing that instant — silently,
- *   with no error, losing exactly the rows an audit of that batch needs.
- * - `warehouses.name` is unique per `(tenant_id, branch_id)`, **not per tenant**, so two
- *   branches both having a "Main Store" would collide the same way. That list is unpaged
- *   for a different reason (see `listWarehouses`), but the hazard is the same shape.
- *
- * The `id` tiebreak makes the sort key unique, which is what keyset paging requires.
- *
- * `NUL` is the separator because it cannot occur in a Postgres `text` value — Postgres
- * rejects NUL in text outright — so it can never appear inside either component and split
- * the cursor in the wrong place.
- */
-const CURSOR_SEPARATOR = '\u0000';
-
-function encodeCursor(sortValue: string, id: Uuid): string {
-  return `${sortValue}${CURSOR_SEPARATOR}${id}`;
-}
-
-function decodeCursor(cursor: string, context: string): { sortValue: string; id: Uuid } {
-  const parts = cursor.split(CURSOR_SEPARATOR);
-  const sortValue = parts[0];
-  const id = parts[1];
-  if (parts.length !== 2 || sortValue === undefined || id === undefined || id === '') {
-    throw new BakeflowApiError({
-      code: 'invalid_request',
-      message:
-        `${context}: malformed cursor. Pass the previous page's nextCursor unmodified; ` +
-        'cursors are opaque and must not be constructed by hand.',
-    });
-  }
-  return { sortValue, id };
-}
-
-/**
- * A PostgREST `or=` value containing a quoted literal.
- *
- * Values are wrapped in double quotes so reserved characters inside them — the `+` and `:`
- * of a `timestamptz`, or a `,` in any future sort column — are read as data rather than as
- * PostgREST syntax. An embedded double quote is escaped by doubling, per PostgREST's rules.
- */
-function quoteFilterValue(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
 
 /* -------------------------------------------------------------------------- */
 /* Warehouses                                                                  */

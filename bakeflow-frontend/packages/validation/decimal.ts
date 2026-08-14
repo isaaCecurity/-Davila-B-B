@@ -58,13 +58,37 @@ const exactDecimalString = z.string({
 // records both directions of the ledger, and `*_stock_levels.quantity_on_hand` has **no**
 // non-negative CHECK live, so both must accept a leading '-'.
 //
-// Signed *money* is still absent. `stock_movements.unit_cost` is
-// `CHECK (unit_cost >= 0)`, so no money column permits a negative value yet.
+// Signed *money* arrived with P4.4. Through P4.3 every money column carried an explicit
+// `CHECK (value >= 0)` — `product_variants.unit_price`, `stock_movements.unit_cost` — so
+// `nonNegativeMoneySchema` covered the whole surface. The sales tables break that: §4
+// documents `CHECK >= 0` on `tickets.discount_amount`, `tickets.tax_amount`,
+// `tickets.total_amount` and `ticket_items.line_total`, and documents **no** check on
+// `tickets.subtotal_amount`, `tickets.amount_paid` or `ticket_items.unit_price`. See
+// `signedMoneySchema` for why that asymmetry is preserved rather than smoothed over.
 
 /** `NUMERIC(19,4) CHECK (value >= 0)` — e.g. `product_variants.unit_price`. */
 export const nonNegativeMoneySchema = exactDecimalString
   .regex(MONEY_PATTERN, MONEY_MESSAGE)
   .refine((value) => !isNegativeDecimalString(value), 'must be >= 0')
+  .transform((value): Money => unsafeMoney(value));
+
+/**
+ * `NUMERIC(19,4)` with **no sign constraint** — `tickets.subtotal_amount`,
+ * `tickets.amount_paid`, `ticket_items.unit_price`.
+ *
+ * The `signedQuantitySchema` precedent applies exactly: a reader stricter than the
+ * database rejects rows the writer legitimately stored, and the failure surfaces as an
+ * entire ticket list refusing to load rather than as one bad field. `quantity_on_hand` is
+ * the worked example — it was assumed non-negative, turned out not to be, and a
+ * non-negative schema would have failed on real rows.
+ *
+ * `SCHEMA-REFERENCE.md` §4 lists `CHECK >= 0` beside `discount_amount`, `tax_amount`,
+ * `total_amount` and `line_total`, and lists none beside these three. That asymmetry is
+ * treated as information, not as an omission. Tighten only against a live `pg_constraint`
+ * read — with the constraint as the evidence.
+ */
+export const signedMoneySchema = exactDecimalString
+  .regex(MONEY_PATTERN, MONEY_MESSAGE)
   .transform((value): Money => unsafeMoney(value));
 
 /** `NUMERIC(18,4) CHECK (value >= 0)` — e.g. `ingredients.reorder_level`. */
