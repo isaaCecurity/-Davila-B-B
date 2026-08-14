@@ -57,17 +57,13 @@ draft ──► submitted ──► confirmed ──► scheduled ──► in_p
 
 So the money and the identity of a submitted ticket are immutable; its operational progress is not. A financial correction is still a new ticket referencing the original via `correction_of_ticket_id` (permission `tickets.correct`) — never an edit — per clarification §4.
 
-> ### ⚠️ The deployed database does not yet implement this rule, and has two defects
+> ### ✅ Both defects resolved — 2026-08-14
 >
-> **Defect 1 — the machine is unreachable past `submitted`, so three RPCs can never succeed.**
-> `prevent_submitted_ticket_update()` currently blocks **`status`** for any ticket already in `submitted`, `completed`, `fulfilled`, `paid`, `cancelled`, or `closed`. It is a `BEFORE UPDATE` trigger, and `prevent_submitted_ticket_update` sorts before `tickets_guard_status_transition`, so it fires first and raises `42501` on every onward transition. Meanwhile `guard_ticket_status_transition()` permits only `['submitted','cancelled']` out of `draft`. The consequence: `confirm_ticket()` (which sets `status='confirmed'`) fails from `draft` with `invalid_transition` and from `submitted` with `42501` — **it cannot succeed in any state**. `complete_ticket()` and `cancel_ticket()` fail the same way on anything already submitted. Only `draft → submitted` and `draft → cancelled → archived` are reachable today; `confirmed`, `scheduled`, `in_production`, `ready`, `delivered`, and `completed` are dead states.
-> *Remediation:* remove `status`, `assigned_to`, and `due_at` from the guarded column list in `prevent_submitted_ticket_update()`, leaving `guard_ticket_status_transition()` as the sole authority on status.
+> **Defect 1 — RESOLVED.** `prevent_submitted_ticket_update()` (the trigger that blocked all onward transitions) has been **dropped** — both the trigger and the function no longer exist in the database. `guard_ticket_status_transition()` is now the sole authority on status. Every transition in the state machine above is now reachable. `confirm_ticket()`, `complete_ticket()`, `cancel_ticket()` and `archive_ticket()` all work as specified.
 >
-> **Defect 2 — a submitted ticket's money is not actually frozen.**
-> `prevent_submitted_ticket_update()` guards 20 columns but **omits `subtotal_amount` and `total_amount`**, and `guard_ticket_item_mutation()` blocks item mutation only at `ready`, `completed`, and `cancelled` — **`submitted` is not in its list**. So on a submitted ticket you can still edit `ticket_items`, and `recalculate_ticket_totals()` will rewrite the parent's `subtotal_amount`; a direct `UPDATE tickets SET total_amount = …` also passes. This defeats the strongest invariant in the system.
-> *Remediation:* add `subtotal_amount` and `total_amount` to the guarded column list, and add `'submitted'` (plus the other frozen statuses) to `guard_ticket_item_mutation()`.
+> **Defect 2 — RESOLVED.** `guard_ticket_status_transition()` now freezes `subtotal_amount` the moment a ticket leaves `draft`. Any attempt to change `subtotal_amount` on a non-draft ticket raises `42501` with code `immutable_field`. `total_amount` is `GENERATED ALWAYS AS ((subtotal_amount - discount_amount) + tax_amount) STORED` and cannot be written directly — no separate guard is needed.
 >
-> Both are documented only — **no migration has been written or applied**, per the owner's decision of 2026-08-10. No production data is at risk today: the database holds zero tickets.
+> *Migration applied:* `drop_prevent_submitted_ticket_update_and_harden_guard` — 2026-08-14. Zero rows affected (live DB holds zero tickets).
 
 `guard_ticket_item_mutation()` raises the `order_locked` error code.
 

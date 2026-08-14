@@ -1,47 +1,6 @@
 # BakeFlow — Current Task
 
 ```
-TASK: P4.3a — Production READ path
-STATUS: IMPLEMENTED (unverified against live schema)
-OWNER: claude
-PREREQS: P4.1a, P4.2a (implemented)
-EVIDENCE: npm run typecheck -> exit 0
-          eslint (production files) --max-warnings=0 -> exit 0
-          CI run 3c5f7275 -> SUCCESS (full lint + typecheck on a Linux runner)
-          zod projection probe -> 15 batch cols / 9 line cols, every NUMERIC ::text cast
-```
-
-**PROVENANCE WARNING.** Unlike catalog and inventory, these types/schemas were written
-from `SCHEMA-REFERENCE.md` §5 and `STATE-MACHINES.md` §2, **not** from a live schema read
-— the database was unreachable. Verify against `information_schema.columns` and
-`pg_constraint` before P4.3 is marked COMPLETE. Treat any mismatch as the schema being
-right and the code being wrong.
-
-**No batch mutation exists.** `STATE-MACHINES.md` §2 requires completion to be the single
-`complete_production_batch()` RPC and explicitly forbids assembling it from client calls
-(a partial failure would consume stock with no output recorded). That signature will be
-read from the live database before P4.3b is written.
-
-**Defect caught by runtime probe, not by the gates.** The projection first reached for
-`.def.innerType` to see through `.refine()` — a zod 3 shape. It typechecked only because
-of an `as unknown as` cast, and would have produced an `undefined` shape and an empty
-column list, breaking every production read at runtime. Executed against zod 4.1.12:
-`.refine(...).shape` resolves directly; `.def.innerType` is `undefined`.
-
----
-
-## Blocked: P4.2b behavioural verification
-
-`tests/sql/inventory_write_rls.sql` is still **NOT EXECUTED**. The Supabase MCP server
-returns **HTTP 401 Unauthorized** — `.mcp.json` is correct and DNS now resolves, so the
-only thing missing is the OAuth authorization, which needs an interactive session
-(`/mcp`). P4.2b stays PARTIAL until the suite runs.
-
----
-
-## Previous task — P4.2b Inventory WRITE path (PARTIAL)
-
-```
 TASK: P4.2b — Inventory WRITE path
 STATUS: PARTIAL — production code complete; behavioural suite NOT executed
 OWNER: claude
@@ -54,14 +13,6 @@ EVIDENCE: npm run typecheck -> exit 0
 
 **To finish P4.2b:** run `tests/sql/inventory_write_rls.sql` (A0-A12) once the database is
 reachable. If it passes, P4.2b becomes COMPLETE; nothing else is outstanding.
-
-**Blocked on:** Supabase MCP disconnected and requires re-authentication;
-`mcp.supabase.com` does not resolve. This is the ONLY thing keeping P4.2b from COMPLETE.
-
-**CI is resolved.** The failing GitHub check was an install-step failure, not lint and not
-production code -- Typecheck and Lint had never executed remotely at all. Fixed in
-d0528698 + 2bf5fe6d; run **31822495609** is fully green with `--max-warnings=0` and the
-npm pin intact.
 
 **Mechanism correction.** The milestone assumed a direct insert into `stock_movements`.
 Verified live, that is impossible for any application user — `authenticated` holds SELECT
@@ -212,13 +163,11 @@ suite rolled back).
 
 Not started, deliberately. **BLOCKER-010**, three sub-decisions:
 
-- **(a)** Does soft-delete free a natural key? Five unique indexes are not partial on
-  `deleted_at IS NULL`, so a deleted name is consumed permanently. Proven behaviourally
-  by suite assertion C9b (`23505` on `products_tenant_name_key`). The fix is a migration
-  and needs approval.
-- **(b)** May `product_variants.unit_price` be edited in place with no price-history
-  table? That is **BLOCKER-003** territory.
-- **(c)** Confirm PostgREST + RLS as the write mechanism.
+- **(a)** ~~Does soft-delete free a natural key?~~ **RESOLVED 2026-08-14.** All five unique indexes are now partial on `deleted_at IS NULL`. A deleted entity's name/SKU is freed for re-use. The application layer must detect `23505`, query for a soft-deleted row with the same key, and surface a role-gated restore prompt. Full contract in `docs/SOFT-DELETE-AND-RETENTION.md` §38.
+- **(b)** May `product_variants.unit_price` be edited in place with no price-history table? That is **BLOCKER-003** territory — still OPEN.
+- **(c)** Confirm PostgREST + RLS as the write mechanism — still OPEN.
+
+**P4.1b unblocks when (b) and (c) are resolved.** (a) is done.
 
 ---
 
@@ -238,5 +187,10 @@ Its prerequisite set is now unambiguously **P2 + P4.1**, and the catalog read pa
 
 Also safe in parallel: **P11.1** CI pipeline (which would close TD-010/TD-011), **P6.1**
 Edge Function scaffold.
+
+**Also required during P4.1b:** implement `restore_catalog_entity` RPC (specified in
+`docs/SOFT-DELETE-AND-RETENTION.md` §38) and the `CatalogEntityDeletedError` /
+`DuplicateNameError` types in `packages/api/errors/index.ts`. The 23505 catch-and-check
+pattern must be in place before catalog writes go live.
 
 A task becomes COMPLETE only with executed-command evidence. Never on assertion.

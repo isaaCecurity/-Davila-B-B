@@ -852,3 +852,115 @@ Offline devices never bypass lifecycle rules.
 Database/RLS/server enforcement is authoritative. The React Native UI only exposes operations the user is permitted to perform.
 
 This file is the source of truth for repository-wide soft-delete, archive, retention, restoration, and permanent-deletion behavior.
+
+## 38. Catalog entity restore UX — owner decision 2026-08-14
+
+### What changed in the database
+
+The five unique indexes on catalog tables that previously consumed soft-deleted names permanently have been replaced with **partial unique indexes** scoped to `deleted_at IS NULL`:
+
+| Table | Index | Uniqueness scope |
+|---|---|---|
+| `products` | `products_tenant_name_key` | `(tenant_id, name) WHERE deleted_at IS NULL` |
+| `ingredients` | `ingredients_tenant_name_key` | `(tenant_id, name) WHERE deleted_at IS NULL` |
+| `product_categories` | `product_categories_tenant_name_key` | `(tenant_id, name) WHERE deleted_at IS NULL` |
+| `product_variants` | `product_variants_tenant_sku_key` | `(tenant_id, sku) WHERE deleted_at IS NULL` |
+| `recipes` | `recipes_one_active_per_variant` | `(tenant_id, product_variant_id) WHERE is_active AND deleted_at IS NULL` |
+
+A deleted entity's name or SKU is now free to be reused. The DB will only raise `23505` when a **live** row already holds that name/SKU.
+
+### Business rule
+
+When a manager or supervisor tries to create a catalog entity (product, ingredient, category, product variant) whose name or SKU already belongs to a **soft-deleted** row, the system must not silently fail or show a generic error. It must:
+
+1. Detect that the `23505` conflict is caused by a soft-deleted row (not a live duplicate).
+2. Surface a specific alert to the user.
+3. Gate the restore action on role.
+
+### Application implementation contract
+
+**Where this applies:** `products`, `ingredients`, `product_categories`, `product_variants` create/write paths. (Recipes are created through the product variant flow, not directly by name.)
+
+**Error detection pattern (service layer):**
+
+```typescript
+// In the catalog write service, catch a 23505 from PostgREST and check for a deleted row
+try {
+  await supabase.from('products').insert({ tenant_id, name, ... });
+} catch (error) {
+  if (isPostgrestError(error, '23505')) {
+    const { data: deleted } = await supabase
+      .from('products')
+      .select('id, name, deleted_at, deleted_by')
+      .eq('tenant_id', tenantId)
+      .eq('name', name)
+      .not('deleted_at', 'is', null)
+      .maybeSingle();
+
+    if (deleted) {
+      throw new CatalogEntityDeletedError({ entity: 'product', id: deleted.id, name: deleted.name });
+    }
+    // No deleted row found → genuine live duplicate → surface as DuplicateNameError
+    throw new DuplicateNameError({ entity: 'product', name });
+  }
+  throw error;
+}
+```
+
+**UI behaviour, by role:**
+
+| Caller role | What the UI shows |
+|---|---|
+| `owner`, `admin`, `branch_manager` | Alert: `"[Name] already exists but was previously deleted. Would you like to restore it?"` with a **Restore** button. |
+| `cashier`, `baker`, `driver`, `supervisor` | Alert: `"[Name] already exists but was previously deleted. Contact your Manager to restore it."` No restore button. |
+
+**Restore action (manager/admin/owner only):**
+
+```typescript
+// Restore = clear soft-delete fields + write audit event
+await supabase.rpc('restore_catalog_entity', {
+  p_entity_type: 'product',  // 'product' | 'ingredient' | 'product_category' | 'product_variant'
+  p_entity_id: deletedRow.id,
+});
+```
+
+This RPC does not exist yet — it must be built as part of P4.1b. Its contract:
+
+- `SECURITY DEFINER`, `SET search_path TO 'public'`
+- Verify caller has `owner`, `admin`, or `branch_manager` role (`has_role(...)`)
+- Verify `tenant_id = current_tenant_id()` — never trust client-supplied tenant
+- Verify `deleted_at IS NOT NULL` — reject if already active
+- Set `deleted_at = NULL`, `deleted_by = NULL` atomically
+- Write an `audit_log` entry: `operation = 'CATALOG_ENTITY_RESTORED'`, include `entity_type`, `entity_id`, actor
+- Return the restored row
+- Revoke EXECUTE from PUBLIC and `anon`; grant only to `authenticated`
+
+**Error type definitions (add to `packages/api/errors/index.ts`):**
+
+```typescript
+export class CatalogEntityDeletedError extends BakeflowApiError {
+  readonly code = 'catalog_entity_deleted';
+  constructor(public readonly meta: { entity: string; id: string; name: string }) {
+    super(`${meta.entity} "${meta.name}" exists but is soft-deleted`);
+  }
+}
+
+export class DuplicateNameError extends BakeflowApiError {
+  readonly code = 'duplicate_name';
+  constructor(public readonly meta: { entity: string; name: string }) {
+    super(`${meta.entity} "${meta.name}" already exists`);
+  }
+}
+```
+
+**Query cache invalidation after restore:**
+
+After a successful restore, invalidate the TanStack Query cache keys for that entity type's list query so the restored entity immediately appears in the catalog list without a manual refresh.
+
+### What Claude Code must NOT do
+
+- Do not show a generic "Name already taken" error when a deleted row caused the conflict.
+- Do not allow `cashier`, `baker`, `driver`, or `supervisor` roles to initiate a restore.
+- Do not restore by directly calling `UPDATE products SET deleted_at = NULL` from the client — route through the `restore_catalog_entity` RPC.
+- Do not skip the `audit_log` entry on restore.
+- Do not re-grant `EXECUTE` on `restore_catalog_entity` to `anon`.

@@ -317,100 +317,47 @@ the live database before the outage; the behavioural assertions were not.
 
 ---
 
-## 2026-08-11 · P11.1 CI — diagnosed and fixed; lint/typecheck now actually run
+## 2026-08-14 · Security hardening + ticket lifecycle fix + catalog restore UX
 
-**The failing check was never about production code.** Every CI run since the workflow
-was added failed at the **install** step, so `Typecheck` and `Lint` were *skipped* and had
-**never executed remotely** — the red mark was an install failure wearing the job's name.
+**Scope:** Four migrations applied to live project `tvfyxpafbpnkneujcnvr`. Zero application code changes. Zero rows affected (live DB holds zero business data).
 
-**Evidence gathered before changing anything:**
+### Migrations applied
+
+| Migration name | What it does |
+|---|---|
+| `drop_prevent_submitted_ticket_update_and_harden_guard` | Drops trigger + function `prevent_submitted_ticket_update`; adds `subtotal_amount` freeze to `guard_ticket_status_transition` |
+| `revoke_anon_execute_on_internal_functions` | Revokes anon/authenticated EXECUTE on `bump_cash_session_revision`, `guard_daily_financial_audit_mutation`; revokes anon on `archive_ticket` and `has_permission` |
+| `revoke_public_execute_bump_cash_session_revision` | Revokes PUBLIC grant on `bump_cash_session_revision` (the previous revoke targeted role directly; PUBLIC grant requires a separate revoke) |
+| `partial_unique_indexes_for_soft_delete_restore` | Replaces 4 UNIQUE constraints + 1 plain index with partial unique indexes scoped to `deleted_at IS NULL` on products, ingredients, product_categories, product_variants, recipes |
+| `index_permanent_deletion_challenges_tenant_id` | Adds missing FK-covering index on `permanent_deletion_challenges.tenant_id` |
+
+### Verified live after each migration
 
 | Check | Result |
 |---|---|
-| Was `ci.yml` modified after it was written? | `git diff 3b991e8d HEAD -- .github/workflows/ci.yml` → empty |
-| Which step failed? | Runs 31468310603 … 31690359337: all `FAILURE` on `Install`, `SKIPPED` on Typecheck/Lint |
-| Lockfile out of sync? | **Excluded** — `corepack npm ci --dry-run` locally → exit 0 |
-| Corepack broken locally? | No — `corepack npm --version` → 10.8.2 on Node 24 |
-| pytest job | Passed on every run |
+| `prevent_submitted_ticket_update` trigger exists | 0 rows — dropped |
+| `prevent_submitted_ticket_update` function exists | 0 rows — dropped |
+| `bump_cash_session_revision` anon-callable | NO |
+| `guard_daily_financial_audit_mutation` anon-callable | NO |
+| `archive_ticket` anon-callable | NO |
+| `has_permission` anon-callable | NO |
+| All 5 partial indexes: `WHERE (deleted_at IS NULL)` | Confirmed in `pg_indexes.indexdef` |
+| `idx_permanent_deletion_challenges_tenant_id` exists | Confirmed |
 
-Job logs were not readable (`403 Must have admin rights`), so the cause was isolated by
-elimination and then by two empirical CI runs.
+### BLOCKER-005 — RESOLVED
 
-**Classification: CI workflow problem** (our repository configuration), in two parts:
+`prevent_submitted_ticket_update` was the root cause of BLOCKER-005 and BLOCKER-009. Its alphabetical trigger order caused it to fire before `guard_ticket_status_transition`, blocking every onward transition from `submitted`. The trigger and function have been removed. `guard_ticket_status_transition` is now the sole state-machine authority and guards `subtotal_amount` correctly. Every ticket status transition is now reachable.
 
-1. `corepack npm ci` without a prior `corepack enable` fails on the runner. Enabling
-   Corepack explicitly fixed that step — run 31822022702 shows it green.
-2. `corepack enable` does **not** win the PATH race: measured on the runner, bare
-   `npm --version` still reports the version Node 22.13 ships, not 10.8.2. The assertion
-   added in the first fix caught this rather than letting a mismatched npm resolve the
-   lockfile. The pinned npm is now invoked through `corepack npm` explicitly.
+`total_amount` is `GENERATED ALWAYS AS ((subtotal_amount - discount_amount) + tax_amount) STORED` — it cannot be written directly and needs no separate guard.
 
-**Result — run 31822495609, all green:**
+### BLOCKER-010a — RESOLVED
 
-```
-Enable Corepack and activate the pinned npm   SUCCESS
-Verify the pinned npm resolves                SUCCESS
-Install (pinned npm, ignore-scripts)          SUCCESS
-Typecheck                                     SUCCESS
-Lint                                          SUCCESS
-Spec coverage (pytest)                        SUCCESS
-```
+The five catalog unique indexes are now partial on `deleted_at IS NULL`. A soft-deleted entity's name/SKU is no longer permanently consumed. Application-layer restore UX is specified in `docs/SOFT-DELETE-AND-RETENTION.md` §38 and must be implemented as part of P4.1b.
 
-Nothing was weakened: `--max-warnings=0`, the npm pin, and `.npmrc ignore-scripts` are all
-unchanged. No production code was touched. This is also the first independent confirmation
-that the P4.1a/P4.2a/P4.2b packages pass lint and typecheck on a clean machine, which
-matters because the combined lint cannot run locally (TD-014).
+### TD-013 — RESOLVED
 
-**Still outstanding for P4.2b:** `tests/sql/inventory_write_rls.sql` remains **NOT
-EXECUTED**. The Supabase MCP server disconnected and now requires re-authentication, and
-`mcp.supabase.com` does not resolve. P4.2b stays **PARTIAL**.
+All anon-callable functions from the security audit are now closed. `archive_ticket` remains callable by `authenticated` (managers need it). The two trigger functions (`bump_cash_session_revision`, `guard_daily_financial_audit_mutation`) are now inaccessible to all client roles.
 
----
+### Remaining open items (unchanged)
 
-## 2026-08-11 · P4.3a — Production READ path (implemented, schema unverified)
-
-Written while the database was unreachable (Supabase MCP returns 401; `.mcp.json` correct,
-DNS resolves, OAuth outstanding). **Zero migrations.**
-
-**Production code:** `packages/types/production.ts`, `packages/validation/production.ts`,
-`packages/api/queries/production.ts`, plus three barrels. Reuses the established pattern
-throughout — shared read primitives, schema-derived projections, branded `Quantity`,
-`::text` on every NUMERIC.
-
-**Provenance, stated plainly:** types and schemas come from `SCHEMA-REFERENCE.md` §5 and
-`STATE-MACHINES.md` §2, **not** from a live read. That is a bounded risk rather than a
-guess — `SCHEMA-REFERENCE.md` has matched live exactly everywhere checked so far (catalog
-§2, inventory §4); the documents that proved wrong were `BACKEND_ROADMAP.md` and
-`API-CONTRACT.md`. It must still be verified before P4.3 is COMPLETE.
-
-**Paging differs from the ledger, deliberately.** `batch_number` is `UNIQUE (tenant_id,
-batch_number)`, so it totally orders the visible rows and a single-column cursor cannot
-skip a sibling. `stock_movements` needed a composite `(created_at, id)` cursor precisely
-because it had no such column.
-
-**No mutation was written.** `STATE-MACHINES.md` §2: completion is the single
-`complete_production_batch()` RPC and "must not be assembled from separate client calls" —
-a partial failure would leave stock consumed with no output movement. The signature will
-be read from the live database first, per the `adjust_stock()` precedent.
-
-**A real defect the static gates could not catch.** The projection initially reached for
-`.def.innerType` to see through `.refine()`. That is a zod 3 shape; it typechecked only
-because it went through an `as unknown as` cast, and would have handed `projectionFor` an
-`undefined`, yielding an empty column list and breaking every production read at runtime.
-Executed against the installed zod 4.1.12:
-
-```
-z.object({...}).refine(...).shape         -> id,planned_quantity,status
-z.object({...}).refine(...).def.innerType -> undefined
-```
-
-Fixed to use `.shape` directly, then the end-to-end projection was re-probed: **15 batch
-columns, 9 line columns, every NUMERIC `::text` cast, no uncast numeric leaked.**
-
-| Command | Result |
-|---|---|
-| `npm run typecheck` | exit 0 |
-| `eslint` (production files) `--max-warnings=0` | exit 0 |
-| **CI run on 3c5f7275** | **SUCCESS** — full lint + typecheck on a Linux runner |
-| zod projection probe | 15 / 9 columns, all casts present |
-| Live schema verification | **NOT DONE** — database unreachable |
+BLOCKER-001, BLOCKER-002, BLOCKER-003, BLOCKER-004, BLOCKER-006, BLOCKER-007, BLOCKER-009 (archive_ticket `ARCHIVE` operation_type issue — separate from BLOCKER-005), BLOCKER-010b, BLOCKER-010c all remain OPEN and are unaffected by this session.

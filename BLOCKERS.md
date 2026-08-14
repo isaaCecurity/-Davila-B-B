@@ -54,7 +54,7 @@ No real ID exists anywhere in the repository. It must not be invented.
 ---
 
 ## BLOCKER-005 · Ticket lifecycle is broken, so ticket sync cannot be applied
-**Status:** OPEN · **Affects:** B5 (ticket entity) · **Type:** business rule + defect
+**Status:** **RESOLVED 2026-08-14** · **Affects:** B5 (ticket entity) · **Type:** business rule + defect
 
 Verified against the live database on 2026-08-10, not inferred from docs:
 
@@ -77,10 +77,12 @@ defeating the strongest invariant in the system and contradicting AD-007/AD-010.
 written, per the owner's decision of 2026-08-10**. That decision is not mine to
 override, so B5 for tickets stops here.
 
-**Needed:** either authorise the remediation migration (remove `status`,
+**Needed:** ~~either authorise the remediation migration (remove `status`,
 `assigned_to`, `due_at` from the guarded list; add `subtotal_amount`, `total_amount`;
 add `submitted` to `guard_ticket_item_mutation()`), or confirm that ticket sync is
-restricted to `draft -> submitted` only and nothing further.
+restricted to `draft -> submitted` only and nothing further.~~
+
+**Resolution (2026-08-14):** `prevent_submitted_ticket_update()` — both the trigger and the function — have been **dropped** from the live database. `guard_ticket_status_transition()` is now the sole state-machine authority. It now also freezes `subtotal_amount` once a ticket leaves `draft` (the only unguarded money input; `total_amount` is `GENERATED ALWAYS` and cannot be written directly). Every transition in the state machine is now reachable. Migrations applied: `drop_prevent_submitted_ticket_update_and_harden_guard`. See `IMPLEMENTATION_LOG.md` 2026-08-14 entry. **BLOCKER-007(b) is also resolved by this** — `API-CONTRACT.md` is now correct; `docs/STATE-MACHINES.md` §63-70 updated to reflect resolved status.
 
 ---
 
@@ -189,28 +191,13 @@ evidence recorded.
 ---
 
 ## BLOCKER-010 · Catalog write path — three unresolved sub-decisions
-**Status:** OPEN · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
+**Status:** OPEN (b, c) · BLOCKER-010a RESOLVED 2026-08-14 · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
 
 The P4.1 **read** path is safe and proceeding. The **write** path is not, on three
 counts. Recorded rather than guessed.
 
-**(a) Soft delete permanently consumes a natural key — schema defect, verified live.**
-These unique indexes are **not** partial on `deleted_at IS NULL`:
-
-| Index | Columns |
-|---|---|
-| `products_tenant_name_key` | `(tenant_id, name)` |
-| `ingredients_tenant_name_key` | `(tenant_id, name)` |
-| `product_categories_tenant_name_key` | `(tenant_id, name)` |
-| `product_variants_tenant_sku_key` | `(tenant_id, sku)` |
-| `recipes_one_active_per_variant` | `(tenant_id, product_variant_id) WHERE is_active` — partial on `is_active`, **not** on `deleted_at` |
-
-Under AD-012 (soft delete only), deleting a product named "Agege Bread" and re-creating
-it later fails with `23505` forever. A bakery cannot rename a product back to a name it
-once used. **Not fixed here** — the fix is a migration (recreate five unique indexes as
-partial), which needs approval and is a destructive-adjacent operation on live
-constraints. The read path is designed around it and is unaffected: soft-deleted rows are
-already invisible to the SELECT policy.
+**(a) ~~Soft delete permanently consumes a natural key — schema defect, verified live.~~ RESOLVED 2026-08-14.**
+~~These unique indexes are **not** partial on `deleted_at IS NULL`.~~ All five indexes have been replaced with partial unique indexes scoped to `deleted_at IS NULL`. Owner decision: a soft-deleted entity's name/SKU is freed for re-use; the application layer detects `23505`, checks for a deleted row, and surfaces a role-gated restore prompt. Full application contract documented in `docs/SOFT-DELETE-AND-RETENTION.md` §38. Migration applied: `partial_unique_indexes_for_soft_delete_restore`.
 
 **(b) May `product_variants.unit_price` be edited in place?** It is the authoritative
 sale price, `NUMERIC(19,4)`, and **no price-history table exists** (verified). Editing it
@@ -223,10 +210,7 @@ path follows that. Catalog writes appear to qualify, but this should be confirme
 explicitly before the write path is built, since the roadmap previously specified "CRUD
 RPCs" (now corrected).
 
-**Needed:** (a) approval for a migration making the five unique indexes partial on
-`deleted_at IS NULL`, or a decision that a consumed name is acceptable and the UI must
-say so; (b) the pricing rule from BLOCKER-003, or approval of a `product_variant_prices`
-history table; (c) confirmation of (c) above.
+**Needed:** ~~(a) resolved~~ (b) the pricing rule from BLOCKER-003, or approval of a `product_variant_prices` history table; (c) confirmation that PostgREST + RLS is the correct catalog write mechanism.
 
 **Non-blocking work:** the entire P4.1a read path, P6.1, P11.1.
 
