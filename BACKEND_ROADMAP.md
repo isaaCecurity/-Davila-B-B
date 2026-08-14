@@ -408,11 +408,16 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 **Write path stays BLOCKED**, on four independent grounds: the lifecycle RPC signatures have not been read from the live database; `draft → submitted` has no RPC at all (`API-CONTRACT.md` §2); `discount_amount`/`tax_amount` have no approved rules (**BLOCKER-003**); and **BLOCKER-009** leaves `cancelled → archived` unreachable.
 **Tests:** S1–S18 cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary.
 
-## P4.5 · Delivery — NOT_STARTED
-**Dependencies:** P4.4.
+## P4.5 · Delivery — READ PATH IMPLEMENTED / write path BLOCKED
+**Dependencies:** P4.4 (read path implemented 2026-08-14).
 **Schema:** `deliveries`.
 **Business rules:** `guard_delivery_transition()`; `ready → delivered` on the parent ticket hard-requires a verified `deliveries` row.
-**Completion gate:** delivery gate enforced in DB, not convention.
+
+**Read path delivered 2026-08-14:** `packages/types/delivery.ts`, `packages/validation/delivery.ts`, `packages/api/queries/delivery.ts` — `listDeliveries`, `getDeliveryById`, `getDeliveryForTicket`. Zero migrations. `deliveries` carries no `NUMERIC` column, so this is the one domain with no money-precision exposure and no `::text` cast.
+
+**Write path BLOCKED.** `failed → returned` and `in_transit → returned` each write a return stock movement, so under `STATE-MACHINES.md` universal rule 4 they must be single RPCs, and those signatures have not been read from the live database (**BLOCKER-011**).
+
+**Completion gate — delivery gate enforced in DB, not convention:** asserted by D5/D6/D7 in `tests/sql/delivery_read_rls.sql` (D5 refuses `ready → delivered` while the delivery is only `assigned`; D6 permits it once the delivery is `delivered`; D7 shows a pickup ticket skipping the gate). **NOT EXECUTED** — BLOCKER-011. P4.5 is IMPLEMENTED, not COMPLETE.
 
 ## P4.6 · Audit — COMPLETE (infrastructure) / NOT_STARTED (coverage)
 **Schema:** `audit_log`, `log_audit_event()` — exist and are used by invite acceptance.

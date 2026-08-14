@@ -36,3 +36,5 @@ export {
 } from './production';
 
 export { customerSchema, ticketItemSchema, ticketSchema } from './sales';
+
+export { deliverySchema } from './delivery';

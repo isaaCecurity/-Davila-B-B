@@ -100,3 +100,11 @@ export {
   areTicketItemsLocked,
   isTerminalTicketStatus,
 } from './sales';
+
+export type { Delivery, DeliveryStatus } from './delivery';
+export {
+  DELIVERY_STATUSES,
+  TERMINAL_DELIVERY_STATUSES,
+  isDeliveryVerified,
+  isTerminalDeliveryStatus,
+} from './delivery';

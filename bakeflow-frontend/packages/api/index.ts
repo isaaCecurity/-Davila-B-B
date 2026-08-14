@@ -98,3 +98,14 @@ export {
   type CustomerFilters,
   type TicketFilters,
 } from './queries/sales';
+
+// P4.5 — the delivery READ path. No mutation: `failed -> returned` and
+// `in_transit -> returned` each write a return stock movement, so under STATE-MACHINES.md
+// universal rule 4 they are RPCs by construction, and their signatures have not been read
+// from the live database (BLOCKER-011).
+export {
+  getDeliveryById,
+  getDeliveryForTicket,
+  listDeliveries,
+  type DeliveryFilters,
+} from './queries/delivery';

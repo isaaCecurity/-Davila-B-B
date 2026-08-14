@@ -460,3 +460,52 @@ projection is 25 columns.
 
 **P4.4 is IMPLEMENTED, not COMPLETE.** Every behavioural claim above rests on the SQL suite,
 which has not run.
+
+---
+
+## 2026-08-14 · P4.5 — Delivery READ path
+
+**Scope:** three new files, three barrels touched, one new SQL suite. **Zero migrations.**
+No mutation added.
+
+### Production code
+
+| File | Change |
+|---|---|
+| `packages/types/delivery.ts` | **new**, 129 lines — `Delivery`, the 6-state model, `isDeliveryVerified` |
+| `packages/validation/delivery.ts` | **new**, 74 lines |
+| `packages/api/queries/delivery.ts` | **new**, 189 lines — `listDeliveries`, `getDeliveryById`, `getDeliveryForTicket` |
+| `tests/sql/delivery_read_rls.sql` | **new**, D1–D10 — **NOT EXECUTED** |
+
+### Three decisions worth the record
+
+**1. `failed` is not terminal.** Its exit is `returned`, and that hop writes a return stock
+movement. `OPEN_DELIVERY_STATUSES` therefore includes `failed`, and the `openOnly` filter is
+offered as a flag rather than left to callers — a dispatch board that filtered `failed` out
+would drop exactly the deliveries someone still has to act on.
+
+**2. The list orders on `created_at`, not `scheduled_at`.** `scheduled_at` is nullable. An
+unscheduled delivery would sort into a NULL group whose position depends on
+`NULLS FIRST`/`LAST`, and a keyset comparison against NULL yields NULL — which reads as
+"no more rows" and truncates the list with no error. The composite `(created_at, id)` cursor
+is used for the same reason as tickets and the ledger.
+
+**3. The `proof_url` OR `recipient_name` rule is deliberately NOT in the schema.** §3 states
+it, but as a *transition* precondition checked at the `in_transit → delivered` hop, not as a
+table CHECK. A delivered row can later lose its `proof_url` — an expiring storage object, a
+retention job — and a reader enforcing it would then hide a completed delivery entirely.
+`failure_reason` on `status = 'failed'` **is** refined, because that one is a standing
+invariant. Blurring the two is the specific mistake avoided here.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck --workspace apps/mobile` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| zod probe (executed, zod 4.1.12) | 16 columns, 0 `::text` (correct — no NUMERIC column exists); `failed` without a reason rejected; `delivered` without proof or name **accepted**, confirming decision 3; unknown status rejected. Probe deleted. |
+| `tests/sql/delivery_read_rls.sql` | **NOT EXECUTED** — BLOCKER-011 |
+
+**P4.5 is IMPLEMENTED, not COMPLETE.** D5/D6/D7 are the roadmap's stated completion gate —
+that the `ready → delivered` rule is enforced by the database rather than by convention —
+and they have not run.
