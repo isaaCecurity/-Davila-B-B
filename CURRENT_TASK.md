@@ -1,6 +1,47 @@
 # BakeFlow — Current Task
 
 ```
+TASK: P4.3a — Production READ path
+STATUS: IMPLEMENTED (unverified against live schema)
+OWNER: claude
+PREREQS: P4.1a, P4.2a (implemented)
+EVIDENCE: npm run typecheck -> exit 0
+          eslint (production files) --max-warnings=0 -> exit 0
+          CI run 3c5f7275 -> SUCCESS (full lint + typecheck on a Linux runner)
+          zod projection probe -> 15 batch cols / 9 line cols, every NUMERIC ::text cast
+```
+
+**PROVENANCE WARNING.** Unlike catalog and inventory, these types/schemas were written
+from `SCHEMA-REFERENCE.md` §5 and `STATE-MACHINES.md` §2, **not** from a live schema read
+— the database was unreachable. Verify against `information_schema.columns` and
+`pg_constraint` before P4.3 is marked COMPLETE. Treat any mismatch as the schema being
+right and the code being wrong.
+
+**No batch mutation exists.** `STATE-MACHINES.md` §2 requires completion to be the single
+`complete_production_batch()` RPC and explicitly forbids assembling it from client calls
+(a partial failure would consume stock with no output recorded). That signature will be
+read from the live database before P4.3b is written.
+
+**Defect caught by runtime probe, not by the gates.** The projection first reached for
+`.def.innerType` to see through `.refine()` — a zod 3 shape. It typechecked only because
+of an `as unknown as` cast, and would have produced an `undefined` shape and an empty
+column list, breaking every production read at runtime. Executed against zod 4.1.12:
+`.refine(...).shape` resolves directly; `.def.innerType` is `undefined`.
+
+---
+
+## Blocked: P4.2b behavioural verification
+
+`tests/sql/inventory_write_rls.sql` is still **NOT EXECUTED**. The Supabase MCP server
+returns **HTTP 401 Unauthorized** — `.mcp.json` is correct and DNS now resolves, so the
+only thing missing is the OAuth authorization, which needs an interactive session
+(`/mcp`). P4.2b stays PARTIAL until the suite runs.
+
+---
+
+## Previous task — P4.2b Inventory WRITE path (PARTIAL)
+
+```
 TASK: P4.2b — Inventory WRITE path
 STATUS: PARTIAL — production code complete; behavioural suite NOT executed
 OWNER: claude

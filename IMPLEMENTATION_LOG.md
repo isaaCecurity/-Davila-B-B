@@ -364,3 +364,53 @@ matters because the combined lint cannot run locally (TD-014).
 **Still outstanding for P4.2b:** `tests/sql/inventory_write_rls.sql` remains **NOT
 EXECUTED**. The Supabase MCP server disconnected and now requires re-authentication, and
 `mcp.supabase.com` does not resolve. P4.2b stays **PARTIAL**.
+
+---
+
+## 2026-08-11 · P4.3a — Production READ path (implemented, schema unverified)
+
+Written while the database was unreachable (Supabase MCP returns 401; `.mcp.json` correct,
+DNS resolves, OAuth outstanding). **Zero migrations.**
+
+**Production code:** `packages/types/production.ts`, `packages/validation/production.ts`,
+`packages/api/queries/production.ts`, plus three barrels. Reuses the established pattern
+throughout — shared read primitives, schema-derived projections, branded `Quantity`,
+`::text` on every NUMERIC.
+
+**Provenance, stated plainly:** types and schemas come from `SCHEMA-REFERENCE.md` §5 and
+`STATE-MACHINES.md` §2, **not** from a live read. That is a bounded risk rather than a
+guess — `SCHEMA-REFERENCE.md` has matched live exactly everywhere checked so far (catalog
+§2, inventory §4); the documents that proved wrong were `BACKEND_ROADMAP.md` and
+`API-CONTRACT.md`. It must still be verified before P4.3 is COMPLETE.
+
+**Paging differs from the ledger, deliberately.** `batch_number` is `UNIQUE (tenant_id,
+batch_number)`, so it totally orders the visible rows and a single-column cursor cannot
+skip a sibling. `stock_movements` needed a composite `(created_at, id)` cursor precisely
+because it had no such column.
+
+**No mutation was written.** `STATE-MACHINES.md` §2: completion is the single
+`complete_production_batch()` RPC and "must not be assembled from separate client calls" —
+a partial failure would leave stock consumed with no output movement. The signature will
+be read from the live database first, per the `adjust_stock()` precedent.
+
+**A real defect the static gates could not catch.** The projection initially reached for
+`.def.innerType` to see through `.refine()`. That is a zod 3 shape; it typechecked only
+because it went through an `as unknown as` cast, and would have handed `projectionFor` an
+`undefined`, yielding an empty column list and breaking every production read at runtime.
+Executed against the installed zod 4.1.12:
+
+```
+z.object({...}).refine(...).shape         -> id,planned_quantity,status
+z.object({...}).refine(...).def.innerType -> undefined
+```
+
+Fixed to use `.shape` directly, then the end-to-end projection was re-probed: **15 batch
+columns, 9 line columns, every NUMERIC `::text` cast, no uncast numeric leaked.**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `eslint` (production files) `--max-warnings=0` | exit 0 |
+| **CI run on 3c5f7275** | **SUCCESS** — full lint + typecheck on a Linux runner |
+| zod projection probe | 15 / 9 columns, all casts present |
+| Live schema verification | **NOT DONE** — database unreachable |
