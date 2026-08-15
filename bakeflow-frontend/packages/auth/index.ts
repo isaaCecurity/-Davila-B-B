@@ -52,103 +52,21 @@ import {
 } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 
+import { createChunkedStorage } from './chunked-storage';
+
 /* -------------------------------------------------------------------------- */
-/* Chunked SecureStore adapter                                                 */
+/* Session storage                                                             */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Well under SecureStore's ~2048-byte Android limit. The margin covers the key name and
- * the platform's own encoding overhead, neither of which counts against the value in a
- * way this code can measure portably.
- */
-const CHUNK_SIZE = 1536;
-
-/** SecureStore keys must match `[A-Za-z0-9._-]+`; Supabase's own keys contain none of the
- *  characters that would break that, but it is enforced rather than assumed. */
-function sanitize(key: string): string {
-  return key.replace(/[^A-Za-z0-9._-]/g, '_');
-}
-
-const countKey = (key: string): string => `${sanitize(key)}.n`;
-const chunkKey = (key: string, index: number): string => `${sanitize(key)}.${index}`;
-
-async function readChunkCount(key: string): Promise<number> {
-  const raw = await SecureStore.getItemAsync(countKey(key));
-  if (raw === null) return 0;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
-}
-
-/**
- * Remove every chunk of a key.
+ * `SupportedStorage`, backed by the platform keystore via the chunking logic in
+ * `./chunked-storage` (which is backend-injected so it can be verified under Node — this
+ * module cannot be, because `expo-secure-store` pulls in React Native).
  *
- * Takes the count explicitly rather than re-reading it, because it is called *before* a
- * write to clear a previous, possibly longer, value. Deleting only as many chunks as the
- * new value needs would leave orphaned tail chunks that a later read would concatenate
- * into a corrupt session.
+ * SecureStore is the Android Keystore and the iOS Keychain: OS-managed, and hardware-backed
+ * where the device supports it. See the AD-014 note at the top of this file.
  */
-async function clearChunks(key: string, count: number): Promise<void> {
-  const deletions: Promise<void>[] = [SecureStore.deleteItemAsync(countKey(key))];
-  for (let i = 0; i < count; i += 1) {
-    deletions.push(SecureStore.deleteItemAsync(chunkKey(key, i)));
-  }
-  await Promise.all(deletions);
-}
-
-/**
- * `SupportedStorage`, backed by the platform keystore.
- *
- * Every method swallows nothing: a SecureStore failure on read returns `null` (treated by
- * supabase-js as "no session", which correctly lands the user on sign-in) but a failure on
- * **write** propagates, because silently failing to persist a session produces an app that
- * appears signed in until the next cold start.
- */
-export const secureSessionStorage: SupportedStorage = {
-  async getItem(key: string): Promise<string | null> {
-    try {
-      const count = await readChunkCount(key);
-      if (count === 0) return null;
-      const parts: string[] = [];
-      for (let i = 0; i < count; i += 1) {
-        const part = await SecureStore.getItemAsync(chunkKey(key, i));
-        // A missing interior chunk means the store is torn — a half-written session is
-        // worse than none, because supabase-js would try to parse it and could end up
-        // with a valid-looking access token and no refresh token.
-        if (part === null) return null;
-        parts.push(part);
-      }
-      return parts.join('');
-    } catch {
-      return null;
-    }
-  },
-
-  async setItem(key: string, value: string): Promise<void> {
-    const previous = await readChunkCount(key);
-    await clearChunks(key, previous);
-
-    const chunks: string[] = [];
-    for (let i = 0; i < value.length; i += CHUNK_SIZE) {
-      chunks.push(value.slice(i, i + CHUNK_SIZE));
-    }
-    for (let i = 0; i < chunks.length; i += 1) {
-      // `chunks[i]` is provably defined; the non-null assertion is avoided because
-      // `noUncheckedIndexedAccess` is on and an assertion here would be the only one in
-      // the package.
-      const chunk = chunks[i] ?? '';
-      await SecureStore.setItemAsync(chunkKey(key, i), chunk);
-    }
-    // The count is written LAST, on purpose. It is the commit point: if the process dies
-    // midway through the loop above, no count exists (or the old one was already deleted),
-    // so `getItem` reports no session rather than reassembling a truncated one.
-    await SecureStore.setItemAsync(countKey(key), String(chunks.length));
-  },
-
-  async removeItem(key: string): Promise<void> {
-    await clearChunks(key, await readChunkCount(key));
-  },
-};
-
+export const secureSessionStorage: SupportedStorage = createChunkedStorage(SecureStore);
 /* -------------------------------------------------------------------------- */
 /* Client                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -240,4 +158,6 @@ export async function setActiveOrganization(tenantId: string): Promise<Session> 
 // plain Node. Re-exported here so callers still have one auth entry point.
 export { activeTenantIdFromSession, decodeJwtPayload, rolesFromSession } from './claims';
 export type { SessionLike } from './claims';
+export { CHUNK_SIZE, createChunkedStorage } from './chunked-storage';
+export type { ChunkedStorage, KeyValueBackend } from './chunked-storage';
 export type { Session } from '@supabase/supabase-js';

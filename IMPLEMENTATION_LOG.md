@@ -728,3 +728,54 @@ the double conversion the whole precision strategy exists to prevent. Prices ren
 
 `scripts/` is outside the root ESLint config's scope and is therefore unlinted — noted, not
 fixed, to avoid reconfiguring lint scope alongside a feature change.
+
+---
+
+## 2026-08-15 · Signed-in smoke test — BLOCKER-014 found
+
+**Zero migrations.** Scratch DML fixtures only (one auth user, three organizations, a small
+catalog), created to make a real signed-in run possible and left in place for re-runs.
+
+### The finding
+
+A real sign-in returns a JWT with **no `tenant_id` claim and no `roles` claim** — not null,
+absent. `current_tenant_id()` is `auth.jwt() ->> 'tenant_id'`, so every tenant-scoped table
+returns zero rows for every authenticated user. The app cannot function.
+
+`custom_access_token_hook` exists, `supabase_auth_admin` holds EXECUTE and schema USAGE, and
+the `*_auth_hook_read` policies are present. Auth logs for the smoke sign-in show clean
+`200`s with no hook invocation and no hook error — a configured-but-failing hook would log
+one. The hook is not registered in the project's Auth settings. **BLOCKER-014**, project
+configuration, not code.
+
+Every SQL suite to date sets `request.jwt.claims` by hand, simulating the hook's output. So
+they proved the policies correct *given* a claim and never that one is minted. This is the
+gap the smoke test existed to close, and it closed it.
+
+### What the smoke test did prove (20/30)
+
+Sign-in; the organization switcher loading with a null claim and showing exactly the two
+memberships while hiding the third organization; own roles readable; an empty catalog rather
+than an error with no active org; `set_active_organization` succeeding for a member and
+**refused** for a non-member (`not a member of this organization`); the RPC alone leaving
+the old token unchanged; `refreshSession`; sign-out; and post-sign-out reads denied at the
+GRANT level (`42501`), not merely filtered.
+
+### BLOCKER-013 — implementation half resolved
+
+Chunking moved to `packages/auth/chunked-storage.ts`, backend-injected so Node can exercise
+it. Eight new executed checks: a >2KB session round-trips exactly, it really is split, every
+chunk is within the SecureStore limit, a shorter overwrite leaves no orphaned tail, a torn
+write reads as *no* session rather than a truncated one, and removal clears everything. Only
+the AD-014 amendment remains, and that is a decision.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0** |
+| `npm run verify:cache` | **30/30 passed** (11 cache + 6 claim + 5 money + 8 storage) |
+| `pytest -q` | **12 passed** |
+| `scripts/smoke-signed-in.mjs` | **20/30** — 10 failures all downstream of BLOCKER-014 |

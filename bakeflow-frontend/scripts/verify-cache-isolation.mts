@@ -17,6 +17,7 @@
  */
 
 import { activeTenantIdFromSession, rolesFromSession } from '../packages/auth/claims';
+import { CHUNK_SIZE, createChunkedStorage } from '../packages/auth/chunked-storage';
 import { formatNaira, formatQuantity } from '../packages/utils/money';
 import { QueryClient } from '@tanstack/react-query';
 
@@ -173,6 +174,75 @@ check(
   formatQuantity('2.5000' as never) === '2.5000',
   formatQuantity('2.5000' as never),
 );
+
+
+/* --------------------------------------------------------------------------
+ * Chunked session storage (BLOCKER-013's implementation half).
+ *
+ * SecureStore rejects values over ~2KB on Android and a Supabase session exceeds that, so
+ * the session is split across numbered keys with the count written LAST as the commit
+ * point. The failure modes worth proving are the ones that produce a *plausible but wrong*
+ * session: an orphaned tail chunk from a longer previous value, and a torn write.
+ * ------------------------------------------------------------------------ */
+
+function memoryBackend() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    getItemAsync: (k: string) => Promise.resolve(store.get(k) ?? null),
+    setItemAsync: (k: string, v: string) => {
+      if (v.length > 2048) throw new Error(`SecureStore would reject ${v.length} bytes`);
+      store.set(k, v);
+      return Promise.resolve();
+    },
+    deleteItemAsync: (k: string) => {
+      store.delete(k);
+      return Promise.resolve();
+    },
+  };
+}
+
+const backend = memoryBackend();
+const storage = createChunkedStorage(backend);
+
+const bigSession = JSON.stringify({
+  access_token: 'x'.repeat(3000),
+  refresh_token: 'y'.repeat(600),
+  user: { id: USER },
+});
+
+await storage.setItem('bakeflow.session', bigSession);
+check(
+  'a >2KB session round-trips exactly',
+  (await storage.getItem('bakeflow.session')) === bigSession,
+);
+check(
+  'it was actually split (a single value would have been rejected)',
+  backend.store.size > 2,
+  `keys=${backend.store.size}`,
+);
+check(
+  'every stored chunk is within the SecureStore limit',
+  [...backend.store.values()].every((v) => v.length <= CHUNK_SIZE),
+);
+
+// A shorter value must not leave the previous tail readable.
+await storage.setItem('bakeflow.session', 'short');
+check('overwriting with a shorter value returns only the new value',
+  (await storage.getItem('bakeflow.session')) === 'short');
+check('no orphaned tail chunks remain', backend.store.size === 2, `keys=${backend.store.size}`);
+
+// A torn write (count present, an interior chunk missing) must read as absent.
+await storage.setItem('bakeflow.session', bigSession);
+backend.store.delete('bakeflow.session.1');
+check('a torn write reads as NO session rather than a truncated one',
+  (await storage.getItem('bakeflow.session')) === null);
+
+await storage.setItem('bakeflow.session', bigSession);
+await storage.removeItem('bakeflow.session');
+check('removeItem clears every chunk and the count', backend.store.size === 0,
+  `keys=${backend.store.size}`);
+check('reading a missing key yields null', (await storage.getItem('nope')) === null);
 
 console.log(failures === 0 ? '\nAll checks passed.' : '\n' + failures + ' FAILED');
 process.exit(failures === 0 ? 0 : 1);

@@ -1,5 +1,51 @@
 # BakeFlow — Current Task
 
+## 🛑 BLOCKER-014 — no JWT carries `tenant_id`; the tenant model is inert (2026-08-15)
+
+The first **signed-in** smoke test against the live project found that a real sign-in
+returns a token with **no `tenant_id` and no `roles` claim at all**. Every RLS policy reads
+`current_tenant_id()` = `auth.jwt() ->> 'tenant_id'`, so **every tenant-scoped table returns
+zero rows for every authenticated user.**
+
+The database side is ready — the hook function exists, `supabase_auth_admin` holds EXECUTE
+and schema USAGE, the `*_auth_hook_read` policies are in place — and the auth logs show
+clean 200s with no hook invocation and no hook error. **The hook is not registered in the
+project's Auth configuration.**
+
+**Fix (project setting, not SQL, not reachable from here):** Supabase dashboard →
+Authentication → Hooks → *Customize Access Token (JWT) Claims* → `public.custom_access_token_hook`.
+
+**Why nothing caught it earlier:** every SQL suite sets the claim by hand with
+`set_config('request.jwt.claims', …)`, which simulates the hook's output. They proved the
+policies are right *given* a claim; nothing proved a claim is ever minted.
+
+### Smoke test — 20/30 passing, all 10 failures downstream of the missing claim
+
+`node bakeflow-frontend/scripts/smoke-signed-in.mjs` · re-run it after enabling the hook.
+
+**Passing already:** sign-in; the organization list loading with a null claim (2 of 3
+visible, non-member hidden); own roles readable; catalog empty rather than erroring with no
+active org; `set_active_organization` succeeding for a member and **refused** for a
+non-member; the old token staying unchanged by the RPC; `refreshSession`; sign-out; and
+post-sign-out access denied at the GRANT level (42501).
+
+**Failing:** everything needing the claim — the refreshed token carrying tenant A, catalog
+contents, product detail, variants and prices, the switch to B.
+
+### Scratch fixtures left in place, deliberately
+
+`smoke.owner@bakeflow.test` (password `SmokeTest!2026`), organizations *Smoke Bakery A/B/C*
+and their catalog rows exist in the live project so the smoke test can be re-run the moment
+the hook is on. The database held **zero** business rows before this. **Remove them before
+production** — a known-password account must not outlive the checkpoint. Cleanup:
+
+```sql
+delete from auth.users where email = 'smoke.owner@bakeflow.test';
+delete from public.organizations where slug like 'smoke-bakery-%';
+```
+
+---
+
 ## ✅ P8.1 DELIVERED — sign in → choose bakery → catalog (2026-08-15)
 
 The first frontend vertical slice is implemented and gated. **Zero migrations, zero

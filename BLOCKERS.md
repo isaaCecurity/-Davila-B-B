@@ -338,7 +338,16 @@ unaffected and is verified.
 ---
 
 ## BLOCKER-013 · AD-014 specifies a cipher `expo-crypto` does not have
-**Status:** OPEN · **Affects:** P8.1 session storage, AD-014 · **Type:** architecture decision
+**Status:** OPEN — **implementation half resolved 2026-08-15**; only the AD amendment is outstanding.
+
+**Resolved in code:** the chunking logic moved to `packages/auth/chunked-storage.ts`,
+parameterised by its backend so it is verifiable under Node, and is now covered by eight
+executed checks — >2KB round-trip, actual splitting, every chunk within the SecureStore
+limit, no orphaned tail after a shorter overwrite, a torn write reading as *no* session
+rather than a truncated one, and full removal. The remaining question is purely the
+decision below.
+
+**Superseded status:** OPEN · **Affects:** P8.1 session storage, AD-014 · **Type:** architecture decision
 
 AD-014 (APPROVED) reads: *"AES-256-GCM via `expo-crypto`, key in SecureStore, ciphertext in
 `expo-file-system`. No AsyncStorage."*
@@ -362,6 +371,49 @@ both, and this avoids a hand-rolled cipher entirely. It is still **not the appro
 mechanism, or approve a real crypto dependency (`react-native-quick-crypto` or
 `expo-standard-web-crypto`) and the lockfile change it implies. Until then the current
 implementation stands and is recorded here rather than passed off as AD-014.
+
+---
+
+## BLOCKER-014 · The access-token hook is not enabled, so no JWT carries `tenant_id`
+**Status:** OPEN · **Affects:** EVERYTHING tenant-scoped — P2, P4.x, P8.1, P9.1 · **Type:** project configuration
+
+**Severity: the multi-tenant model is inert in production.** Discovered 2026-08-15 by the
+first signed-in smoke test against the live project.
+
+A real sign-in returns a JWT with **no `tenant_id` claim and no `roles` claim at all** —
+`undefined`, not `null`. Every RLS policy in the schema compares against
+`current_tenant_id()`, which is `auth.jwt() ->> 'tenant_id'`. With no claim, **every
+tenant-scoped table returns zero rows for every authenticated user, forever.**
+
+The database side is fully prepared, so this is a single missing setting rather than
+missing work:
+
+| Check | Result |
+|---|---|
+| `public.custom_access_token_hook(jsonb)` exists | yes |
+| `supabase_auth_admin` has EXECUTE on it | **true** |
+| `supabase_auth_admin` has USAGE on `public` | **true** |
+| `profiles` / `roles` / `user_roles` carry `*_auth_hook_read` policies for `supabase_auth_admin` | yes |
+| auth logs for the smoke sign-in | clean `200`s, **no hook invocation and no hook error** |
+
+A hook that were configured but failing would log an invocation error; there is none. The
+hook is simply not registered in the project's Auth configuration.
+
+**Why no test caught this.** Every SQL suite sets the claim by hand —
+`set_config('request.jwt.claims', json_build_object('tenant_id', …))` — which *simulates
+what the hook would have produced*. So the suites proved the policies are correct **given**
+a claim, and nothing ever proved a claim is minted. The gap was structural, not an
+oversight in any one suite.
+
+**Needed:** enable the hook in the Supabase dashboard —
+Authentication → Hooks → *Customize Access Token (JWT) Claims* → select
+`public.custom_access_token_hook`. It is a project setting, not SQL, and is not reachable
+through the MCP tools available here.
+
+**Verify with:** `node bakeflow-frontend/scripts/smoke-signed-in.mjs`. It fails 10 of 30
+checks today; all ten are downstream of the missing claim and should pass once the hook is
+on. The scratch fixtures it needs already exist (see the smoke-test note in
+`CURRENT_TASK.md`).
 
 ---
 
