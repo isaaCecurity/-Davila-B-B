@@ -63,6 +63,35 @@ check(
 );
 check('tenant_id is NOT in app_metadata (the P8.1 bug)', claims.app_metadata?.tenant_id === undefined);
 
+// One clear diagnosis instead of ten downstream failures. The claim being ABSENT (rather
+// than present-and-null) means GoTrue never ran the hook: the hook itself sets the key
+// unconditionally, to null when there is no active organization.
+if (!('tenant_id' in claims)) {
+  console.log(`
++----------------------------------------------------------------------------+
+| BLOCKER-014: the access-token hook is NOT being invoked by GoTrue.          |
+|                                                                            |
+| The JWT has no tenant_id key at all. The hook always sets it (null when no  |
+| organization is active), so an ABSENT key means the hook never ran -- not   |
+| that the user has no organization.                                          |
+|                                                                            |
+| The database side is verified correct:                                     |
+|   public.custom_access_token_hook(event jsonb), owner postgres,            |
+|   SECURITY DEFINER, EXECUTE granted to supabase_auth_admin, and calling it |
+|   directly returns the right tenant_id and roles.                          |
+|   pg_stat_statements shows 0 calls by supabase_auth_admin.                 |
+|                                                                            |
+| Fix in the dashboard -> Authentication -> Hooks:                           |
+|   * slot must be "Customize Access Token (JWT) Claims" (not Send SMS/Email)|
+|   * Postgres function: public.custom_access_token_hook                     |
+|   * equivalently uri = pg-functions://postgres/public/custom_access_token_hook
+|   * the toggle must be ENABLED and SAVED                                   |
+|                                                                            |
+| Every failure below this line is downstream of that one setting.           |
++----------------------------------------------------------------------------+
+`);
+}
+
 // ------------------------------------------------- organization switcher --
 // Must work with a null tenant claim; organizations_select keys off auth.uid().
 const orgs = await supabase

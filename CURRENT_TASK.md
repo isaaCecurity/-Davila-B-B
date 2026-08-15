@@ -13,7 +13,14 @@ clean 200s with no hook invocation and no hook error. **The hook is not register
 project's Auth configuration.**
 
 **Fix (project setting, not SQL, not reachable from here):** Supabase dashboard →
-Authentication → Hooks → *Customize Access Token (JWT) Claims* → `public.custom_access_token_hook`.
+Authentication → Hooks → *Customize Access Token (JWT) Claims* → `public.custom_access_token_hook`,
+**on project `tvfyxpafbpnkneujcnvr`**.
+
+**Re-checked after the hook was reported enabled — still not invoked.** `pg_stat_statements`
+shows **0** calls by `supabase_auth_admin` against 11 by `postgres`, across nine sign-ins.
+The function is correct in isolation and its grants/metadata match the docs exactly. Given
+that this session started with the connector pointed at a *different* Supabase account, the
+likeliest cause is the hook being enabled on the wrong project.
 
 **Why nothing caught it earlier:** every SQL suite sets the claim by hand with
 `set_config('request.jwt.claims', …)`, which simulates the hook's output. They proved the

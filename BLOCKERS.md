@@ -410,7 +410,34 @@ Authentication → Hooks → *Customize Access Token (JWT) Claims* → select
 `public.custom_access_token_hook`. It is a project setting, not SQL, and is not reachable
 through the MCP tools available here.
 
-**Verify with:** `node bakeflow-frontend/scripts/smoke-signed-in.mjs`. It fails 10 of 30
+**Re-checked 2026-08-15 after the hook was reported enabled — still not invoked.** Decisive
+evidence, from `pg_stat_statements` joined to `pg_roles`:
+
+| Caller | Calls to `custom_access_token_hook` |
+|---|---|
+| `postgres` (migrations + direct probes) | 11 |
+| **`supabase_auth_admin`** | **0** |
+
+Zero, across at least nine sign-ins and refreshes. The function itself is provably correct —
+calling it directly with a GoTrue-shaped event returns
+`{"tenant_id":"ab00…da02","roles":["owner"]}` — and its metadata matches the documented
+requirements exactly: `public.custom_access_token_hook(event jsonb)`, owner `postgres`,
+`SECURITY DEFINER`, EXECUTE granted to `supabase_auth_admin`, schema USAGE granted. Auth
+logs show clean `200`s with no hook invocation and no hook error.
+
+Note the shape of the failure: the JWT has **no `tenant_id` key at all**. The hook sets that
+key unconditionally — to `null` when there is no active organization — so an *absent* key
+proves the hook never ran, as distinct from a user having no organization.
+
+**Most likely cause, given this project's history:** the hook was enabled on the wrong
+Supabase project. This session began with the connector authorized against a different
+account entirely (`etodmfsmvhewihboxcrp`, "UndeifyIT's Project"). The setting must be on
+**`tvfyxpafbpnkneujcnvr`** ("Bakeflow", organization `tkrygyuxqyqbxgqaodjq`). Other
+candidates: the wrong hook slot (it must be *Customize Access Token (JWT) Claims*, not Send
+SMS/Email), or the toggle enabled but not saved.
+
+**Verify with:** `node bakeflow-frontend/scripts/smoke-signed-in.mjs`, which now prints a
+one-paragraph diagnosis when the claim is absent rather than ten downstream failures. It fails 10 of 30
 checks today; all ten are downstream of the missing claim and should pass once the hook is
 on. The scratch fixtures it needs already exist (see the smoke-test note in
 `CURRENT_TASK.md`).
