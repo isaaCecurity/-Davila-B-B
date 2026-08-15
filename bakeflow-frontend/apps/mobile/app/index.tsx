@@ -101,6 +101,7 @@ export default function CatalogScreen(): React.JSX.Element {
               categoryName={
                 item.category_id === null ? null : (categoryNames.get(item.category_id) ?? null)
               }
+              onPress={() => router.push(`/product/${item.id}`)}
             />
           )}
         />
@@ -112,12 +113,18 @@ export default function CatalogScreen(): React.JSX.Element {
 function ProductRow({
   product,
   categoryName,
+  onPress,
 }: {
   product: Product;
   categoryName: string | null;
+  onPress: () => void;
 }): React.JSX.Element {
   return (
-    <View className="gap-1 rounded-xl border border-neutral-200 p-4">
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      className="gap-1 rounded-xl border border-neutral-200 p-4 active:opacity-70"
+    >
       <View className="flex-row items-center justify-between gap-3">
         <Text className="flex-1 text-lg font-semibold text-neutral-900">{product.name}</Text>
         {!product.is_active && (
@@ -127,6 +134,6 @@ function ProductRow({
       {categoryName !== null && (
         <Text className="text-sm text-neutral-500">{categoryName}</Text>
       )}
-    </View>
+    </Pressable>
   );
 }

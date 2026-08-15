@@ -16,6 +16,8 @@
  * Run: `npm run verify:cache` from `bakeflow-frontend`.
  */
 
+import { activeTenantIdFromSession, rolesFromSession } from '../packages/auth/claims';
+import { formatNaira, formatQuantity } from '../packages/utils/money';
 import { QueryClient } from '@tanstack/react-query';
 
 import {
@@ -92,5 +94,85 @@ check(
 );
 check('sign-out leaves an empty cache', client.getQueryCache().getAll().length === 0);
 
-console.log(failures === 0 ? '\nAll cache-isolation checks passed.' : `\n${failures} FAILED`);
+
+/* ---------------------------------------------------------------------------
+ * JWT claim location — the P8.1 bug this exists to stop recurring.
+ *
+ * The live custom_access_token_hook writes tenant_id and roles as TOP-LEVEL claims.
+ * The first implementation read session.user.app_metadata.tenant_id, which is not where
+ * they land, so every signed-in user had a null tenant: the app was stuck on the
+ * organization picker with every catalog query disabled. Typecheck, lint and the cache
+ * checks above all passed anyway, because none of them touches a real token.
+ * ------------------------------------------------------------------------- */
+
+function fakeJwt(payload: Record<string, unknown>): string {
+  const b64url = (o: unknown): string =>
+    Buffer.from(JSON.stringify(o))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  return b64url({ alg: 'HS256', typ: 'JWT' }) + '.' + b64url(payload) + '.sig';
+}
+
+const sess = (payload: Record<string, unknown>, appMetadata: object = {}): never =>
+  ({ access_token: fakeJwt(payload), user: { id: USER, app_metadata: appMetadata } }) as never;
+
+check(
+  'tenant_id is read from the TOP-LEVEL claim, as the live hook writes it',
+  activeTenantIdFromSession(sess({ sub: USER, tenant_id: ORG_A })) === ORG_A,
+);
+check(
+  'a null tenant_id claim yields null (no active org / revoked membership)',
+  activeTenantIdFromSession(sess({ sub: USER, tenant_id: null })) === null,
+);
+check(
+  'app_metadata remains a fallback if the hook ever mirrors it there',
+  activeTenantIdFromSession(sess({ sub: USER }, { tenant_id: ORG_B })) === ORG_B,
+);
+check('a null session yields null', activeTenantIdFromSession(null) === null);
+check(
+  'roles come from the top-level claim',
+  JSON.stringify(rolesFromSession(sess({ sub: USER, roles: ['owner', 'baker'] }))) ===
+    '["owner","baker"]',
+);
+check(
+  'a malformed token does not throw',
+  activeTenantIdFromSession({
+    access_token: 'not-a-jwt',
+    user: { id: USER, app_metadata: {} },
+  } as never) === null,
+);
+
+/* --------------------------------------------------------------------------
+ * Money display for P9.1 variant prices — exact decimal strings, never doubles.
+ * ------------------------------------------------------------------------ */
+
+check(
+  'money formats with grouping at 2dp',
+  formatNaira('184500.0000' as never) === '₦184,500.00',
+  formatNaira('184500.0000' as never),
+);
+check(
+  'a 15-digit price survives exactly (a double would not)',
+  formatNaira('12345678901234.5678' as never) === '₦12,345,678,901,234.56',
+  formatNaira('12345678901234.5678' as never),
+);
+check(
+  'display truncates rather than rounds (settlement rule is BLOCKER-003)',
+  formatNaira('0.9999' as never) === '₦0.99',
+  formatNaira('0.9999' as never),
+);
+check(
+  'negative zero shows no minus sign',
+  formatNaira('-0.0000' as never) === '₦0.00',
+  formatNaira('-0.0000' as never),
+);
+check(
+  'quantities keep their full stored scale',
+  formatQuantity('2.5000' as never) === '2.5000',
+  formatQuantity('2.5000' as never),
+);
+
+console.log(failures === 0 ? '\nAll checks passed.' : '\n' + failures + ' FAILED');
 process.exit(failures === 0 ? 0 : 1);

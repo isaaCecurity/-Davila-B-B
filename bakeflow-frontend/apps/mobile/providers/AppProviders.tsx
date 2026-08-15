@@ -24,6 +24,7 @@ import { getSupabaseClient, activeTenantIdFromSession } from '@bakeflow/auth';
 import { clearOrganizationScopedCache } from '@bakeflow/hooks';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useSessionStore } from '../stores/session';
 
@@ -94,5 +95,14 @@ export function AppProviders({ children }: { children: ReactNode }): React.JSX.E
     };
   }, [queryClient, setSession]);
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  // `SafeAreaProvider` is mounted explicitly rather than relied on from the navigator.
+  // Expo Router's Stack does supply a compat provider, but every screen here uses
+  // `SafeAreaView` from `react-native-safe-area-context` directly, and a screen rendered
+  // outside a navigator — an error boundary, a modal, anything added later — would then
+  // measure zero insets and draw under the status bar.
+  return (
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </SafeAreaProvider>
+  );
 }

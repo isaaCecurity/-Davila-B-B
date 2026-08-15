@@ -35,6 +35,7 @@
  */
 
 import {
+  getProductById,
   listMyOrganizationRoles,
   listMyOrganizations,
   listProductCategories,
@@ -80,6 +81,8 @@ export const queryKeys = {
 
   products: (tenantId: string, options?: KeysetPageOptions): unknown[] =>
     orgScoped(tenantId, 'products', options ?? {}),
+  product: (tenantId: string, productId: string): unknown[] =>
+    orgScoped(tenantId, 'product', productId),
   productCategories: (tenantId: string): unknown[] => orgScoped(tenantId, 'product-categories'),
   productVariants: (tenantId: string, productId: string): unknown[] =>
     orgScoped(tenantId, 'product-variants', productId),
@@ -167,6 +170,25 @@ export function useProductCategories(
     queryKey: queryKeys.productCategories(tenantId ?? 'none'),
     queryFn: () => listProductCategories(client),
     enabled: tenantId !== null,
+  });
+}
+
+/**
+ * One product — P9.1.
+ *
+ * Resolves to `null` when the product does not exist, belongs to another organization, or
+ * is soft-deleted. All three are indistinguishable by design, so the detail screen renders
+ * one "not found" state rather than pretending to know which happened.
+ */
+export function useProduct(
+  client: BakeflowClient,
+  tenantId: string | null,
+  productId: string | null,
+): UseQueryResult<Product | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.product(tenantId ?? 'none', productId ?? 'none'),
+    queryFn: () => getProductById(client, productId ?? ''),
+    enabled: tenantId !== null && productId !== null,
   });
 }
 

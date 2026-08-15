@@ -185,18 +185,6 @@ export function getSupabaseClient(): SupabaseClient {
 /* Auth operations                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** The `tenant_id` claim on the current access token, or `null` when none is set. */
-export function activeTenantIdFromSession(session: Session | null): string | null {
-  if (session === null) return null;
-  // Decoding the JWT payload is avoided: supabase-js already exposes the parsed claims,
-  // and hand-parsing a token in app code invites treating it as trusted. This value is
-  // used ONLY to key caches and drive navigation — never as an authorization decision,
-  // which stays entirely with RLS.
-  const claims = session.user.app_metadata as Record<string, unknown> | undefined;
-  const raw = claims?.['tenant_id'];
-  return typeof raw === 'string' && raw !== '' ? raw : null;
-}
-
 export async function signInWithPassword(email: string, password: string): Promise<Session> {
   const { data, error } = await getSupabaseClient().auth.signInWithPassword({
     email: email.trim(),
@@ -248,4 +236,8 @@ export async function setActiveOrganization(tenantId: string): Promise<Session> 
   return data.session;
 }
 
+// Claim reading lives in ./claims (no React Native import) so it can be verified under
+// plain Node. Re-exported here so callers still have one auth entry point.
+export { activeTenantIdFromSession, decodeJwtPayload, rolesFromSession } from './claims';
+export type { SessionLike } from './claims';
 export type { Session } from '@supabase/supabase-js';

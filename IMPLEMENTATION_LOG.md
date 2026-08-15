@@ -649,3 +649,82 @@ random bytes, digests and `randomUUID`, verified against the installed types. Se
 on chunked SecureStore (Android Keystore / iOS Keychain) instead, which honours "no
 AsyncStorage" and no-plaintext-on-disk without a hand-rolled cipher. Recorded for a
 decision rather than substituted silently.
+
+---
+
+## 2026-08-15 · P8.1 review + P9.1 catalog browse
+
+**Zero migrations, zero database changes.**
+
+### P8.1 review found one bug that made the whole slice non-functional
+
+`activeTenantIdFromSession` read `session.user.app_metadata.tenant_id`. The live
+`custom_access_token_hook` writes **top-level claims**:
+
+```sql
+claims := jsonb_set(claims, '{tenant_id}', coalesce(to_jsonb(v_active), 'null'), true);
+claims := jsonb_set(claims, '{roles}',     coalesce(to_jsonb(v_roles),  '[]'),   true);
+```
+
+So the accessor returned `null` for every signed-in user: permanent redirect to the
+organization picker, every catalog query disabled, switching apparently inert. Typecheck,
+lint and the 11 cache-isolation checks all passed, because **none of them touches a real
+token** — the P8.1 report's "verified" claims were true and beside the point.
+
+Fixed by decoding the JWT payload. Claim reading moved to `packages/auth/claims.ts`, which
+imports nothing from React Native, so `verify-cache-isolation.mts` can exercise it under
+Node — `packages/auth/index.ts` pulls in `expo-secure-store` → `react-native`, whose
+Flow-typed entry esbuild cannot transform. Six new checks build a real JWT and assert the
+claim location.
+
+### Other P8.1 defects fixed
+
+| Defect | Fix |
+|---|---|
+| No `SafeAreaProvider` — screens using `SafeAreaView` outside a navigator would measure zero insets | mounted explicitly in `AppProviders` |
+| `verify:cache` used `npx --yes tsx@…`, non-deterministic | `tsx@4.23.12` pinned as a root devDependency; lockfile updated |
+| No `.env`, so nothing could run | `apps/mobile/.env` written with the project URL and publishable key (gitignored; `.env.example` already committed) |
+| Near-miss: I replaced `packages/utils/money.ts` with a half-up rounding formatter | **reverted.** The existing file truncates deliberately and documents why: the settlement rounding rule is unspecified (BLOCKER-003), so offering a rounding helper invites it to feed a stored value. P9.1 uses the existing `formatNaira`. |
+
+### Runtime verification against the live project
+
+Executed with the publishable key against `tvfyxpafbpnkneujcnvr`:
+
+| Check | Result |
+|---|---|
+| `products` / `organizations` / `product_variants` as anon | `42501 permission denied for table` |
+| `tickets` as anon | denied |
+| `set_active_organization` as anon | `42501 permission denied for function` |
+| sign-in with bad credentials | `Invalid login credentials` — auth endpoint reachable |
+
+Anonymous access is refused at the **GRANT** level, before RLS is consulted. Config,
+transport and the client factory are therefore proven against the real project.
+
+**Still not verified:** a signed-in run. That needs real user credentials, which do not
+exist in this environment — no organization switch or catalog render has been observed on a
+device.
+
+### P9.1 — catalog browse
+
+`app/product/[id].tsx`: product detail with its variants, each priced. `useProduct` added;
+catalog rows navigate.
+
+`unit_price` lives on `product_variants`, so a product has *a set of prices*, never one.
+**No price is summarised** — no "from ₦X", no range. That would need comparison over money,
+and `"900.0000" > "1000.0000"` lexicographically while a numeric comparison would require
+the double conversion the whole precision strategy exists to prevent. Prices render through
+`formatNaira`, which truncates.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` (all workspaces) | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0**, 13 files, all 8 app files covered (counted via `--format json`) |
+| `npm run verify:cache` | **22/22 passed** (11 cache + 6 claim + 5 money) |
+| `pytest -q` | **12 passed** |
+| Live anon-key runtime probe | executed, results above |
+
+`scripts/` is outside the root ESLint config's scope and is therefore unlinted — noted, not
+fixed, to avoid reconfiguring lint scope alongside a feature change.
