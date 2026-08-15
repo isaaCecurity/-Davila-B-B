@@ -22,6 +22,17 @@ The function is correct in isolation and its grants/metadata match the docs exac
 that this session started with the connector pointed at a *different* Supabase account, the
 likeliest cause is the hook being enabled on the wrong project.
 
+**Re-verified a third time 2026-08-15 18:52Z — now classified EXTERNAL, work stopped.**
+Connector confirmed on `tvfyxpafbpnkneujcnvr` (`get_project_url`, plus the scratch user is
+in *this* database); `pg_stat_statements` not reset since 2026-08-04, so the counters cover
+every sign-in ever made; **no row for `custom_access_token_hook` is attributed to
+`supabase_auth_admin`**; auth logs show the 18:37Z grant/refresh/logout as clean 200s with no
+hook invocation and no hook error. A registered-but-failing hook would 500; a
+registered-and-working hook would appear under `supabase_auth_admin`. Neither. GoTrue for
+this project has no access-token hook registered — nothing further is resolvable from SQL,
+the repo, or the available MCP tools. Needs a dashboard confirmation on the right project
+and slot, or a Supabase support ticket if the dashboard already shows it enabled.
+
 **Why nothing caught it earlier:** every SQL suite sets the claim by hand with
 `set_config('request.jwt.claims', …)`, which simulates the hook's output. They proved the
 policies are right *given* a claim; nothing proved a claim is ever minted.

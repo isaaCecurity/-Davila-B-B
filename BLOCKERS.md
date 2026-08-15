@@ -436,6 +436,31 @@ account entirely (`etodmfsmvhewihboxcrp`, "UndeifyIT's Project"). The setting mu
 candidates: the wrong hook slot (it must be *Customize Access Token (JWT) Claims*, not Send
 SMS/Email), or the toggle enabled but not saved.
 
+**Third re-verification, 2026-08-15 18:52Z — reclassified as EXTERNAL.** Every remaining
+question about the database side has now been answered directly, so the investigation is
+closed on this side:
+
+| Question | Answer |
+|---|---|
+| Is the connector on the right project? | yes — `get_project_url` = `https://tvfyxpafbpnkneujcnvr.supabase.co`, and the scratch user `smoke.owner@bakeflow.test` is present in *this* database |
+| Are the call counters stale or reset? | no — `pg_stat_statements_info.stats_reset` = 2026-08-04, so the window covers every sign-in ever made |
+| Has `supabase_auth_admin` called the hook, ever? | **no — every row matching `custom_access_token_hook` is owned by `postgres`; not one by `supabase_auth_admin`** |
+| Did the most recent sign-ins reach this project? | yes — auth logs show the 18:37Z password grant, two refreshes and the logout, all `200`/`204`, no hook invocation, no hook error |
+
+Those four together exclude every DB-side explanation. A hook that were registered and
+*failing* would return `500` on `/token` and log an invocation error; a hook that were
+registered and *succeeding* would appear in `pg_stat_statements` under `supabase_auth_admin`.
+Neither is present, which leaves only one possibility: **GoTrue for this project has no
+access-token hook registered** — the setting was applied elsewhere, to a different slot, or
+did not persist/propagate.
+
+**This is now an external Supabase configuration issue and work stops here.** It cannot be
+resolved from SQL, from the repository, or through the MCP tools available (which expose no
+Auth-config endpoint). It needs either a dashboard confirmation on
+`tvfyxpafbpnkneujcnvr` → Authentication → Hooks → *Customize Access Token (JWT) Claims*, or —
+if the dashboard already shows it enabled there — a Supabase support ticket, since the
+database side is provably correct.
+
 **Verify with:** `node bakeflow-frontend/scripts/smoke-signed-in.mjs`, which now prints a
 one-paragraph diagnosis when the claim is absent rather than ten downstream failures. It fails 10 of 30
 checks today; all ten are downstream of the missing claim and should pass once the hook is
