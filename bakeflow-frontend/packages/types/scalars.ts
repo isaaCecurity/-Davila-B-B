@@ -103,6 +103,60 @@ export function isNegativeDecimalString(value: string): boolean {
   return value.startsWith('-') && !isZeroDecimalString(value);
 }
 
+/** Split a validated decimal string into sign and zero-stripped integer/fraction digits. */
+function partsOf(value: string): { negative: boolean; int: string; frac: string } {
+  const negative = isNegativeDecimalString(value);
+  const unsigned = value.replace(/^[+-]/, '');
+  const dot = unsigned.indexOf('.');
+  const int = (dot === -1 ? unsigned : unsigned.slice(0, dot)).replace(/^0+(?=\d)/, '');
+  const frac = dot === -1 ? '' : unsigned.slice(dot + 1).replace(/0+$/, '');
+  return { negative, int: int === '' ? '0' : int, frac };
+}
+
+/**
+ * Compare two decimal strings exactly: `-1`, `0` or `1`.
+ *
+ * **Never converts to a number.** `Number('12345678901234.5678')` is already wrong at the
+ * fourth decimal, so any comparison routed through a float would mis-order values the
+ * database stores exactly — the whole reason `Money` and `Quantity` are carried as strings
+ * (see `MONEY_PATTERN` above). Digit comparison has no such limit and needs no dependency.
+ *
+ * Inputs must already match `MONEY_PATTERN` or `QUANTITY_PATTERN`; the branded types are
+ * the guarantee of that. Trailing-zero and leading-zero differences are immaterial, so
+ * `"2.5"`, `"2.50"` and `"02.5000"` all compare equal, and `"-0.00"` equals `"0"`.
+ */
+export function compareDecimalStrings(a: string, b: string): -1 | 0 | 1 {
+  const left = partsOf(a);
+  const right = partsOf(b);
+
+  // Zero has no sign: "-0.0000" must not sort below "0".
+  const leftZero = isZeroDecimalString(a);
+  const rightZero = isZeroDecimalString(b);
+  if (leftZero && rightZero) return 0;
+
+  const leftNegative = left.negative && !leftZero;
+  const rightNegative = right.negative && !rightZero;
+  if (leftNegative !== rightNegative) return leftNegative ? -1 : 1;
+
+  // Longer integer part wins outright once leading zeros are gone; equal lengths compare
+  // lexicographically, which for equal-length digit strings is numeric order.
+  let magnitude: -1 | 0 | 1 = 0;
+  if (left.int.length !== right.int.length) {
+    magnitude = left.int.length < right.int.length ? -1 : 1;
+  } else if (left.int !== right.int) {
+    magnitude = left.int < right.int ? -1 : 1;
+  } else {
+    const width = Math.max(left.frac.length, right.frac.length);
+    const leftFrac = left.frac.padEnd(width, '0');
+    const rightFrac = right.frac.padEnd(width, '0');
+    if (leftFrac !== rightFrac) magnitude = leftFrac < rightFrac ? -1 : 1;
+  }
+
+  if (magnitude === 0) return 0;
+  // Among negatives the larger magnitude is the smaller number.
+  return leftNegative ? ((-magnitude) as -1 | 1) : magnitude;
+}
+
 /**
  * Brand an already-validated decimal string as `Money`.
  *

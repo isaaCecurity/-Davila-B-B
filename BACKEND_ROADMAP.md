@@ -598,7 +598,7 @@ behaviour → tests → acceptance gate.**
 | P9.1 | Catalog browse | P4.1 | read-through cache | READY after P8.1 |
 | P9.2 | Customer create/select | P4.4a | queued create | BLOCKED (P3.7) |
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
-| P9.4 | Inventory view & adjust | P4.2 | queued movement | NOT_STARTED |
+| P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
 | P9.5 | Production batches | P4.3 | online-first | NOT_STARTED |
 | P9.6 | Delivery workflow | P4.5 | queued transitions | NOT_STARTED |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |

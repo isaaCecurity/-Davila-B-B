@@ -13,6 +13,7 @@ export type { Money, Quantity, Timestamptz, Uuid } from './scalars';
 export {
   MONEY_PATTERN,
   QUANTITY_PATTERN,
+  compareDecimalStrings,
   isNegativeDecimalString,
   isZeroDecimalString,
 } from './scalars';

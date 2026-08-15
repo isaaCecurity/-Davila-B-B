@@ -70,13 +70,22 @@ export default function CatalogScreen(): React.JSX.Element {
           <Text className="text-2xl font-bold text-neutral-900">Catalog</Text>
           <Text className="text-sm text-neutral-500">{activeName ?? 'Your bakery'}</Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push('/select-organization')}
-          className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
-        >
-          <Text className="text-sm font-medium text-neutral-900">Switch</Text>
-        </Pressable>
+        <View className="flex-row gap-2">
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/inventory')}
+            className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-neutral-900">Stock</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/select-organization')}
+            className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-neutral-900">Switch</Text>
+          </Pressable>
+        </View>
       </View>
 
       {products.isPending ? (

@@ -36,21 +36,31 @@
 
 import {
   getProductById,
+  listIngredientStockLevels,
+  listIngredients,
   listMyOrganizationRoles,
   listMyOrganizations,
   listProductCategories,
+  listProductStockLevels,
+  listProductVariants,
   listProducts,
   listVariantsByProduct,
+  listWarehouses,
   type BakeflowClient,
   type KeysetPageOptions,
   type Page,
+  type PageOptions,
 } from '@bakeflow/api';
 import type {
+  Ingredient,
+  IngredientStockLevel,
   OrganizationMembership,
   OrganizationRole,
   Product,
   ProductCategory,
+  ProductStockLevel,
   ProductVariant,
+  Warehouse,
 } from '@bakeflow/types';
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
 
@@ -86,6 +96,22 @@ export const queryKeys = {
   productCategories: (tenantId: string): unknown[] => orgScoped(tenantId, 'product-categories'),
   productVariants: (tenantId: string, productId: string): unknown[] =>
     orgScoped(tenantId, 'product-variants', productId),
+
+  /* P9.4 — inventory. Stock keys carry the warehouse: quantities are per warehouse, and a
+   * key that omitted it would let one stockroom's levels answer for another's. */
+  warehouses: (tenantId: string, branchId?: string): unknown[] =>
+    orgScoped(tenantId, 'warehouses', branchId ?? 'all'),
+  ingredients: (tenantId: string, options?: KeysetPageOptions): unknown[] =>
+    orgScoped(tenantId, 'ingredients', options ?? {}),
+  allProductVariants: (tenantId: string, options?: KeysetPageOptions): unknown[] =>
+    orgScoped(tenantId, 'all-product-variants', options ?? {}),
+  ingredientStockLevels: (
+    tenantId: string,
+    warehouseId: string,
+    options?: PageOptions,
+  ): unknown[] => orgScoped(tenantId, 'ingredient-stock-levels', warehouseId, options ?? {}),
+  productStockLevels: (tenantId: string, warehouseId: string, options?: PageOptions): unknown[] =>
+    orgScoped(tenantId, 'product-stock-levels', warehouseId, options ?? {}),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -203,5 +229,90 @@ export function useProductVariants(
     queryKey: queryKeys.productVariants(tenantId ?? 'none', productId ?? 'none'),
     queryFn: () => listVariantsByProduct(client, productId ?? ''),
     enabled: tenantId !== null && productId !== null,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Inventory — P9.4 read path                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Stockrooms the caller can see, optionally one branch's.
+ *
+ * Note this is narrowed by **branch** access as well as tenant: `warehouses` is
+ * branch-scoped, so a cashier at one branch sees fewer rows than an owner. An empty result
+ * is therefore a legitimate state for a real member, not necessarily a bakery with no
+ * stockrooms — the screen says so rather than implying nothing exists.
+ */
+export function useWarehouses(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId?: string,
+): UseQueryResult<Warehouse[], Error> {
+  return useQuery({
+    queryKey: queryKeys.warehouses(tenantId ?? 'none', branchId),
+    queryFn: () => listWarehouses(client, branchId === undefined ? {} : { branchId }),
+    enabled: tenantId !== null,
+  });
+}
+
+/** One page of ingredients. Used both as a list and to put names on stock levels. */
+export function useIngredients(
+  client: BakeflowClient,
+  tenantId: string | null,
+  options?: KeysetPageOptions,
+): UseQueryResult<Page<Ingredient>, Error> {
+  return useQuery({
+    queryKey: queryKeys.ingredients(tenantId ?? 'none', options),
+    queryFn: () => listIngredients(client, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/** Every variant in the organization, for resolving names on finished-good stock levels. */
+export function useAllProductVariants(
+  client: BakeflowClient,
+  tenantId: string | null,
+  options?: KeysetPageOptions,
+): UseQueryResult<Page<ProductVariant>, Error> {
+  return useQuery({
+    queryKey: queryKeys.allProductVariants(tenantId ?? 'none', options),
+    queryFn: () => listProductVariants(client, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/**
+ * Ingredient quantities on hand in one warehouse.
+ *
+ * These rows are trigger-maintained from the `stock_movements` ledger and are never written
+ * directly (`CLAUDE.md` rule 7), so this is a read-only projection of the ledger. Disabled
+ * without a warehouse: an unscoped level query would need the composite cursor the ledger
+ * uses, and `listStockLevels` is deliberately single-warehouse.
+ */
+export function useIngredientStockLevels(
+  client: BakeflowClient,
+  tenantId: string | null,
+  warehouseId: string | null,
+  options?: PageOptions,
+): UseQueryResult<Page<IngredientStockLevel>, Error> {
+  return useQuery({
+    queryKey: queryKeys.ingredientStockLevels(tenantId ?? 'none', warehouseId ?? 'none', options),
+    queryFn: () => listIngredientStockLevels(client, warehouseId ?? '', options),
+    enabled: tenantId !== null && warehouseId !== null,
+  });
+}
+
+/** Finished-good quantities on hand in one warehouse. See `useIngredientStockLevels`. */
+export function useProductStockLevels(
+  client: BakeflowClient,
+  tenantId: string | null,
+  warehouseId: string | null,
+  options?: PageOptions,
+): UseQueryResult<Page<ProductStockLevel>, Error> {
+  return useQuery({
+    queryKey: queryKeys.productStockLevels(tenantId ?? 'none', warehouseId ?? 'none', options),
+    queryFn: () => listProductStockLevels(client, warehouseId ?? '', options),
+    enabled: tenantId !== null && warehouseId !== null,
   });
 }

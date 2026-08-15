@@ -79,12 +79,42 @@ post-sign-out access denied at the GRANT level (42501).
 **Failing:** everything needing the claim — the refreshed token carrying tenant A, catalog
 contents, product detail, variants and prices, the switch to B.
 
+## ✅ P9.4 READ PATH DELIVERED — stock on hand (2026-08-15)
+
+Stockroom picker plus per-warehouse stock, ingredients and finished goods in two tabs. Five
+new organization-scoped hooks over the existing `packages/api` inventory reads. **Zero
+migrations.** Verified live: 39/39 smoke checks, including that A's stock levels are
+invisible while B is active *when asked for by A's warehouse id explicitly* — RLS refusing,
+not a filter narrowing.
+
+**Read-only on purpose.** Levels are trigger-maintained from the immutable `stock_movements`
+ledger (rule 7), so an "edit quantity" control would misrepresent the system. Adjusting
+means inserting a movement with a reason — the write half, not started.
+
+**Rule 7 is actually verified, not assumed:** the fixtures insert *movements only*, and the
+smoke test asserts the levels equal the sum of those movements (`30 - 5 = 25`,
+`5 - 2.5 = 2.5`). The trigger's arithmetic is what is under test.
+
+**One documentation defect corrected.** `packages/types/inventory.ts` claimed negative stock
+was reachable because no non-negative CHECK exists — true of constraints, wrong about
+behaviour. `apply_stock_movement()` refuses `production_consume`/`sale` below zero
+unconditionally, and `waste`/`adjustment` unless `organizations.allow_negative_stock` is set.
+All three branches were executed in a rolled-back transaction; see `IMPLEMENTATION_LOG.md`.
+
+**New primitive:** `compareDecimalStrings` in `packages/types/scalars.ts`, exact and
+digit-wise. The low-stock cue needs a comparison, and `Number('12345678901234.5678')` is
+already wrong at the fourth decimal. 16 executed checks cover scale, leading zeros, signed
+zero, negative ordering, and a difference no double can see.
+
 ### Scratch fixtures left in place, deliberately
 
 `smoke.owner@bakeflow.test` (password `SmokeTest!2026`), organizations *Smoke Bakery A/B/C*
 and their catalog rows exist in the live project so the smoke test can be re-run the moment
 the hook is on. The database held **zero** business rows before this. **Remove them before
 production** — a known-password account must not outlive the checkpoint. Cleanup:
+
+Inventory fixtures were added for P9.4 — one stockroom per organization, four ingredients
+and six ledger movements, all inside the smoke organizations. They go with the same cleanup:
 
 ```sql
 delete from auth.users where email = 'smoke.owner@bakeflow.test';

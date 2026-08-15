@@ -779,3 +779,73 @@ the AD-014 amendment remains, and that is a decision.
 | `npm run verify:cache` | **30/30 passed** (11 cache + 6 claim + 5 money + 8 storage) |
 | `pytest -q` | **12 passed** |
 | `scripts/smoke-signed-in.mjs` | **20/30** — 10 failures all downstream of BLOCKER-014 |
+
+---
+
+## 2026-08-15 — BLOCKER-014 resolved; P9.4 inventory read path
+
+### BLOCKER-014 closed
+
+The access-token hook was enabled on `tvfyxpafbpnkneujcnvr` and GoTrue now invokes it.
+Sign-in mints `tenant_id` and `roles` as top-level claims. Nothing in the database or the
+application changed — the whole gap was one project setting.
+
+The diagnosis technique is worth keeping: joining `pg_stat_statements` to `pg_roles` and
+counting calls *by caller* is what distinguished "the hook is broken" from "the hook is
+never called". `supabase_auth_admin` sat at 0 calls against `postgres`'s 11 while the
+function itself returned correct claims when invoked directly.
+
+### Two test defects fixed (no application defect)
+
+`set_active_organization` deliberately rejects NULL and persists to
+`profiles.active_tenant_id`, so an organization choice survives sign-out and is restored at
+the next sign-in. The smoke test assumed a never-used account, so it passed only on its
+first ever run. Both assertions now state invariants that hold in every state: the catalog
+holds exactly the token's tenant rows (and nothing when the claim is null), and after the
+RPC the un-refreshed token still carries the **previous** tenant — which is precisely why
+`refreshSession()` is mandatory rather than cosmetic.
+
+### P9.4 — inventory read path
+
+`useWarehouses`, `useIngredients`, `useAllProductVariants`, `useIngredientStockLevels`,
+`useProductStockLevels`, all organization-scoped; `app/inventory/index.tsx` (stockroom
+picker) and `app/inventory/[warehouseId].tsx` (stock on hand, ingredients and finished goods).
+Read-only by design: levels are trigger-maintained from the immutable ledger, so an "edit
+quantity" control would misrepresent how the system works. Zero migrations.
+
+`compareDecimalStrings` added to `packages/types/scalars.ts` — exact digit-wise comparison,
+needed for the low-stock cue. `Number('12345678901234.5678')` already loses the fourth
+decimal, so any float comparison would mis-order values the database stores exactly.
+
+### A live-behaviour correction
+
+Seeding fixtures surfaced a documentation defect. `packages/types/inventory.ts` claimed
+negative stock was reachable because "no non-negative CHECK exists". True about constraints,
+wrong about behaviour: `apply_stock_movement()` enforces it. Verified all three branches in
+a rolled-back transaction:
+
+| Attempt | Live result |
+|---|---|
+| `production_consume` beyond stock | **refused** — `insufficient_stock: Smoke Yeast short by 96.5000 g` |
+| `waste` beyond stock, `allow_negative_stock = false` | **refused** — `movement would leave -96.5000 on hand` |
+| same `waste`, `allow_negative_stock = true` | **allowed**, `on_hand = -96.5000` |
+
+The probe rolled itself back; `allow_negative_stock` is false and the yeast level is
+`2.5000`, as before. Doc comments in the type and the screen now state the real rule.
+
+### Rule 7 verified end-to-end
+
+Stock **levels** were never inserted — only ledger movements were. The smoke test asserts
+the resulting levels equal the sum of their movements (`30 - 5 = 25`, `5 - 2.5 = 2.5`),
+so the trigger's arithmetic is what is being checked, not fixture data.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `scripts/smoke-signed-in.mjs` | **39/39 passed** (was 20/30) |
+| `npm run verify:cache` | **46/46 passed** (+16 decimal-comparison checks) |
+| `npm run typecheck --workspace apps/mobile` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `pytest -q` | **12 passed** |

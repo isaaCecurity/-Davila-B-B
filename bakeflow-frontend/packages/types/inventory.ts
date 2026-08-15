@@ -226,8 +226,20 @@ export type StockMovement = IngredientStockMovement | ProductStockMovement;
  * Current ingredient quantity in one warehouse.
  *
  * Trigger-maintained from `stock_movements`; never written directly (`CLAUDE.md` rule 7).
- * `quantity_on_hand` is **signed** — no non-negative CHECK exists live, so an oversold or
- * mis-sequenced item can legitimately read negative.
+ *
+ * `quantity_on_hand` is **signed**, and when it can actually go negative is decided by
+ * `apply_stock_movement()`, not by a CHECK constraint — verified against the live trigger
+ * 2026-08-15:
+ *
+ * | Movement reason | Negative result |
+ * |---|---|
+ * | `production_consume`, `sale` | **never**, whatever the tenant setting |
+ * | `waste`, `adjustment`, `transfer_out` | only where `organizations.allow_negative_stock` is true |
+ *
+ * Both refusals raise `P0001` with `{"code":"insufficient_stock", …}` in the detail, so an
+ * over-consuming write fails loudly rather than silently reconciling later
+ * (`STATE-MACHINES.md` §2). A negative level therefore means the organization opted in and
+ * wrote off more than it held — real, and worth surfacing rather than clamping to zero.
  */
 export interface IngredientStockLevel {
   id: Uuid;

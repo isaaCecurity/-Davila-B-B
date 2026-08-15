@@ -16,6 +16,7 @@
  * Run: `npm run verify:cache` from `bakeflow-frontend`.
  */
 
+import { compareDecimalStrings } from '../packages/types/scalars';
 import { activeTenantIdFromSession, rolesFromSession } from '../packages/auth/claims';
 import { CHUNK_SIZE, createChunkedStorage } from '../packages/auth/chunked-storage';
 import { formatNaira, formatQuantity } from '../packages/utils/money';
@@ -174,6 +175,57 @@ check(
   formatQuantity('2.5000' as never) === '2.5000',
   formatQuantity('2.5000' as never),
 );
+
+
+/* --------------------------------------------------------------------------
+ * Exact decimal comparison — P9.4 stock levels.
+ *
+ * `compareDecimalStrings` is the only new logic in the inventory read path, and it exists
+ * because the obvious implementation is wrong: `Number('12345678901234.5678')` loses the
+ * fourth decimal before any comparison happens. The cases below are the ones a float or a
+ * naive string compare gets wrong — differing scale, leading zeros, signed zero, and the
+ * 15-digit value that does not survive a double.
+ * ------------------------------------------------------------------------ */
+
+const cmp = compareDecimalStrings;
+
+check('equal values compare equal', cmp('2.5000', '2.5000') === 0);
+check('scale differences are immaterial', cmp('2.5', '2.5000') === 0, String(cmp('2.5', '2.5000')));
+check('leading zeros are immaterial', cmp('02.5000', '2.5') === 0);
+check('signed zero equals zero', cmp('-0.0000', '0') === 0, String(cmp('-0.0000', '0')));
+check(
+  'a naive string compare would be wrong here — 10 > 9',
+  cmp('10.0000', '9.0000') === 1,
+  String(cmp('10.0000', '9.0000')),
+);
+check('fractions order correctly', cmp('0.1000', '0.0999') === 1);
+check('a longer fraction does not win by length', cmp('0.5', '0.4999') === 1);
+check('negatives order below positives', cmp('-1.0000', '0.5000') === -1);
+check(
+  'among negatives the larger magnitude is smaller',
+  cmp('-10.0000', '-9.0000') === -1,
+  String(cmp('-10.0000', '-9.0000')),
+);
+check(
+  'a 15-digit difference a double cannot see is detected',
+  cmp('12345678901234.5678', '12345678901234.5677') === 1,
+  String(cmp('12345678901234.5678', '12345678901234.5677')),
+);
+check(
+  'the same two values are indistinguishable as doubles (why this function exists)',
+  Number('12345678901234.5678') === Number('12345678901234.5677'),
+);
+
+// The low-stock cue on the stock screen, as a predicate: flag only when a reorder level has
+// actually been set, and treat "at the level" as low.
+const isLow = (onHand: string, reorder: string): boolean =>
+  cmp(reorder, '0') > 0 && cmp(onHand, reorder) <= 0;
+
+check('at the reorder level counts as low', isLow('5.0000', '5.0000'));
+check('below the reorder level is low', isLow('4.9999', '5.0000'));
+check('above the reorder level is not low', !isLow('5.0001', '5.0000'));
+check('an unset reorder level never flags', !isLow('0.0000', '0.0000'));
+check('a negative quantity is low when a level is set', isLow('-3.0000', '5.0000'));
 
 
 /* --------------------------------------------------------------------------

@@ -29,6 +29,9 @@ const ORG_A = 'ab000000-0000-4000-8000-00000000da01';
 const ORG_B = 'ab000000-0000-4000-8000-00000000da02';
 const ORG_C = 'ab000000-0000-4000-8000-00000000da03';
 const PRODUCT_A1 = 'ae000000-0000-4000-8000-00000000da01';
+const WAREHOUSE_A = 'b0000000-0000-4000-8000-00000000da01';
+const SUGAR = 'b1000000-0000-4000-8000-00000000da02';
+const YEAST = 'b1000000-0000-4000-8000-00000000da03';
 
 let failures = 0;
 const check = (name, passed, detail = '') => {
@@ -209,6 +212,48 @@ check('the same column WITHOUT ::text is already corrupted by JSON.parse',
   bigVariant.data?.raw !== 12345678901234.5678 || String(bigVariant.data?.raw) !== '12345678901234.5678',
   `raw=${String(bigVariant.data?.raw)}`);
 
+// ------------------------------------------------ inventory read (P9.4) --
+// Mirrors packages/api/queries/inventory.ts: same tables, same ::text casts on quantities.
+const warehousesA = await supabase
+  .from('warehouses')
+  .select('id,tenant_id,branch_id,name,is_default,created_at,updated_at')
+  .is('deleted_at', null)
+  .order('branch_id', { ascending: true })
+  .order('name', { ascending: true });
+check('warehouses load for A', warehousesA.error === null, warehousesA.error?.message ?? '');
+check('only A’s stockroom is visible', (warehousesA.data ?? []).length === 1 &&
+  warehousesA.data[0].id === WAREHOUSE_A,
+  (warehousesA.data ?? []).map((w) => w.name).join(', '));
+
+const levelsA = await supabase
+  .from('ingredient_stock_levels')
+  .select('id,tenant_id,warehouse_id,ingredient_id,quantity_on_hand::text,created_at,updated_at')
+  .eq('warehouse_id', WAREHOUSE_A)
+  .is('deleted_at', null)
+  .order('ingredient_id', { ascending: true });
+check('ingredient stock levels load', levelsA.error === null && (levelsA.data ?? []).length === 3,
+  levelsA.error?.message ?? `n=${levelsA.data?.length}`);
+check('quantity_on_hand arrives as an exact decimal STRING',
+  (levelsA.data ?? []).every((r) => typeof r.quantity_on_hand === 'string'),
+  JSON.stringify((levelsA.data ?? []).map((r) => r.quantity_on_hand)));
+
+// The levels were never inserted — only ledger movements were (CLAUDE.md rule 7). These
+// exact values are therefore the trigger's arithmetic, not fixture data.
+const byIngredient = new Map((levelsA.data ?? []).map((r) => [r.ingredient_id, r.quantity_on_hand]));
+check('a level equals the SUM of its movements, computed by the trigger (30 - 5 = 25)',
+  byIngredient.get(SUGAR) === '25.0000', String(byIngredient.get(SUGAR)));
+check('a second item sums correctly too (5 - 2.5 = 2.5)',
+  byIngredient.get(YEAST) === '2.5000', String(byIngredient.get(YEAST)));
+
+const prodLevelsA = await supabase
+  .from('product_stock_levels')
+  .select('id,tenant_id,warehouse_id,product_variant_id,quantity_on_hand::text,created_at,updated_at')
+  .eq('warehouse_id', WAREHOUSE_A)
+  .is('deleted_at', null);
+check('finished-good stock levels load', prodLevelsA.error === null &&
+  prodLevelsA.data?.[0]?.quantity_on_hand === '42.0000',
+  prodLevelsA.error?.message ?? JSON.stringify(prodLevelsA.data));
+
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });
 const refreshB = await supabase.auth.refreshSession();
@@ -226,6 +271,21 @@ const aDetailFromB = await supabase
   .from('products').select('id,name').eq('id', PRODUCT_A1).is('deleted_at', null).maybeSingle();
 check("A's product is invisible by direct id while B is active", aDetailFromB.data === null,
   JSON.stringify(aDetailFromB.data));
+
+// Inventory isolates on the same boundary — asked for by A's warehouse id explicitly, so
+// this is RLS refusing rather than a filter narrowing.
+const aLevelsFromB = await supabase
+  .from('ingredient_stock_levels').select('id,quantity_on_hand::text')
+  .eq('warehouse_id', WAREHOUSE_A).is('deleted_at', null);
+check("A's stock levels are invisible while B is active",
+  aLevelsFromB.error === null && (aLevelsFromB.data ?? []).length === 0,
+  aLevelsFromB.error ? aLevelsFromB.error.message : `rows=${aLevelsFromB.data?.length}`);
+
+const warehousesB = await supabase
+  .from('warehouses').select('id,name').is('deleted_at', null);
+check('B sees only its own stockroom',
+  (warehousesB.data ?? []).length === 1 && warehousesB.data[0].id !== WAREHOUSE_A,
+  (warehousesB.data ?? []).map((w) => w.name).join(', '));
 
 // --------------------------------------------- switching to a non-member --
 const rpcC = await supabase.rpc('set_active_organization', { p_tenant_id: ORG_C });
