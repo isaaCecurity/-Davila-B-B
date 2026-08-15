@@ -110,3 +110,5 @@ export {
   isDeliveryVerified,
   isTerminalDeliveryStatus,
 } from './delivery';
+
+export type { OrganizationMembership, OrganizationRole } from './organization';

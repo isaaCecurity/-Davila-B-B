@@ -25,6 +25,7 @@
     "deps:doctor": "npm run doctor --workspace apps/mobile",
     "deps:duplicates": "npm ls react react-dom @types/react --depth=0",
     "ci:install": "corepack npm ci",
-    "ci:verify": "corepack npm --version && npm run typecheck && npm run lint && npm run deps:check"
+    "ci:verify": "corepack npm --version && npm run typecheck && npm run lint && npm run deps:check",
+    "verify:cache": "npx --yes tsx@4.23.12 scripts/verify-cache-isolation.mts"
   }
 }

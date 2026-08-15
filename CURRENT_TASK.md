@@ -1,5 +1,42 @@
 # BakeFlow — Current Task
 
+## ✅ P8.1 DELIVERED — sign in → choose bakery → catalog (2026-08-15)
+
+The first frontend vertical slice is implemented and gated. **Zero migrations, zero
+database changes.**
+
+```
+EVIDENCE: npm run typecheck (all workspaces)     -> exit 0
+          npx eslint packages --max-warnings=0   -> exit 0
+          npm run lint --workspace apps/mobile   -> exit 0, 12 files,
+                                                    all 7 new files covered (counted
+                                                    via --format json, not inferred)
+          npm run verify:cache                   -> 11/11 passed
+          pytest -q                              -> 12 passed
+          on-device run                          -> NOT PERFORMED (no anon key configured)
+```
+
+**Cache identity is the load-bearing part.** `packages/api` signatures carry no tenant —
+the tenant comes from the JWT claim — so a key derived from arguments alone would be
+identical across organizations and TanStack Query would serve bakery A's catalog under
+bakery B's name. Every organization-scoped key therefore starts `['org', tenantId]`, built
+only through `orgScoped()`, keyed on **the claim in force** rather than the id tapped.
+`scripts/verify-cache-isolation.mts` executes that property against a real `QueryClient`.
+
+**Not verified on a device.** `apps/mobile/.env` needs `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+before the flow can be exercised for real. Nothing below claims otherwise.
+
+**New: BLOCKER-013** — AD-014 specifies AES-256-GCM "via expo-crypto", which has no cipher.
+Session storage ships on chunked SecureStore instead; the decision needs amending.
+
+### Next frontend milestone
+**P9.1 catalog browse** — product detail with variants and prices. Note money: `unit_price`
+is `NUMERIC(19,4)` carried as an exact decimal string, and formatting it for display is the
+first place a decimal library becomes necessary. That is a dependency decision, not an
+implementation detail.
+
+---
+
 ## Live verification pass complete — 2026-08-15
 
 **BLOCKER-011 RESOLVED.** The connector reaches `tvfyxpafbpnkneujcnvr`. Executed live:

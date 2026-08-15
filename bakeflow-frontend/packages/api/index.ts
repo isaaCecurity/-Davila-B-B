@@ -109,3 +109,10 @@ export {
   listDeliveries,
   type DeliveryFilters,
 } from './queries/delivery';
+
+// P8.1 — organization membership reads. The one read path that works with a null tenant
+// claim, because `organizations_select` keys off auth.uid() rather than
+// current_tenant_id(). Switching the active organization lives in @bakeflow/auth: it is
+// an RPC *plus* a token refresh, and separating those produces a UI that switched while
+// the database did not.
+export { listMyOrganizationRoles, listMyOrganizations } from './queries/organizations';

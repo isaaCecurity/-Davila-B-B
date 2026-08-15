@@ -337,6 +337,34 @@ unaffected and is verified.
 
 ---
 
+## BLOCKER-013 · AD-014 specifies a cipher `expo-crypto` does not have
+**Status:** OPEN · **Affects:** P8.1 session storage, AD-014 · **Type:** architecture decision
+
+AD-014 (APPROVED) reads: *"AES-256-GCM via `expo-crypto`, key in SecureStore, ciphertext in
+`expo-file-system`. No AsyncStorage."*
+
+**The first clause cannot be implemented.** `expo-crypto` exposes `getRandomBytes`,
+`getRandomBytesAsync`, `getRandomValues`, `digest`, `digestStringAsync` and `randomUUID` —
+verified against the installed type definitions. It has **no cipher of any kind**. Building
+AES-GCM out of a digest function by hand is not an acceptable substitute.
+
+**What P8.1 shipped instead:** the Supabase session lives in `expo-secure-store`, chunked
+across `bakeflow.session.0..n` because SecureStore rejects values over ~2048 bytes on
+Android and a session JSON exceeds that. SecureStore is the Android Keystore / iOS Keychain
+— OS-managed and hardware-backed where available. No AsyncStorage, and no plaintext session
+on disk, so AD-014's *intent* holds.
+
+Arguably it is stronger than the approved design, which would have placed ciphertext in the
+app sandbox with its key in the same SecureStore — an attacker who reads SecureStore defeats
+both, and this avoids a hand-rolled cipher entirely. It is still **not the approved design**.
+
+**Needed:** either amend AD-014 to record SecureStore-chunked storage as the approved
+mechanism, or approve a real crypto dependency (`react-native-quick-crypto` or
+`expo-standard-web-crypto`) and the lockfile change it implies. Until then the current
+implementation stands and is recorded here rather than passed off as AD-014.
+
+---
+
 ## Template
 
 ```

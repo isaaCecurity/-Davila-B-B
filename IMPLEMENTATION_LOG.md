@@ -580,3 +580,72 @@ Tenant isolation is unaffected.
 `('order','invoice','production_batch')`. `'ticket'` fails the constraint; `'order'` fails
 the function. **Every ticket INSERT raises 23514** — which is why `tickets` holds zero rows.
 Fixing it is a constraint swap, deliberately not applied in this pass. See BLOCKER-012.
+
+---
+
+## 2026-08-15 · P8.1 — first frontend vertical slice
+
+**Scope:** sign in → choose bakery → catalog. **Zero migrations, zero database changes.**
+The four backend blockers (012, 003, 006, 009) were left untouched and unworked-around.
+
+### Files
+
+| File | Change |
+|---|---|
+| `packages/config/index.ts` | 4 → 74 — env resolution, fails loudly and names the variable |
+| `packages/auth/index.ts` | 4 → 234 — chunked SecureStore session storage, client factory, `setActiveOrganization` |
+| `packages/hooks/index.ts` | 4 → 196 — organization-scoped query keys and catalog hooks |
+| `packages/types/organization.ts`, `packages/validation/organization.ts`, `packages/api/queries/organizations.ts` | **new** — membership read path |
+| `apps/mobile/stores/session.ts`, `providers/AppProviders.tsx`, `components/ScreenState.tsx` | **new** |
+| `apps/mobile/app/{_layout,index,sign-in,select-organization}.tsx` | root gate + three screens |
+| `scripts/verify-cache-isolation.mts`, `apps/mobile/.env.example` | **new** |
+
+### The load-bearing decision: cache identity
+
+`packages/api` signatures carry **no tenant argument** — the tenant is the JWT claim RLS
+reads. Correct for the data layer, a trap for the cache layer: `['products']` is identical
+for every organization, so after a switch TanStack Query would serve bakery A's catalog
+under bakery B's name, from memory, with no request and no error. Invisible with one
+organization; indistinguishable from a leak with two.
+
+Every organization-scoped key therefore begins `['org', tenantId]` and is built only via
+`orgScoped()`. The id used is **the claim in force on the current token**, not the one
+tapped — those differ for the whole window between the RPC and the refresh.
+
+Eviction is `removeQueries`, not `invalidateQueries`: invalidation keeps serving stale data
+while refetching, so the first frame after a switch would still show the previous bakery.
+
+### Two live-schema facts the design depends on
+
+- **`organizations_select` keys off `auth.uid()`, not `current_tenant_id()`.** Without that
+  the switcher would be unreachable — a user with a null claim sees zero rows everywhere
+  else — and the app would deadlock on first sign-in.
+- **`set_active_organization()` updates one column** (`profiles.active_tenant_id`) and
+  nothing else. The claim lives in the JWT, so the RPC alone changes nothing the database
+  can see. `setActiveOrganization` does the RPC **and** the refresh; splitting them would
+  produce a UI that switched while the database did not.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` (all workspaces) | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0**, 12 files, all 7 new files covered — counted via `--format json`, not inferred from the exit code |
+| `npm run verify:cache` | **11/11 passed** |
+| `pytest -q` | **12 passed** |
+| On-device run | **NOT PERFORMED** — `apps/mobile/.env` has no anon key |
+
+`scripts/verify-cache-isolation.mts` is an executable check, not a unit test: the repo has
+no jest/vitest/react-test-renderer, so component behaviour cannot be asserted. It drives a
+real `QueryClient` and proves keys differ per organization, that B's key returns nothing
+while A's data is cached, that a switch evicts organization-scoped entries but keeps the
+user-scoped organization list, and that sign-out empties the cache.
+
+### BLOCKER-013 — AD-014 is not implementable as written
+
+AD-014 specifies "AES-256-GCM via `expo-crypto`". `expo-crypto` has **no cipher** — only
+random bytes, digests and `randomUUID`, verified against the installed types. Sessions ship
+on chunked SecureStore (Android Keystore / iOS Keychain) instead, which honours "no
+AsyncStorage" and no-plaintext-on-disk without a hand-rolled cipher. Recorded for a
+decision rather than substituted silently.
