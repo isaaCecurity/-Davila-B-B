@@ -57,10 +57,21 @@ if (signIn.error) process.exit(1);
 let session = signIn.data.session;
 let claims = claimsOf(session);
 check(
-  'JWT carries a top-level tenant_id claim (null before any org is chosen)',
+  'JWT carries a top-level tenant_id claim',
   'tenant_id' in claims,
   `tenant_id=${JSON.stringify(claims.tenant_id)} roles=${JSON.stringify(claims.roles)}`,
 );
+
+/**
+ * The organization active at sign-in. This is NOT always null: `set_active_organization`
+ * persists to `profiles.active_tenant_id` and deliberately refuses NULL, so there is no
+ * way to un-choose an organization — the choice survives sign-out and is restored by the
+ * hook on the next sign-in. That is intended behaviour, so the assertions below are
+ * written against whatever tenant the token actually carries rather than assuming a
+ * never-used account. The one thing guaranteed is that it is not ORG_A: a fresh account
+ * starts null, and every completed run of this file leaves ORG_B active.
+ */
+const signedInTenant = claims.tenant_id ?? null;
 check('tenant_id is NOT in app_metadata (the P8.1 bug)', claims.app_metadata?.tenant_id === undefined);
 
 // One clear diagnosis instead of ten downstream failures. The claim being ABSENT (rather
@@ -112,20 +123,34 @@ const rolesRead = await supabase
 check('own roles are readable', rolesRead.error === null && (rolesRead.data ?? []).length === 2,
   (rolesRead.data ?? []).map((r) => r.roles?.key).join(', '));
 
-// --------------------------------------------------- catalog with no org --
-const before = await supabase.from('products').select('id,name').is('deleted_at', null);
-check('catalog is EMPTY while no organization is active (not an error)',
-  before.error === null && (before.data ?? []).length === 0,
-  before.error ? before.error.message : `rows=${before.data?.length}`);
+// ------------------------------------ catalog reflects the token, always --
+// The general invariant, which covers the no-organization case rather than assuming it:
+// the catalog contains exactly the rows of the tenant in the token, and nothing at all
+// when that tenant is null. A null claim must return an empty list, never an error.
+const before = await supabase
+  .from('products').select('id,name,tenant_id').is('deleted_at', null);
+check(
+  signedInTenant === null
+    ? 'catalog is EMPTY while no organization is active (not an error)'
+    : `catalog holds only the signed-in organization's rows (active=${signedInTenant})`,
+  before.error === null &&
+    (before.data ?? []).every((p) => p.tenant_id === signedInTenant),
+  before.error ? before.error.message : `rows=${before.data?.length}`,
+);
 
 // ------------------------------------------------------ switch to org A --
 const rpcA = await supabase.rpc('set_active_organization', { p_tenant_id: ORG_A });
 check('set_active_organization(A) succeeds', rpcA.error === null, rpcA.error?.message ?? '');
 
+// The property that matters is that the RPC does not reach into the token already issued:
+// until the client refreshes, the database still sees the OLD tenant. Skipping the refresh
+// would silently leave the user operating in the previous organization.
 const staleClaims = claimsOf(session);
-check('the OLD token still has no tenant — the RPC alone changes nothing the DB can see',
-  staleClaims.tenant_id === null || staleClaims.tenant_id === undefined,
-  `stale tenant_id=${JSON.stringify(staleClaims.tenant_id)}`);
+check(
+  'the OLD token still carries the PREVIOUS tenant — the RPC alone changes nothing the DB can see',
+  (staleClaims.tenant_id ?? null) === signedInTenant && staleClaims.tenant_id !== ORG_A,
+  `stale tenant_id=${JSON.stringify(staleClaims.tenant_id)} (was ${JSON.stringify(signedInTenant)})`,
+);
 
 const refreshA = await supabase.auth.refreshSession();
 check('refreshSession succeeds', refreshA.error === null, refreshA.error?.message ?? '');

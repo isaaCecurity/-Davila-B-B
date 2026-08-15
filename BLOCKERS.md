@@ -375,7 +375,21 @@ implementation stands and is recorded here rather than passed off as AD-014.
 ---
 
 ## BLOCKER-014 · The access-token hook is not enabled, so no JWT carries `tenant_id`
-**Status:** OPEN · **Affects:** EVERYTHING tenant-scoped — P2, P4.x, P8.1, P9.1 · **Type:** project configuration
+**Status:** ✅ **RESOLVED 2026-08-15** · **Affects:** EVERYTHING tenant-scoped — P2, P4.x, P8.1, P9.1 · **Type:** project configuration
+
+**Resolution.** The hook was enabled on `tvfyxpafbpnkneujcnvr` and GoTrue now invokes it. A
+real sign-in mints `tenant_id` and `roles` as top-level claims, and the signed-in smoke test
+passes **30/30** — twice, from both a virgin account and a re-run. The tenant model is live:
+RLS now returns exactly the active organization's rows, and switching organizations changes
+what the database returns. Nothing in the database or the application had to change; the
+whole gap was the one project setting.
+
+The history below is kept because it records *how* the diagnosis was made — `pg_stat_statements`
+joined to `pg_roles` is the technique that distinguishes "hook broken" from "hook never
+called", and it will be the fastest route if this ever regresses.
+
+---
+
 
 **Severity: the multi-tenant model is inert in production.** Discovered 2026-08-15 by the
 first signed-in smoke test against the live project.

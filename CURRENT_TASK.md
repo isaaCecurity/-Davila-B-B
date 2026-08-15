@@ -1,5 +1,34 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-014 RESOLVED — the tenant model is live (2026-08-15)
+
+The access-token hook is enabled on `tvfyxpafbpnkneujcnvr` and GoTrue invokes it. Sign-in
+mints `tenant_id` and `roles` as top-level claims, and **the signed-in smoke test passes
+30/30**, run twice: once from a virgin account and once re-entering with an organization
+already active. Organization isolation is now verified *behaviourally* against the live
+database, not simulated — catalog A returns only A's rows, switching to B makes A's product
+invisible even by direct id, and a non-member organization is refused.
+
+**Two test defects were found and fixed** (no application defect):
+
+`set_active_organization` **deliberately rejects NULL** and persists to
+`profiles.active_tenant_id`, so an organization choice survives sign-out and is restored by
+the hook at the next sign-in. That is intended behaviour, but it meant the smoke test only
+passed on its very first run — it assumed a never-used account. Two assertions were rewritten
+to test the real invariants instead of that stale precondition:
+
+- the catalog contains exactly the rows of the tenant in the token, *and nothing at all when
+  that tenant is null* — which covers the no-organization case rather than presuming it;
+- after the RPC, the un-refreshed token still carries the **previous** tenant. This is the
+  property that matters: the RPC cannot reach into an already-issued token, so a client that
+  skips `refreshSession()` keeps operating in the old organization.
+
+The scratch profile's `active_tenant_id` was reset to NULL once so the null-claim path was
+genuinely exercised rather than assumed; the test then passed again unmodified on the
+persisted path.
+
+### Historical record — the original blocker
+
 ## 🛑 BLOCKER-014 — no JWT carries `tenant_id`; the tenant model is inert (2026-08-15)
 
 The first **signed-in** smoke test against the live project found that a real sign-in
