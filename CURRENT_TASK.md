@@ -1,6 +1,53 @@
 # BakeFlow — Current Task
 
-## ✅ BLOCKER-012 RESOLVED · 🛑 BLOCKER-015 FOUND BEHIND IT (2026-08-16)
+## ✅ BLOCKER-015 RESOLVED — ticket creation works end to end (2026-08-16)
+
+**Migration applied:** `fix_ticket_actor_membership_check_for_multi_org`. The two
+`profiles.tenant_id` membership lookups inside `guard_order_actor_and_assignment()` are now
+`user_roles` checks. Nothing else moved: `created_by` immutability, driver self-assignment,
+the driver reassignment ban, the driver-for-this-branch requirement and all four exception
+messages are byte-identical, and the function's owner, `SECURITY DEFINER`, `search_path` and
+EXECUTE ACL were re-read from `pg_proc` afterwards and are unchanged. The authorization
+*rule* is the same — the actor must belong to the organization the ticket is written into —
+only the table consulted moved, from where a user **started** to where a user is a **member**.
+
+**The smoke suite is 66 pass / 0 fail**, up from 53/9. It mints a real `TKT-000001` through
+PostgREST in organization A with `created_by` stamped from the JWT, and another in
+organization **B** — the multi-organization case that was impossible before, now a permanent
+regression guard named in the test.
+
+**Nine authorization scenarios executed live**, one signed-in and eight in a single
+rolled-back transaction, with the database re-read afterwards to confirm nothing persisted
+(`profiles.tenant_id` still null, 0 driver `user_roles` rows, 0 soft-deleted memberships):
+member of A → A creates; member of A+B with home org A → **B creates**; non-member refused;
+soft-deleted membership refused; non-member assignee refused; non-driver assignee refused;
+driver assignee accepted; driver self-assignment on insert; driver reassignment refused.
+The full table is in `BLOCKERS.md` §015.
+
+**Two test defects fixed, both found by the change, neither an application defect.**
+`guard_order_item_price()` overwrites `NEW.unit_price` from `product_variants.unit_price` on
+every insert, so the suite's `2 × 1500.5000 = 3001.0000` assertion was asserting a contract
+the database does not have. It now asserts the **stronger, real** one: the client's price is
+discarded, the catalog price wins (`850.0000`), `line_total` is `GENERATED ALWAYS` at
+`1700.0000`, and `recalculate_ticket_totals()` propagates it to the header. Separately,
+`Buffer` was used without importing `node:buffer`, which the root ESLint gate caught.
+
+### P9.6 reassessed — now genuinely unblocked
+
+A delivery hangs off a ticket, and a real signed-in user can now create one. The mechanism is
+known rather than assumed: grants read live show `authenticated` holds `INSERT, SELECT` and
+**no UPDATE** on both `tickets` and `deliveries`, so rows are created through PostgREST + RLS
+and every transition goes through a SECURITY DEFINER RPC. All six lifecycle signatures are
+recorded in `IMPLEMENTATION_LOG.md`. P9.6's remaining dependency is BLOCKER-003 (financial
+rules) only where money is involved; the delivery transitions themselves are not money.
+
+**Fixture note:** the smoke suite now creates one real ticket per run in **each** of the two
+scratch organizations. `tickets`, `ticket_items` and `document_sequences` are in the teardown
+order below.
+
+---
+
+## ✅ BLOCKER-012 RESOLVED · 🛑 BLOCKER-015 FOUND BEHIND IT (2026-08-16) — superseded above
 
 **Migration applied:** `20260816131235_fix_document_sequences_doc_type_check_for_ticket`.
 `document_sequences_doc_type_check` now allows `('ticket','invoice','production_batch')`,
@@ -241,6 +288,11 @@ go first. The order below is derived from the tables that actually hold fixture 
 -- scratch organizations: ab000000-…-da01 / -da02 / -da03
 delete from public.production_batch_ingredients where tenant_id in (:a, :b, :c);
 delete from public.production_batches           where tenant_id in (:a, :b, :c);
+-- Added 2026-08-16: the smoke suite creates one ticket per run in EACH scratch org.
+-- production_batches.ticket_id references tickets, so batches must go first (above).
+delete from public.deliveries                   where tenant_id in (:a, :b, :c);
+delete from public.ticket_items                 where tenant_id in (:a, :b, :c);
+delete from public.tickets                      where tenant_id in (:a, :b, :c);
 delete from public.recipe_ingredients           where tenant_id in (:a, :b, :c);
 delete from public.recipes                      where tenant_id in (:a, :b, :c);
 delete from public.ingredient_stock_levels      where tenant_id in (:a, :b, :c);

@@ -4,31 +4,29 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-015 — one migration needs approval to apply
+## RESOLVED: BLOCKER-015 — ticket creation works end to end
 
-**Question:** May the drafted migration `fix_ticket_actor_membership_check_for_multi_org`
-be applied? The `apply_migration` call was **denied by the permission classifier**, so it
-is written and verified but not applied.
+Migration `fix_ticket_actor_membership_check_for_multi_org` was **approved and applied live
+on 2026-08-16**. It replaced the two membership lookups inside
+`guard_order_actor_and_assignment()` that read `profiles.tenant_id` with `user_roles` checks;
+every other clause is byte-identical, and the function's owner, `SECURITY DEFINER`,
+`search_path` and EXECUTE ACL were re-read from `pg_proc` afterwards and are unchanged.
 
-**What it does:** replaces two membership lookups inside
-`guard_order_actor_and_assignment()` that read `profiles.tenant_id` with a `user_roles`
-check. Every other clause is byte-identical.
+**FYI, no action needed** — recorded here because the previous entry asked for a decision.
 
-**Why it is needed:** `profiles.tenant_id` is the user's **home** organization, not their
-membership set (`accept_organization_invite()` says so in its own body). As it stands, a
-user who joined organization A first can create tickets in A and **never** in B, and a user
-with a null `profiles.tenant_id` can create tickets nowhere. Proven live, rolled back:
-the same INSERT that fails today succeeds the moment `profiles.tenant_id` matches the target
-organization.
+**Verified, not assumed.** The signed-in smoke suite is **66 pass / 0 fail**, up from 53/9,
+and now mints a real `TKT-000001` through PostgREST in organization A *and* another in
+organization B — the multi-organization case that was impossible before. Nine authorization
+scenarios (non-member, deleted membership, home-org mismatch, and the five assignee/driver
+rules) were executed in one rolled-back transaction and all behaved correctly; the database
+was re-read afterwards to confirm nothing persisted. Full table in `BLOCKERS.md` §015.
 
-**Status:** BLOCKED on approval. It touches an authorization guard, so a human read of the
-diff is a reasonable gate. The full statement is in `IMPLEMENTATION_LOG.md` (2026-08-16),
-ready to re-run unmodified.
+**Unblocked by this:** P4.4b, P4.5, P9.6, and the ticket half of P9.3. P9.2, P3.7 and P5
+remain blocked on their own separate blockers (006, 003, 009), not on ticket creation.
 
-**Consequence while it stands:** ticket creation is still impossible for a real signed-in
-user, so P4.4b, P4.5, P9.2, P9.3, P9.6, P3.7 and P5 remain blocked — the same set
-BLOCKER-012 was blocking. The smoke suite reports **53 pass / 9 fail** and prints a
-one-paragraph diagnosis; all nine failures are downstream of this one guard.
+**One caveat for whoever cleans up:** the smoke suite now creates a real ticket per run in
+each of the two scratch organizations. `tickets`, `ticket_items` and the `document_sequences`
+rows must be included in the fixture teardown — the order is in `CURRENT_TASK.md`.
 
 ---
 

@@ -37,10 +37,13 @@ rather than by exhaustion of ideas.
 six schema-drift defects in already-committed code were found and fixed against the live
 contract.
 
-**🛑 BLOCKER-012 is now the single highest-value unblock, and it is migration-dependent.**
-`document_sequences_doc_type_check` still allows `'order'` while the functions emit
-`'ticket'`, so **no ticket can be inserted at all** — the sales, delivery, payment and
-ticket-sync paths are all downstream of that one constraint.
+**✅ BLOCKER-012 and BLOCKER-015 both RESOLVED 2026-08-16 — ticket creation now works.**
+Two defects sat in series: `document_sequences_doc_type_check` allowed `'order'` while the
+functions emitted `'ticket'` (012), and behind it `guard_order_actor_and_assignment()`
+resolved the actor's membership through `profiles.tenant_id`, the user's *home* organization,
+rather than through `user_roles` (015). Both are fixed live and proven by a real signed-in
+INSERT: the smoke suite is **66/66** and mints tickets in **both** organizations the smoke
+user belongs to. The sales, delivery and ticket-sync paths are open on this axis.
 
 > **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
 > gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
@@ -550,8 +553,8 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P4.2b inventory write | ✅ **COMPLETE** — 17/17 executed live 2026-08-15 |
 | P4.3 production | types/schemas **live-verified**; the `complete_production_batch()` and `fail_production_batch()` signatures were **read live 2026-08-16** and the completion path executed once under ROLLBACK, so the write path is now startable — no decision outstanding |
 | P4.4a customers | ✅ **COMPLETE** — 6/6 RLS + 12/12 structural executed live |
-| P4.4b ticket read/write | **BLOCKER-012** (no ticket can be created at all), BLOCKER-003, BLOCKER-009 |
-| P4.5 delivery | schema live-verified; behaviour blocked by **BLOCKER-012** (a delivery requires a ticket) |
+| P4.4b ticket read/write | creation **unblocked 2026-08-16** (012 + 015 resolved; `TKT-000001` created live). Pricing is catalog-authoritative, set by `guard_order_item_price()` — so BLOCKER-003 now bites only on discount/tax/rounding, and BLOCKER-009 on the confirm/complete transitions |
+| P4.5 delivery | schema live-verified; **unblocked 2026-08-16** — a ticket to hang a delivery from can now be created. All six lifecycle RPC signatures were read live |
 | P5 (all financial) | BLOCKER-003 |
 | P6.1 Edge Function scaffold | writable, but its only approved consumer P6.2 is blocked on BLOCKER-001 |
 | P6.2 invitations | BLOCKER-001 |
@@ -600,7 +603,7 @@ behaviour → tests → acceptance gate.**
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
 | P9.5 | Production batches | P4.3 | online-first | **READ PATH COMPLETE** / start+complete NOT_STARTED |
-| P9.6 | Delivery workflow | P4.5 | queued transitions | **STILL BLOCKED** — reassessed 2026-08-16. BLOCKER-012 is resolved, but ticket creation is now blocked by **BLOCKER-015**, so a delivery still has no ticket to hang from |
+| P9.6 | Delivery workflow | P4.5 | queued transitions | **UNBLOCKED 2026-08-16** — 012 and 015 both resolved, so a delivery now has a ticket to hang from. Read path is startable; note `authenticated` holds no UPDATE on `deliveries`, so transitions are RPC-only |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | BLOCKED |
 

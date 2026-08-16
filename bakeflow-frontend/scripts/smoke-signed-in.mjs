@@ -17,6 +17,8 @@
  *   node scripts/smoke-signed-in.mjs
  */
 
+import { Buffer } from 'node:buffer';
+
 import { createClient } from '@supabase/supabase-js';
 
 const URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? 'https://tvfyxpafbpnkneujcnvr.supabase.co';

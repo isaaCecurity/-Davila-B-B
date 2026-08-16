@@ -1141,3 +1141,100 @@ P4.5 write-path blocker; what remains is BLOCKER-015 and the unspecified financi
 
 The smoke suite is deliberately left red. The ticket path genuinely does not work, and the
 nine assertions describe the behaviour the system is supposed to have.
+
+---
+
+## 2026-08-16 — BLOCKER-015 resolved; the ticket path works end to end
+
+### Migration APPLIED: `fix_ticket_actor_membership_check_for_multi_org`
+
+The statement recorded in the previous entry was applied unmodified (plus a header comment
+block). It replaces the two `profiles.tenant_id` membership lookups inside
+`guard_order_actor_and_assignment()` with `user_roles` checks and changes nothing else.
+
+Post-apply, re-read from `pg_proc` rather than assumed:
+
+```
+prosecdef = true
+proconfig = {search_path=public}
+owner     = postgres
+proacl    = {postgres=X/postgres, service_role=X/postgres}
+```
+
+`create or replace function` preserved owner, security attributes and the EXECUTE ACL. The
+trigger binding is untouched: `trg_guard_ticket_actor_assignment BEFORE INSERT OR UPDATE OF
+created_by, assigned_to, branch_id, tenant_id ON public.tickets`.
+
+### Authorization verified behaviourally — 1 signed-in + 8 rolled back
+
+Row 1 is a real PostgREST INSERT from `scripts/smoke-signed-in.mjs`. Rows 2–11 ran in one
+transaction terminated by `ROLLBACK`, each in its own exception-trapping sub-block.
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | member of A → create in A | CREATED, `created_by=aa000000-…-da01` |
+| 2 | member of A **and** B, home org = A → create in **B** | CREATED `3e7d9707-…` |
+| 3 | non-member → create in C | REFUSED — `invalid order creator` |
+| 4 | membership soft-deleted → create in A | REFUSED — `invalid order creator` |
+| 5 | assignee not a member of the tenant | REFUSED — `assigned staff member does not belong to this organization` |
+| 6 | assignee is a member, no driver role for the branch | REFUSED — `assigned staff member is not a driver for this branch` |
+| 7 | assignee **is** a driver for that branch | CREATED, `assigned_to` preserved |
+| 8 | a driver creates a ticket | CREATED, auto-assigned to themselves |
+| 9 | a driver reassigns a ticket | REFUSED — `drivers cannot reassign tickets` |
+
+Rows 5–9 are the pre-existing assignee/driver rules, unchanged by this migration and
+re-proven after it. Nothing persisted — re-read after the rollback:
+
+```
+home_tenant_still_null   = null
+driver_rows              = 0
+soft_deleted_memberships = 0
+tickets_total            = 1   (TKT-000001, the real signed-in one)
+```
+
+### Two test defects found by the change and fixed
+
+Both were in `scripts/smoke-signed-in.mjs`; neither was an application defect.
+
+1. **`line_total` asserted a contract the database does not have.** The suite sent
+   `unit_price: '1500.5000'` and asserted `2 × 1500.5000 = 3001.0000`. Live,
+   `guard_order_item_price()` — read, not guessed — does
+   `NEW.unit_price := v_price` from `product_variants.unit_price` on **every** INSERT, so
+   pricing is catalog-authoritative and a client cannot name its own price. The assertion was
+   replaced with the stronger, true one: the submitted price is discarded, the catalog price
+   (`850.0000`) wins, `line_total` is `GENERATED ALWAYS AS round(quantity * unit_price, 4)` =
+   `1700.0000`, and a new check proves `recalculate_ticket_totals()` propagated
+   `1700.0000` to the ticket header. Three checks where there was one, none weaker.
+2. **`Buffer` was used without importing `node:buffer`** — `no-undef` under the root ESLint
+   gate. Fixed with the explicit import.
+
+### Regression guards added
+
+- `the same user CAN create a ticket in their SECOND organization (BLOCKER-015)` — the exact
+  case that failed, through real auth.
+- `B's ticket is numbered from B's OWN sequence and stamped with B's tenant` — B minted its
+  own `TKT-000001` while A was on `TKT-000002`, so document numbers stay per tenant.
+- The printed diagnosis banner was rewritten from "needs approval" to a regression notice for
+  `invalid order creator`, plus a new one-line notice for a `23514` (BLOCKER-012) return.
+
+### Gates — all executed from `bakeflow-frontend`
+
+| Command | Result |
+|---|---|
+| `node scripts/smoke-signed-in.mjs` | **66 pass / 0 fail**, exit 0 (was 53/9) |
+| `npm run typecheck --workspace apps/mobile` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0** |
+| `npm run lint` (workspaces + root `eslint .`) | **exit 0** |
+| `npm run verify:cache` | **61 checks, all passed** |
+| `.venv/Scripts/python.exe -m pytest -q` | **12 passed** |
+
+`npm run deps:check --workspace apps/mobile` failed with `Error: read ECONNRESET` reaching the
+Expo registry — a network failure in this environment, not a code defect, and unrelated to
+this change. It is the one documented gate not green.
+
+### Fixture consequence
+
+The smoke suite now creates one real ticket per run in **each** scratch organization, so
+`deliveries`, `ticket_items` and `tickets` were added to the teardown order in
+`CURRENT_TASK.md`, above `document_sequences` and below `production_batches` (which
+references `tickets` through `ticket_id`).

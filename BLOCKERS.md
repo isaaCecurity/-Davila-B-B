@@ -301,11 +301,12 @@ member with database access.
 ## BLOCKER-012 · No ticket can be created: the Order->Ticket rename is half-applied
 **Status:** ✅ **RESOLVED 2026-08-16** — migration `20260816131235_fix_document_sequences_doc_type_check_for_ticket` applied live. The constraint now allows `('ticket','invoice','production_batch')`, matching `next_document_number()`. Proven behaviourally: the same INSERT that raised 23514 now mints `TKT-000001` (verified in a rolled-back transaction). Zero `doc_type='order'` rows existed, so it was a pure constraint swap with no data migration.
 
-**Ticket creation is still blocked, by a different defect — see BLOCKER-015.** The 23514 is
-gone; the next INSERT fails on `invalid order creator`. BLOCKER-012's description of this as
+Fixing this constraint was **necessary but not sufficient**: the next INSERT then failed on
+`invalid order creator`, which became BLOCKER-015. BLOCKER-012's description of itself as
 "a one-line constraint swap that reopens sales, delivery, payments and ticket sync" was
-correct about the constraint and **wrong that the constraint was the only thing in the way**.
-Nothing downstream (P4.4b, P4.5, P3.7, P5) actually reopens until BLOCKER-015 is fixed.
+correct about the constraint and wrong that the constraint was the only thing in the way.
+**Both are now resolved (2026-08-16) and ticket creation works end to end**, so P4.4b, P4.5,
+P3.7 and P5 are open on this axis.
 
 Original text below.
 
@@ -494,7 +495,12 @@ on. The scratch fixtures it needs already exist (see the smoke-test note in
 ---
 
 ## BLOCKER-015 · The ticket actor guard predates multi-organization membership
-**Status:** OPEN — **fix drafted, blocked on permission to apply** · **Affects:** P4.4b, P4.5, P9.2, P9.3, P9.6, P3.7, P5 · **Type:** live defect, migration-dependent
+**Status:** ✅ **RESOLVED 2026-08-16** — migration `fix_ticket_actor_membership_check_for_multi_org` applied live · **Affects:** P4.4b, P4.5, P9.2, P9.3, P9.6, P3.7, P5 · **Type:** live defect, migration-dependent
+
+**Ticket creation now works end to end.** The signed-in smoke suite runs 66/66, including a
+real PostgREST INSERT that mints `TKT-000001` in organization A with `created_by` stamped
+from the JWT, and a second one in organization **B** — the case that was impossible before.
+Verification detail is in *Resolution* at the end of this entry.
 
 Found 2026-08-16 while verifying the BLOCKER-012 fix with a **real signed-in INSERT**. The
 constraint swap removed the 23514, and the very next INSERT failed:
@@ -544,11 +550,36 @@ from the one recording where a user **started** to the one recording where a use
 depth behind the `tickets_insert` RLS policy, which already requires
 `tenant_id = current_tenant_id()`, `has_branch_access(branch_id)` and an authorized role.
 
-**Needed:** approval to apply the drafted migration
-`fix_ticket_actor_membership_check_for_multi_org` — the `apply_migration` call was denied by
-the permission classifier. The full statement is in the 2026-08-16 `IMPLEMENTATION_LOG.md`
-entry, ready to re-run unmodified. Because it touches an authorization guard, a human read of
-that diff is a reasonable gate rather than an obstacle.
+### Resolution — applied and verified 2026-08-16
+
+Migration `fix_ticket_actor_membership_check_for_multi_org` replaced only the two
+`profiles.tenant_id` lookups with `user_roles` membership checks. `create or replace function`
+preserved the owner (`postgres`), `SECURITY DEFINER`, `search_path=public`, and the EXECUTE
+ACL (`postgres`, `service_role`) unchanged — re-read from `pg_proc` after applying.
+
+Every authorization scenario was executed against the live database. The first row is a real
+signed-in PostgREST INSERT from the smoke suite; the rest ran in **one transaction that was
+rolled back**, confirmed afterwards by re-reading the database (`profiles.tenant_id` still
+null, 0 driver `user_roles` rows, 0 soft-deleted memberships, no probe tickets).
+
+| Scenario | Result |
+|---|---|
+| member of A → create in A | **CREATED**, `created_by` = the JWT subject |
+| member of A **and** B, home org = A → create in **B** | **CREATED** |
+| non-member → create in C | REFUSED — `invalid order creator` |
+| membership soft-deleted → create in A | REFUSED — `invalid order creator` |
+| assignee is not a member of the tenant | REFUSED — `assigned staff member does not belong to this organization` |
+| assignee is a member but holds no driver role for the branch | REFUSED — `assigned staff member is not a driver for this branch` |
+| assignee **is** a driver for that branch | **CREATED**, `assigned_to` preserved |
+| a driver creates a ticket | **CREATED**, auto-assigned to themselves |
+| a driver reassigns a ticket | REFUSED — `drivers cannot reassign tickets` |
+
+Rows 5–9 are the pre-existing assignee/driver rules, unchanged by this migration and
+re-proven after it. Row 2 is the defect this blocker names.
+
+The smoke suite carries a permanent regression guard: **"the same user CAN create a ticket in
+their SECOND organization (BLOCKER-015)"**, plus a printed diagnosis banner if the
+`invalid order creator` symptom ever returns.
 
 ---
 
