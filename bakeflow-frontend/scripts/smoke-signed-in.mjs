@@ -34,6 +34,7 @@ const SUGAR = 'b1000000-0000-4000-8000-00000000da02';
 const YEAST = 'b1000000-0000-4000-8000-00000000da03';
 const FLOUR = 'b1000000-0000-4000-8000-00000000da01';
 const BRANCH_A = 'ac000000-0000-4000-8000-00000000da01';
+const BRANCH_B = 'ac000000-0000-4000-8000-00000000da02';
 const VARIANT_A1 = 'af000000-0000-4000-8000-00000000da01';
 const SMOKE_UID = 'aa000000-0000-4000-8000-00000000da01';
 const NOT_MY_UID = '00000000-0000-4000-8000-0000000000ff';
@@ -329,12 +330,15 @@ const recipesA = await supabase
 check('recipes resolve by id, for naming batches',
   recipesA.data?.[0]?.name === 'Smoke Agege Recipe', JSON.stringify(recipesA.data?.[0]?.name));
 
-// ------------------------------------- ticket creation (BLOCKER-012 fix) --
-// Until 2026-08-16 every one of these INSERTs failed with 23514: assign_order_number()
-// passed 'ticket' while document_sequences_doc_type_check still allowed only
-// ('order','invoice','production_batch'). This is a real signed-in INSERT through
-// PostgREST — `authenticated` holds INSERT on tickets, so tickets_insert (the RLS policy)
-// is what authorizes it, not a service key.
+// ------------------------- ticket creation (BLOCKER-012 + BLOCKER-015 fix) --
+// Two defects had to fall before this INSERT could work, and both are real:
+//   BLOCKER-012 — assign_order_number() passed 'ticket' while
+//     document_sequences_doc_type_check still allowed only ('order',...): 23514.
+//   BLOCKER-015 — guard_order_actor_and_assignment() resolved the actor's membership
+//     through profiles.tenant_id, the user's HOME organization, rather than through
+//     user_roles, the membership set: P0001 'invalid order creator'.
+// This is a real signed-in INSERT through PostgREST — `authenticated` holds INSERT on
+// tickets, so tickets_insert (the RLS policy) is what authorizes it, not a service key.
 const ticketInsert = await supabase
   .from('tickets')
   .insert({
@@ -346,36 +350,32 @@ const ticketInsert = await supabase
   })
   .select('id,ticket_number,status,tenant_id,branch_id,created_by,subtotal_amount::text,total_amount::text')
   .single();
-check('a ticket can be CREATED by a signed-in user (BLOCKER-012 resolved)',
+check('a ticket can be CREATED by a signed-in user (BLOCKER-012 + 015 resolved)',
   ticketInsert.error === null,
   ticketInsert.error ? `${ticketInsert.error.code} ${ticketInsert.error.message}` : '');
 
-// One diagnosis instead of nine downstream failures. The 23514 that defined BLOCKER-012 is
-// gone; what remains is a different defect with the same symptom.
+// One diagnosis instead of nine downstream failures, should either defect return.
 if (ticketInsert.error?.message?.includes('invalid order creator')) {
   console.log(`
 +----------------------------------------------------------------------------+
-| BLOCKER-015: the ticket actor guard predates multi-organization membership. |
+| REGRESSION of BLOCKER-015 — the ticket actor guard is resolving membership  |
+| through profiles.tenant_id again.                                          |
 |                                                                            |
-| BLOCKER-012 IS FIXED -- document_sequences_doc_type_check now allows        |
-| 'ticket' and the 23514 is gone. Proven live: with profiles.tenant_id set to |
-| the target organization, the same INSERT mints TKT-000001.                  |
+| profiles.tenant_id is the user's HOME organization, not their membership   |
+| set — accept_organization_invite() says so in its own body. Membership     |
+| lives in user_roles, which is what has_role() and every RLS policy consult. |
 |                                                                            |
-| guard_order_actor_and_assignment() resolves membership as                   |
-|   profiles.tenant_id = new.tenant_id                                        |
-| but profiles.tenant_id is the user's HOME organization, not their           |
-| membership set -- accept_organization_invite() says so in its own body.     |
-| Membership lives in user_roles, which is what has_role() and every RLS      |
-| policy consult.                                                            |
+| Symptom if it regresses: a user who joined A first can create tickets in A  |
+| and NEVER in B, and a user with a null profiles.tenant_id can create        |
+| tickets nowhere.                                                           |
 |                                                                            |
-| So: a user who joined A first can create tickets in A and NEVER in B, and   |
-| a user with a null profiles.tenant_id can create tickets nowhere.           |
-|                                                                            |
-| Fix: replace the two profiles lookups in that function with a user_roles    |
-| membership check. Migration drafted; it needs approval to apply.            |
-| See BLOCKERS.md BLOCKER-015.                                               |
+| Fixed 2026-08-16 by migration                                              |
+| fix_ticket_actor_membership_check_for_multi_org. See BLOCKERS.md 015.       |
 +----------------------------------------------------------------------------+
 `);
+}
+if (ticketInsert.error?.code === '23514') {
+  console.log('\nREGRESSION of BLOCKER-012: document_sequences_doc_type_check no longer allows \'ticket\'.\n');
 }
 
 const ticket = ticketInsert.data;
@@ -396,15 +396,23 @@ const itemInsert = await supabase
     ticket_id: ticket?.id,
     product_variant_id: VARIANT_A1,
     quantity: '2',
+    // Deliberately a lie, and NOT the catalog price (850.0000): the price guard must
+    // overwrite it. A client that could name its own price could sell at any price.
     unit_price: '1500.5000',
   })
   .select('id,quantity::text,unit_price::text,line_total::text')
   .single();
 check('a ticket item can be created', itemInsert.error === null,
   itemInsert.error ? `${itemInsert.error.code} ${itemInsert.error.message}` : '');
-// line_total is GENERATED ALWAYS — the client never sends it, and cannot disagree with it.
-check('line_total is computed BY THE DATABASE (2 x 1500.5000 = 3001.0000)',
-  itemInsert.data?.line_total === '3001.0000', String(itemInsert.data?.line_total));
+// guard_order_item_price() replaces NEW.unit_price with product_variants.unit_price on
+// every INSERT, so pricing is catalog-authoritative and a client CANNOT forge it.
+check('unit_price is taken from the CATALOG, not from the client (850.0000)',
+  itemInsert.data?.unit_price === '850.0000' && itemInsert.data?.unit_price !== '1500.5000',
+  String(itemInsert.data?.unit_price));
+// line_total is GENERATED ALWAYS as round(quantity * unit_price, 4) — the client never
+// sends it, and cannot disagree with it.
+check('line_total is computed BY THE DATABASE (2 x 850.0000 = 1700.0000)',
+  itemInsert.data?.line_total === '1700.0000', String(itemInsert.data?.line_total));
 
 // The sequence row the old constraint made unstorable now exists.
 const seq = await supabase
@@ -424,6 +432,10 @@ check('the new ticket is readable through the sales read path',
   readBack.data?.ticket_number === ticket?.ticket_number &&
     typeof readBack.data?.total_amount === 'string',
   JSON.stringify({ number: readBack.data?.ticket_number, total: readBack.data?.total_amount }));
+// recalculate_ticket_totals() ran on the item insert: the header now carries the line.
+check('the ticket header totals were RECALCULATED by the database (1700.0000)',
+  readBack.data?.subtotal_amount === '1700.0000' && readBack.data?.total_amount === '1700.0000',
+  JSON.stringify({ subtotal: readBack.data?.subtotal_amount, total: readBack.data?.total_amount }));
 
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });
@@ -500,6 +512,24 @@ const crossTicket = await supabase
 check("creating a ticket in A's branch is REFUSED while B is active",
   crossTicket.error !== null,
   crossTicket.error ? `${crossTicket.error.code} ${crossTicket.error.message}` : 'NO ERROR (unexpected)');
+
+// The BLOCKER-015 regression guard. This user belongs to A AND B. Before the fix the
+// actor guard resolved membership through profiles.tenant_id — one home organization —
+// so a ticket could only ever be created in whichever organization that column named.
+// Creating in the SECOND organization is the case that used to be impossible.
+const ticketB = await supabase
+  .from('tickets')
+  .insert({ tenant_id: ORG_B, branch_id: BRANCH_B, fulfilment_type: 'pickup' })
+  .select('id,ticket_number,tenant_id,created_by,status')
+  .single();
+check('the same user CAN create a ticket in their SECOND organization (BLOCKER-015)',
+  ticketB.error === null,
+  ticketB.error ? `${ticketB.error.code} ${ticketB.error.message}` : String(ticketB.data?.ticket_number));
+check("B's ticket is numbered from B's OWN sequence and stamped with B's tenant",
+  /^TKT-\d{6}$/.test(ticketB.data?.ticket_number ?? '') &&
+    ticketB.data?.tenant_id === ORG_B &&
+    ticketB.data?.created_by === SMOKE_UID,
+  JSON.stringify({ number: ticketB.data?.ticket_number, tenant: ticketB.data?.tenant_id }));
 
 // --------------------------------------------- switching to a non-member --
 const rpcC = await supabase.rpc('set_active_organization', { p_tenant_id: ORG_C });
