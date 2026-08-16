@@ -600,7 +600,7 @@ behaviour → tests → acceptance gate.**
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
 | P9.5 | Production batches | P4.3 | online-first | **READ PATH COMPLETE** / start+complete NOT_STARTED |
-| P9.6 | Delivery workflow | P4.5 | queued transitions | NOT_STARTED — not live-verifiable while **BLOCKER-012** stands (a delivery requires a ticket) |
+| P9.6 | Delivery workflow | P4.5 | queued transitions | **STILL BLOCKED** — reassessed 2026-08-16. BLOCKER-012 is resolved, but ticket creation is now blocked by **BLOCKER-015**, so a delivery still has no ticket to hang from |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | BLOCKED |
 

@@ -972,3 +972,172 @@ end $$;
 
 16 tables hold fixture rows today. No cleanup was run — the fixtures are still needed to
 re-run the smoke test.
+
+---
+
+## 2026-08-16 — BLOCKER-012 resolved; BLOCKER-015 found behind it
+
+### Migration APPLIED: `20260816131235_fix_document_sequences_doc_type_check_for_ticket`
+
+`document_sequences_doc_type_check` allowed `('order','invoice','production_batch')` while
+`assign_order_number()` passes `'ticket'` and `next_document_number()` rejects `'order'` —
+disjoint, so no value satisfied both and every ticket INSERT raised 23514. The constraint now
+allows `('ticket','invoice','production_batch')`.
+
+Zero `doc_type='order'` rows existed, so no data migration ran. The rename statement is kept
+for other environments and **cannot** violate `UNIQUE (tenant_id, doc_type)`: a `'ticket'` row
+cannot exist anywhere the old constraint is in force, because that constraint is what forbids
+the value. No counter merge is needed, and numbering continues from `current_value` rather
+than restarting — `tickets.ticket_number` is unique per tenant, so a reset would collide.
+
+Applied through `apply_migration`, matching the convention of the last five applied
+migrations (recorded in the remote migration history; no repo file, since the 14 files in
+`supabase/migrations/` are the never-applied set of BLOCKER-002 and adding an applied file
+among them would deepen that confusion).
+
+### Verification found a SECOND defect with the same symptom — BLOCKER-015
+
+The first real signed-in INSERT after the migration failed on `P0001 invalid order creator`
+from `guard_order_actor_and_assignment()`. Isolated in one rolled-back transaction:
+
+| Attempt | Result |
+|---|---|
+| INSERT as the schema stands | REFUSED — `P0001 invalid order creator` |
+| same INSERT, `profiles.tenant_id` set to the target org | **CREATED `TKT-000001`** |
+| same user (owner of A and B, home = A), INSERT into **B** | REFUSED — `invalid order creator` |
+
+Row 2 is the proof that the constraint fix works. Row 3 is the new defect: the guard resolves
+membership through `profiles.tenant_id`, which under the multi-organization model is the
+user's **home** organization, not their membership set —
+`accept_organization_invite()` says so in its own body. Membership is `user_roles`, which the
+same function already consults for the assignee's driver role. Nothing persisted: 0 tickets,
+0 ticket sequences, `profiles.tenant_id` still null.
+
+### Migration DRAFTED but NOT APPLIED — `fix_ticket_actor_membership_check_for_multi_org`
+
+The `apply_migration` call was **denied by the permission classifier**. It was not worked
+around. Re-run this unmodified once approved:
+
+```sql
+create or replace function public.guard_order_actor_and_assignment()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_uid uuid := auth.uid();
+  v_is_driver boolean := public.has_role(array['driver']);
+begin
+  -- created_by is immutable after insertion. Never overwrite historical authorship.
+  if tg_op = 'INSERT' then
+    if v_uid is not null then
+      new.created_by := v_uid;
+    end if;
+
+    if v_uid is not null and v_is_driver and new.assigned_to is null then
+      new.assigned_to := v_uid;
+    end if;
+  elsif tg_op = 'UPDATE' then
+    new.created_by := old.created_by;
+
+    -- Drivers may work their tickets, but cannot reassign them.
+    if v_uid is not null and v_is_driver and new.assigned_to is distinct from old.assigned_to then
+      raise exception 'drivers cannot reassign tickets';
+    end if;
+  end if;
+
+  if new.created_by is not null then
+    if not exists (
+      select 1
+      from public.profiles p
+      where p.id = new.created_by
+        and p.deleted_at is null
+        and exists (
+          select 1
+          from public.user_roles ur
+          where ur.profile_id = p.id
+            and ur.tenant_id  = new.tenant_id
+            and ur.deleted_at is null
+        )
+    ) then
+      raise exception 'invalid order creator';
+    end if;
+  end if;
+
+  if new.assigned_to is not null then
+    if not exists (
+      select 1
+      from public.profiles p
+      where p.id = new.assigned_to
+        and p.deleted_at is null
+        and exists (
+          select 1
+          from public.user_roles ur
+          where ur.profile_id = p.id
+            and ur.tenant_id  = new.tenant_id
+            and ur.deleted_at is null
+        )
+    ) then
+      raise exception 'assigned staff member does not belong to this organization';
+    end if;
+
+    if not exists (
+      select 1
+      from public.user_roles ur
+      join public.roles r on r.id = ur.role_id
+      where ur.profile_id = new.assigned_to
+        and ur.tenant_id = new.tenant_id
+        and ur.deleted_at is null
+        and r.key = 'driver'
+        and r.deleted_at is null
+        and (ur.branch_id is null or ur.branch_id = new.branch_id)
+    ) then
+      raise exception 'assigned staff member is not a driver for this branch';
+    end if;
+  end if;
+
+  return new;
+end;
+$function$;
+```
+
+Only the two membership lookups change. The rule is unchanged — the actor must belong to the
+organization the ticket is written into — and only the table consulted moves. It is strictly
+tighter in one respect: a profile carrying `tenant_id = A` with no `user_roles` row for A
+previously passed and no longer would.
+
+### RPC signatures read live (for whoever builds the write paths)
+
+```
+confirm_ticket(p_order_id uuid) returns jsonb
+complete_ticket(p_order_id uuid, p_warehouse_id uuid DEFAULT NULL) returns jsonb
+cancel_ticket(p_order_id uuid, p_reason text) returns jsonb
+archive_ticket(p_ticket_id uuid, p_reason text) returns tickets
+transition_delivery(p_delivery_id uuid, p_to_status text, p_proof_url text DEFAULT NULL,
+                    p_recipient_name text DEFAULT NULL, p_reason text DEFAULT NULL,
+                    p_driver_id uuid DEFAULT NULL) returns jsonb
+update_delivery_details(p_delivery_id uuid, p_address_line text DEFAULT NULL,
+                        p_contact_phone text DEFAULT NULL,
+                        p_scheduled_at timestamptz DEFAULT NULL) returns jsonb
+```
+
+Grants confirm the mechanism rather than leaving it to inference: `authenticated` holds
+`INSERT, SELECT` on `tickets` and `deliveries` and **no UPDATE** on either, so rows are
+created through PostgREST + RLS and every transition goes through a SECURITY DEFINER RPC.
+`ticket_items` additionally holds UPDATE. This retires the "signatures not read" half of the
+P4.5 write-path blocker; what remains is BLOCKER-015 and the unspecified financial rules.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `scripts/smoke-signed-in.mjs` | **53 pass / 9 fail** — all nine downstream of BLOCKER-015, with a printed diagnosis |
+| `npm run verify:cache` | **61/61 passed** |
+| `npm run typecheck` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0** |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `pytest -q` | **12 passed** |
+
+The smoke suite is deliberately left red. The ticket path genuinely does not work, and the
+nine assertions describe the behaviour the system is supposed to have.

@@ -299,7 +299,17 @@ member with database access.
 ---
 
 ## BLOCKER-012 · No ticket can be created: the Order->Ticket rename is half-applied
-**Status:** OPEN · **Affects:** P4.4 (all ticket behaviour), P4.5, P3.7, P5 · **Type:** live defect, **migration-dependent**
+**Status:** ✅ **RESOLVED 2026-08-16** — migration `20260816131235_fix_document_sequences_doc_type_check_for_ticket` applied live. The constraint now allows `('ticket','invoice','production_batch')`, matching `next_document_number()`. Proven behaviourally: the same INSERT that raised 23514 now mints `TKT-000001` (verified in a rolled-back transaction). Zero `doc_type='order'` rows existed, so it was a pure constraint swap with no data migration.
+
+**Ticket creation is still blocked, by a different defect — see BLOCKER-015.** The 23514 is
+gone; the next INSERT fails on `invalid order creator`. BLOCKER-012's description of this as
+"a one-line constraint swap that reopens sales, delivery, payments and ticket sync" was
+correct about the constraint and **wrong that the constraint was the only thing in the way**.
+Nothing downstream (P4.4b, P4.5, P3.7, P5) actually reopens until BLOCKER-015 is fixed.
+
+Original text below.
+
+**Superseded status:** OPEN · **Affects:** P4.4 (all ticket behaviour), P4.5, P3.7, P5 · **Type:** live defect, **migration-dependent**
 
 **Severity: the `tickets` table is unusable in production.** Every INSERT fails. Discovered
 2026-08-15 while running `tests/sql/sales_read_rls.sql`; reproduced from a bare fixture.
@@ -480,6 +490,65 @@ one-paragraph diagnosis when the claim is absent rather than ten downstream fail
 checks today; all ten are downstream of the missing claim and should pass once the hook is
 on. The scratch fixtures it needs already exist (see the smoke-test note in
 `CURRENT_TASK.md`).
+
+---
+
+## BLOCKER-015 · The ticket actor guard predates multi-organization membership
+**Status:** OPEN — **fix drafted, blocked on permission to apply** · **Affects:** P4.4b, P4.5, P9.2, P9.3, P9.6, P3.7, P5 · **Type:** live defect, migration-dependent
+
+Found 2026-08-16 while verifying the BLOCKER-012 fix with a **real signed-in INSERT**. The
+constraint swap removed the 23514, and the very next INSERT failed:
+
+```
+P0001  invalid order creator
+CONTEXT: PL/pgSQL function guard_order_actor_and_assignment()
+```
+
+`guard_order_actor_and_assignment()` resolves membership as
+
+```sql
+select * from public.profiles
+ where id = new.created_by and tenant_id = new.tenant_id and deleted_at is null
+```
+
+but under the multi-organization model **`profiles.tenant_id` is the user's HOME
+organization, not their membership set**. `accept_organization_invite()` states this in its
+own body: *"Membership in another organization is expected and must not block acceptance.
+Seed the home organization only on the very first acceptance."* Membership lives in
+`user_roles (tenant_id, profile_id)` — which is what `has_role()` and every RLS policy read,
+and which the **same function** already consults three lines below for the assignee's driver
+role. The correct check sits next to the incorrect one.
+
+### Two failure modes, proven live (rolled back, nothing persisted)
+
+| Attempt | Result |
+|---|---|
+| INSERT as the schema stands | REFUSED — `P0001 invalid order creator` |
+| same INSERT, with `profiles.tenant_id` set to the target org | **CREATED `TKT-000001`** |
+| same user (owner of A **and** B, home = A), INSERT into **B** | REFUSED — `invalid order creator` |
+
+So: a user who joined organization A first can create tickets in A and **never** in B; and a
+user whose `profiles.tenant_id` is null — any provisioning path that does not run through
+invite acceptance — can create tickets in **no** organization at all. The second row is what
+proves BLOCKER-012's constraint fix works; the third is the multi-tenant failure mode.
+
+### The fix, and why it is a defect fix rather than a policy change
+
+Replace the two `profiles.tenant_id` lookups with a `user_roles` membership check, leaving
+every other clause byte-identical (created_by immutability, the driver rules, and the
+assignee's driver-for-this-branch requirement). The rule is unchanged — *the actor must
+belong to the organization the ticket is written into* — and only the table consulted moves,
+from the one recording where a user **started** to the one recording where a user is a
+**member**. It is strictly tighter in one respect: a profile carrying `tenant_id = A` with no
+`user_roles` row for A previously passed and would no longer. The guard stays defence in
+depth behind the `tickets_insert` RLS policy, which already requires
+`tenant_id = current_tenant_id()`, `has_branch_access(branch_id)` and an authorized role.
+
+**Needed:** approval to apply the drafted migration
+`fix_ticket_actor_membership_check_for_multi_org` — the `apply_migration` call was denied by
+the permission classifier. The full statement is in the 2026-08-16 `IMPLEMENTATION_LOG.md`
+entry, ready to re-run unmodified. Because it touches an authorization guard, a human read of
+that diff is a reasonable gate rather than an obstacle.
 
 ---
 

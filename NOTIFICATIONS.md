@@ -4,6 +4,43 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-015 — one migration needs approval to apply
+
+**Question:** May the drafted migration `fix_ticket_actor_membership_check_for_multi_org`
+be applied? The `apply_migration` call was **denied by the permission classifier**, so it
+is written and verified but not applied.
+
+**What it does:** replaces two membership lookups inside
+`guard_order_actor_and_assignment()` that read `profiles.tenant_id` with a `user_roles`
+check. Every other clause is byte-identical.
+
+**Why it is needed:** `profiles.tenant_id` is the user's **home** organization, not their
+membership set (`accept_organization_invite()` says so in its own body). As it stands, a
+user who joined organization A first can create tickets in A and **never** in B, and a user
+with a null `profiles.tenant_id` can create tickets nowhere. Proven live, rolled back:
+the same INSERT that fails today succeeds the moment `profiles.tenant_id` matches the target
+organization.
+
+**Status:** BLOCKED on approval. It touches an authorization guard, so a human read of the
+diff is a reasonable gate. The full statement is in `IMPLEMENTATION_LOG.md` (2026-08-16),
+ready to re-run unmodified.
+
+**Consequence while it stands:** ticket creation is still impossible for a real signed-in
+user, so P4.4b, P4.5, P9.2, P9.3, P9.6, P3.7 and P5 remain blocked — the same set
+BLOCKER-012 was blocking. The smoke suite reports **53 pass / 9 fail** and prints a
+one-paragraph diagnosis; all nine failures are downstream of this one guard.
+
+---
+
+## RESOLVED: BLOCKER-012 — tickets can be numbered again
+
+Migration `20260816131235_fix_document_sequences_doc_type_check_for_ticket` is applied live.
+`document_sequences_doc_type_check` now allows `('ticket','invoice','production_batch')`,
+matching `next_document_number()`. No data migration was needed — zero `doc_type='order'`
+rows existed. **This alone does not restore ticket creation** — see BLOCKER-015.
+
+---
+
 ## ACTION REQUIRED: BLOCKER-011
 
 **Question:** Can the Supabase MCP connector be authorized with the account that owns

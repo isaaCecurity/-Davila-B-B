@@ -1,5 +1,50 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-012 RESOLVED · 🛑 BLOCKER-015 FOUND BEHIND IT (2026-08-16)
+
+**Migration applied:** `20260816131235_fix_document_sequences_doc_type_check_for_ticket`.
+`document_sequences_doc_type_check` now allows `('ticket','invoice','production_batch')`,
+matching `next_document_number()`. Zero `doc_type='order'` rows existed, so it was a pure
+constraint swap. The 23514 that made `tickets` unusable is gone.
+
+**Ticket creation still does not work.** Verifying with a real signed-in INSERT — not a
+simulation — surfaced a second defect with the same symptom:
+`guard_order_actor_and_assignment()` resolves membership through `profiles.tenant_id`, which
+under the multi-organization model is the user's **home** organization rather than their
+membership set. Proven in one rolled-back transaction:
+
+| Attempt | Result |
+|---|---|
+| INSERT as the schema stands | REFUSED — `P0001 invalid order creator` |
+| same INSERT, `profiles.tenant_id` set to the target org | **CREATED `TKT-000001`** |
+| same user (owner of A **and** B, home = A), INSERT into **B** | REFUSED |
+
+Row 2 proves the constraint fix works. Row 3 is the new defect. Nothing persisted.
+
+**The fix is drafted and was denied by the permission classifier**, so it is written,
+reasoned and unapplied — full statement in `IMPLEMENTATION_LOG.md`, ready to re-run
+unmodified. It touches an authorization guard, so a human read of the diff is a fair gate.
+See **BLOCKER-015** and `NOTIFICATIONS.md`.
+
+**The smoke suite is deliberately left red: 53 pass / 9 fail.** All nine failures are
+downstream of that one guard, and the suite prints a one-paragraph diagnosis instead of nine
+mysteries. The assertions describe the behaviour the system is supposed to have; making them
+pass by weakening them would hide a real defect.
+
+### P9.6 reassessed — still blocked, for a new reason
+
+The question was whether resolving BLOCKER-012 unblocks the delivery workflow. It does not.
+A delivery hangs off a ticket, and no real user can create a ticket until BLOCKER-015 is
+fixed. What *did* change is that the mechanism is now known rather than assumed — grants read
+live show `authenticated` holds `INSERT, SELECT` and **no UPDATE** on both `tickets` and
+`deliveries`, so rows are created through PostgREST + RLS and every transition goes through a
+SECURITY DEFINER RPC. All six lifecycle signatures are recorded in `IMPLEMENTATION_LOG.md`.
+That retires the "signatures have not been read" half of P4.5's write-path blocker.
+
+**P9.6 becomes genuinely startable when BLOCKER-015 is applied.** Its remaining dependency
+after that is BLOCKER-003 (financial rules) only where money is involved; the delivery
+transitions themselves are not money.
+
 ## ✅ P9.5 DELIVERED — production batches, read path (2026-08-16)
 
 Batch list with a server-side status filter, plus a detail screen showing the batch and its
