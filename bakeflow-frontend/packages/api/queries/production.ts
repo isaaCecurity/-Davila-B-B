@@ -20,16 +20,33 @@
  * exists to prevent. So this module offers **no** batch mutation at all, and the eventual
  * `packages/api/mutations/production.ts` must call the RPC rather than sequence writes.
  *
- * Its signature is not reproduced anywhere in this milestone: it will be read from the
- * live database first. `adjust_stock()` is the precedent — the assumed contract there was
- * wrong in both mechanism and semantics.
+ * The signature has since been **read from the live database** (2026-08-16, recorded in
+ * `IMPLEMENTATION_LOG.md`) and the completion path was executed once inside a rolled-back
+ * transaction, so the contract is no longer assumed. Building the mutation is still a
+ * separate milestone: this module is the read path.
  *
- * ## Provenance
+ * ## Provenance — live-verified
  *
- * Types and schemas for this domain were written from `SCHEMA-REFERENCE.md` §5 and
- * `STATE-MACHINES.md` §2 while the database was unreachable, and are **not yet
- * live-verified**. The queries below therefore avoid asserting any RLS predicate: they
- * filter what they need explicitly and let the server decide what is visible.
+ * The types and schemas for this domain were originally written from
+ * `SCHEMA-REFERENCE.md` §5 and `STATE-MACHINES.md` §2 while the database was unreachable.
+ * They have since been checked column-for-column against `information_schema.columns` and
+ * `pg_constraint` (2026-08-15) and again for P9.5 (2026-08-16): both tables match exactly.
+ *
+ * The RLS predicates are now known too, and are the reason the queries below still assert
+ * nothing about them — they filter what they need explicitly and let the server decide
+ * what is visible:
+ *
+ * ```sql
+ * production_batches_select:            tenant_id = current_tenant_id()
+ *                                       AND has_branch_access(branch_id)
+ *                                       AND deleted_at IS NULL
+ * production_batch_ingredients_select:  tenant_id = current_tenant_id()
+ *                                       AND deleted_at IS NULL
+ *                                       AND EXISTS (parent batch with branch access)
+ * ```
+ *
+ * Note the child reaches its branch axis **through its parent**, which is why a caller
+ * cannot widen its own visibility by querying `production_batch_ingredients` directly.
  *
  * ## Money and quantity precision
  *

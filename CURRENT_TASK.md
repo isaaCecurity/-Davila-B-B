@@ -1,5 +1,73 @@
 # BakeFlow — Current Task
 
+## ✅ P9.5 DELIVERED — production batches, read path (2026-08-16)
+
+Batch list with a server-side status filter, plus a detail screen showing the batch and its
+ingredient lines. Three new organization-scoped hooks and one new query
+(`listRecipesByIds`). **Zero migrations.** Verified live: **51/51** smoke checks.
+
+```
+EVIDENCE: node scripts/smoke-signed-in.mjs        -> exit 0, 51 PASS / 0 FAIL
+          npm run verify:cache                    -> exit 0, 61 PASS / 0 FAIL
+          npm run typecheck                       -> exit 0
+          npm run lint --workspace apps/mobile    -> exit 0, 18 files,
+                                                     all 3 new files covered
+                                                     (counted via --format json)
+          npx eslint packages --max-warnings=0    -> exit 0
+          .venv/Scripts/python.exe -m pytest -q   -> 12 passed
+          on-device run                           -> NOT PERFORMED (no anon key on a device)
+```
+
+**Why P9.5 and not P9.6.** A delivery hard-requires a ticket, and **BLOCKER-012** makes every
+ticket INSERT fail, so a delivery screen could be written but never verified against live
+data. `production_batches.ticket_id` is nullable — build-to-stock batches need no ticket —
+and `assign_batch_number()` routes through `next_document_number(…, 'production_batch')`,
+which is one of the doc types the `document_sequences` CHECK **does** allow. Production is
+therefore the only P9 slice that is both unblocked and live-verifiable today.
+
+**Read-only, for a stronger reason than P9.4's.** `complete_production_batch()` writes one
+`production_consume` movement per ingredient, one `production_output` movement for the
+finished variant, each line's actuals, and the status — in one transaction. A client that
+assembled that from separate calls would, on a partial failure, leave the flour consumed
+with no bread recorded.
+
+**The fixtures insert batches only.** Every ingredient line on screen is
+`copy_batch_planned_ingredients()` scaling the recipe by `planned/yield` and rounding to
+four decimals, so the trigger's arithmetic is what the smoke test asserts — including
+`2.5 × (7/3) → 5.8333`, which only holds if the rounding happens in the database.
+
+**The state machine was executed, not read.** In one rolled-back transaction:
+`cancelled → in_progress` REFUSED, `scheduled → completed` REFUSED (no skipping
+`in_progress`), `complete_production_batch(in_progress, 7.0)` OK — status `completed`,
+2 movements (`production_consume -5.8333`, `production_output 7.0000`), flour 120.0000 →
+114.1667, line actual 5.8333 — then `completed → in_progress` REFUSED. Verified afterwards
+that nothing persisted: flour 120.0000, 7 movements, batch still `in_progress`.
+
+**Two RPC signatures are now read from the live database** —
+`complete_production_batch(p_batch_id uuid, p_actual_quantity numeric, p_ingredient_actuals
+jsonb DEFAULT '[]', p_warehouse_id uuid DEFAULT NULL)` and `fail_production_batch(p_batch_id
+uuid, p_reason text, p_ingredient_actuals jsonb DEFAULT '[]', p_warehouse_id uuid DEFAULT
+NULL)`. That removes the stated obstacle to P4.3's write path. It does **not** make the
+write path done; it makes it startable.
+
+**One documentation defect corrected.** `packages/api/queries/production.ts` still carried a
+"not yet live-verified" provenance caveat that stopped being true on 2026-08-15. Both tables
+match `information_schema.columns` and `pg_constraint` exactly; the header now records the
+live RLS predicates instead, including that the child table reaches its branch axis through
+its parent.
+
+**Cache keys are now guarded structurally.** `verify-cache-isolation.mts` enumerates every
+builder in `queryKeys` and requires each to be organization-scoped unless it is on an
+explicit user-scoped allowlist. The previous checks sampled three keys, so a future key that
+forgot `orgScoped()` would have passed them all.
+
+### Fixtures added (same cleanup as the rest)
+
+Three recipes, four recipe lines and four batches inside the smoke organizations — org A has
+`BATCH-000001..3` (scheduled / in_progress / cancelled), org B has its own `BATCH-000001`.
+The duplicate number across tenants is deliberate and asserted: document sequences are per
+tenant, so a global one would leak how much other bakeries produce.
+
 ## ✅ BLOCKER-014 RESOLVED — the tenant model is live (2026-08-15)
 
 The access-token hook is enabled on `tvfyxpafbpnkneujcnvr` and GoTrue invokes it. Sign-in
@@ -114,12 +182,42 @@ the hook is on. The database held **zero** business rows before this. **Remove t
 production** — a known-password account must not outlive the checkpoint. Cleanup:
 
 Inventory fixtures were added for P9.4 — one stockroom per organization, four ingredients
-and six ledger movements, all inside the smoke organizations. They go with the same cleanup:
+and six ledger movements — and production fixtures for P9.5 — three recipes, four recipe
+lines, four batches and their six trigger-written ingredient lines. All inside the smoke
+organizations.
+
+**The two-line cleanup previously recorded here does not work, and was never executed.**
+`organizations` has **32 RESTRICT children and no cascades** (verified live 2026-08-16), so
+`delete from public.organizations …` raises `23503` on the first child table. Children must
+go first. The order below is derived from the tables that actually hold fixture rows today
+(16 of them, counted live), children before parents:
 
 ```sql
+-- scratch organizations: ab000000-…-da01 / -da02 / -da03
+delete from public.production_batch_ingredients where tenant_id in (:a, :b, :c);
+delete from public.production_batches           where tenant_id in (:a, :b, :c);
+delete from public.recipe_ingredients           where tenant_id in (:a, :b, :c);
+delete from public.recipes                      where tenant_id in (:a, :b, :c);
+delete from public.ingredient_stock_levels      where tenant_id in (:a, :b, :c);
+delete from public.product_stock_levels         where tenant_id in (:a, :b, :c);
+delete from public.stock_movements              where tenant_id in (:a, :b, :c);
+delete from public.warehouses                   where tenant_id in (:a, :b, :c);
+delete from public.ingredients                  where tenant_id in (:a, :b, :c);
+delete from public.product_variants             where tenant_id in (:a, :b, :c);
+delete from public.products                     where tenant_id in (:a, :b, :c);
+delete from public.product_categories           where tenant_id in (:a, :b, :c);
+delete from public.document_sequences           where tenant_id in (:a, :b, :c);
+delete from public.audit_log                    where tenant_id in (:a, :b, :c);
+delete from public.user_roles                   where tenant_id in (:a, :b, :c);
+delete from public.branches                     where tenant_id in (:a, :b, :c);
+delete from public.organizations                where slug like 'smoke-bakery-%';
 delete from auth.users where email = 'smoke.owner@bakeflow.test';
-delete from public.organizations where slug like 'smoke-bakery-%';
 ```
+
+Re-derive the table list before running it rather than trusting this snapshot — a later
+milestone's fixtures will add tables. The query that produced it iterates
+`information_schema.columns` for `tenant_id` and counts rows per table; it is in the
+2026-08-16 `IMPLEMENTATION_LOG.md` entry.
 
 ---
 

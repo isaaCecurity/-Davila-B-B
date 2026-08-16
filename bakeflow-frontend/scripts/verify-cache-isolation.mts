@@ -53,6 +53,42 @@ check(
   JSON.stringify(queryKeys.myOrganizations(USER)),
 );
 
+// 1b — EVERY key builder, not just the three sampled above.
+//
+// The sampled checks prove the property for the keys that existed when they were written.
+// A key added later that forgot `orgScoped()` would pass all of them and still serve one
+// bakery's rows under another's name. So this enumerates the whole `queryKeys` object and
+// requires each builder to be organization-scoped unless it is on the user-scoped
+// allowlist — which means a new key is covered the moment it is added, and a new
+// *user-scoped* key has to be declared here deliberately rather than by omission.
+const USER_SCOPED = new Set(['myOrganizations', 'myOrganizationRoles']);
+
+// The builders have different arities and parameter types; this cast is what lets them be
+// called uniformly. Extra arguments are ignored by the shorter ones.
+const builders = queryKeys as unknown as Record<string, (...args: unknown[]) => unknown[]>;
+
+for (const [name, build] of Object.entries(builders)) {
+  const key = JSON.stringify(build(ORG_A, 'x', 'y'));
+  check(
+    USER_SCOPED.has(name)
+      ? `queryKeys.${name} is user-scoped, deliberately outside the org scope`
+      : `queryKeys.${name} is organization-scoped`,
+    USER_SCOPED.has(name)
+      ? !key.startsWith('["org"')
+      : key.startsWith(`["org","${ORG_A}"`),
+    key,
+  );
+}
+
+// The batch-id key set is order-insensitive: the same recipes arriving in a different
+// order must not mint a second cache entry for data already in memory.
+check(
+  'recipesByIds keys on the id SET, not the array order',
+  JSON.stringify(queryKeys.recipesByIds(ORG_A, ['r2', 'r1'])) ===
+    JSON.stringify(queryKeys.recipesByIds(ORG_A, ['r1', 'r2', 'r1'])),
+  JSON.stringify(queryKeys.recipesByIds(ORG_A, ['r2', 'r1'])),
+);
+
 // 2 — organization A's data is unreachable under organization B's key.
 const client = new QueryClient();
 client.setQueryData(queryKeys.products(ORG_A), { rows: [{ id: 'p1', name: 'Agege Bread' }] });

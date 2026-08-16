@@ -849,3 +849,126 @@ so the trigger's arithmetic is what is being checked, not fixture data.
 | `npm run lint --workspace apps/mobile` | **exit 0** |
 | `npx eslint packages --max-warnings=0` | **exit 0** |
 | `pytest -q` | **12 passed** |
+
+---
+
+## 2026-08-16 — P9.5 production batches, read path (frontend)
+
+Batch list with a server-side status filter, batch detail with ingredient lines. Three
+organization-scoped hooks (`useProductionBatches`, `useProductionBatch`, `useRecipesByIds`)
+over the existing `packages/api/queries/production.ts`, plus one new query,
+`listRecipesByIds`. **Zero migrations.**
+
+### Why this milestone and not P9.6
+
+P9.6 delivery is written but cannot be *verified*: a delivery requires a ticket, and
+BLOCKER-012 makes every ticket INSERT fail. `production_batches.ticket_id` is nullable and
+`assign_batch_number()` routes through `next_document_number(…, 'production_batch')` — a
+doc type the `document_sequences` CHECK allows, unlike `'ticket'`. Production is the only
+P9 slice both unblocked and live-verifiable today.
+
+### Fixtures insert batches only; the trigger produces the lines
+
+`copy_batch_planned_ingredients()` (AFTER INSERT) writes
+`round(recipe_quantity * (planned_quantity / yield), 4)` per line. Observed live:
+
+| Batch | Planned | Recipe yield | Line | Trigger result |
+|---|---|---|---|---|
+| BATCH-000001 | 25.0000 | 10.0000 | Flour 2.5 | `6.2500` |
+| BATCH-000001 | 25.0000 | 10.0000 | Sugar 0.75 | `1.8750` |
+| **BATCH-000002** | **7.0000** | **3.0000** | **Flour 2.5** | **`5.8333`** |
+| BATCH-000003 | 5.0000 | 10.0000 | Sugar 0.75 | `0.3750` |
+
+The 5.8333 line is the load-bearing one: `2.5 × 7/3 = 5.83333…`, so the value only appears
+if the rounding happens in the database at four decimals.
+
+`assign_batch_number()` also proved document sequences are **per tenant** — org A holds
+`BATCH-000001..3` and org B holds its own `BATCH-000001`. A global sequence would leak how
+much other bakeries produce; the smoke test asserts the duplicate.
+
+### State machine executed, not read (one transaction, rolled back)
+
+| Attempt | Live result |
+|---|---|
+| `cancelled → in_progress` | REFUSED — `invalid_transition: batch cancelled -> in_progress` |
+| `scheduled → completed` (skipping `in_progress`) | REFUSED — `invalid_transition` |
+| `complete_production_batch(in_progress, 7.0)` | OK — status `completed`, actual `7.0000`, `completed_at` set, **2** movements |
+| ledger the RPC wrote | `production_consume -5.8333` \| `production_output 7.0000` |
+| flour on hand | `120.0000` → `114.1667` |
+| ingredient line actual | `5.8333` |
+| `completed → in_progress` (reopen) | REFUSED — `invalid_transition` |
+
+Verified after ROLLBACK that nothing persisted: flour `120.0000`, 7 movements, batch still
+`in_progress`, 0 lines with actuals.
+
+One diagnostic worth keeping: the first attempt raised `insufficient_role` because the
+simulated claim omitted `roles`. `has_role()` reads `auth.jwt() -> 'roles' ?| keys` — the
+claim is a JSON **array**, and a simulation without it fails in a way that looks like an
+authorization defect but is the harness being wrong.
+
+### RPC signatures now read from the live database
+
+```
+complete_production_batch(p_batch_id uuid, p_actual_quantity numeric,
+                          p_ingredient_actuals jsonb DEFAULT '[]', p_warehouse_id uuid DEFAULT NULL)
+fail_production_batch(p_batch_id uuid, p_reason text,
+                      p_ingredient_actuals jsonb DEFAULT '[]', p_warehouse_id uuid DEFAULT NULL)
+```
+
+Both `SECURITY DEFINER`, both returning `{batch, movements}`. `fail_` writes the consume
+movements and **deliberately no output movement** — a failed batch still used its flour.
+This removes the stated obstacle to P4.3's write path; it does not make the write path done.
+
+### Documentation defect corrected
+
+`packages/api/queries/production.ts` still carried a "not yet live-verified" provenance
+caveat that stopped being true on 2026-08-15. Both tables match `information_schema.columns`
+and `pg_constraint` exactly. The header now records the live RLS predicates instead,
+including that `production_batch_ingredients` reaches its branch axis **through its parent**
+— which is why querying the child directly cannot widen visibility.
+
+### Cache-key guard strengthened
+
+`verify-cache-isolation.mts` now enumerates **every** builder in `queryKeys` and requires
+each to be organization-scoped unless explicitly allowlisted as user-scoped. The previous
+checks sampled three keys, so a future key that forgot `orgScoped()` would have passed them.
+`recipesByIds` is additionally asserted to key on the id *set*, not the array order.
+
+### Tests
+
+| Command | Result |
+|---|---|
+| `scripts/smoke-signed-in.mjs` | **51/51 passed** (was 39/39) |
+| `npm run verify:cache` | **61/61 passed** (was 46) |
+| `npm run typecheck` | **exit 0** |
+| `npm run lint --workspace apps/mobile` | **exit 0**, 18 files, all 3 new files covered (`--format json`) |
+| `npx eslint packages --max-warnings=0` | **exit 0** |
+| `pytest -q` | **12 passed** |
+
+On-device run: **NOT PERFORMED** — no anon key configured on a device.
+
+### Defect found in the recorded fixture cleanup (not executed, corrected in place)
+
+`CURRENT_TASK.md` carried a two-line cleanup ending in
+`delete from public.organizations where slug like 'smoke-bakery-%'`. That **cannot succeed**:
+`organizations` has 32 RESTRICT children and 0 cascades (verified live). It would have
+raised `23503` on the first child table, which is a bad thing to discover while trying to
+sanitise a database before production. A child-first order is now recorded, derived by
+iterating `information_schema.columns` for `tenant_id` and counting rows per table:
+
+```sql
+do $$
+declare r record; n bigint;
+begin
+  for r in select table_name from information_schema.columns
+           where table_schema='public' and column_name='tenant_id' order by table_name
+  loop
+    execute format('select count(*) from public.%I where tenant_id in (%L,%L,%L)',
+      r.table_name, :a, :b, :c) into n;
+    if n > 0 then insert into fixture_rows values (r.table_name, n); end if;
+  end loop;
+end $$;
+```
+
+16 tables hold fixture rows today. No cleanup was run — the fixtures are still needed to
+re-run the smoke test.

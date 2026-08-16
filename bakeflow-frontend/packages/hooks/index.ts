@@ -36,6 +36,7 @@
 
 import {
   getProductById,
+  getProductionBatchWithIngredients,
   listIngredientStockLevels,
   listIngredients,
   listMyOrganizationRoles,
@@ -44,12 +45,15 @@ import {
   listProductStockLevels,
   listProductVariants,
   listProducts,
+  listProductionBatches,
+  listRecipesByIds,
   listVariantsByProduct,
   listWarehouses,
   type BakeflowClient,
   type KeysetPageOptions,
   type Page,
   type PageOptions,
+  type ProductionBatchFilters,
 } from '@bakeflow/api';
 import type {
   Ingredient,
@@ -60,6 +64,9 @@ import type {
   ProductCategory,
   ProductStockLevel,
   ProductVariant,
+  ProductionBatch,
+  ProductionBatchWithIngredients,
+  Recipe,
   Warehouse,
 } from '@bakeflow/types';
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
@@ -112,6 +119,24 @@ export const queryKeys = {
   ): unknown[] => orgScoped(tenantId, 'ingredient-stock-levels', warehouseId, options ?? {}),
   productStockLevels: (tenantId: string, warehouseId: string, options?: PageOptions): unknown[] =>
     orgScoped(tenantId, 'product-stock-levels', warehouseId, options ?? {}),
+
+  /* P9.5 — production. */
+  productionBatches: (
+    tenantId: string,
+    filters?: ProductionBatchFilters,
+    options?: PageOptions,
+  ): unknown[] => orgScoped(tenantId, 'production-batches', filters ?? {}, options ?? {}),
+  productionBatch: (tenantId: string, batchId: string): unknown[] =>
+    orgScoped(tenantId, 'production-batch', batchId),
+  /**
+   * Keyed on the **sorted** id set, not the array as given.
+   *
+   * The caller derives these ids from a page of rows, so the same set arrives in a
+   * different order whenever the underlying rows reorder. Keying on the raw array would
+   * mint a fresh cache entry — and a fresh request — for a set already in memory.
+   */
+  recipesByIds: (tenantId: string, recipeIds: readonly string[]): unknown[] =>
+    orgScoped(tenantId, 'recipes-by-id', [...new Set(recipeIds)].sort().join(',')),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -314,5 +339,68 @@ export function useProductStockLevels(
     queryKey: queryKeys.productStockLevels(tenantId ?? 'none', warehouseId ?? 'none', options),
     queryFn: () => listProductStockLevels(client, warehouseId ?? '', options),
     enabled: tenantId !== null && warehouseId !== null,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Production — P9.5 read path                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One page of production batches, newest batch number last.
+ *
+ * Narrowed by **branch** as well as tenant — `production_batches_select` is
+ * `tenant_id = current_tenant_id() AND has_branch_access(branch_id) AND deleted_at IS NULL`
+ * (read live) — so a baker assigned to one branch sees that branch's batches and no others.
+ * The filters are passed through to the query rather than applied to the result, so the
+ * cache key and the request always describe the same set.
+ */
+export function useProductionBatches(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: ProductionBatchFilters,
+  options?: PageOptions,
+): UseQueryResult<Page<ProductionBatch>, Error> {
+  return useQuery({
+    queryKey: queryKeys.productionBatches(tenantId ?? 'none', filters, options),
+    queryFn: () => listProductionBatches(client, filters ?? {}, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/**
+ * One batch together with its planned ingredient lines.
+ *
+ * Resolves to `null` when the batch does not exist, belongs to another organization, sits
+ * in an unreachable branch, or is soft-deleted — indistinguishable by design, so the screen
+ * renders a single "not found" state rather than guessing which.
+ */
+export function useProductionBatch(
+  client: BakeflowClient,
+  tenantId: string | null,
+  batchId: string | null,
+): UseQueryResult<ProductionBatchWithIngredients | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.productionBatch(tenantId ?? 'none', batchId ?? 'none'),
+    queryFn: () => getProductionBatchWithIngredients(client, batchId ?? ''),
+    enabled: tenantId !== null && batchId !== null,
+  });
+}
+
+/**
+ * Recipes by id, for putting names on rows that carry only a `recipe_id`.
+ *
+ * Disabled on an empty id set: with no ids the query would resolve to `[]` under a key
+ * shared by every empty-set caller, and the request would be pure overhead.
+ */
+export function useRecipesByIds(
+  client: BakeflowClient,
+  tenantId: string | null,
+  recipeIds: readonly string[],
+): UseQueryResult<Recipe[], Error> {
+  return useQuery({
+    queryKey: queryKeys.recipesByIds(tenantId ?? 'none', recipeIds),
+    queryFn: () => listRecipesByIds(client, recipeIds),
+    enabled: tenantId !== null && recipeIds.length > 0,
   });
 }

@@ -548,7 +548,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 |---|---|
 | P4.1b catalog write | BLOCKER-003 (pricing), BLOCKER-010b/c |
 | P4.2b inventory write | ✅ **COMPLETE** — 17/17 executed live 2026-08-15 |
-| P4.3 production | types/schemas now **live-verified**; write path still needs the `complete_production_batch()` signature |
+| P4.3 production | types/schemas **live-verified**; the `complete_production_batch()` and `fail_production_batch()` signatures were **read live 2026-08-16** and the completion path executed once under ROLLBACK, so the write path is now startable — no decision outstanding |
 | P4.4a customers | ✅ **COMPLETE** — 6/6 RLS + 12/12 structural executed live |
 | P4.4b ticket read/write | **BLOCKER-012** (no ticket can be created at all), BLOCKER-003, BLOCKER-009 |
 | P4.5 delivery | schema live-verified; behaviour blocked by **BLOCKER-012** (a delivery requires a ticket) |
@@ -599,8 +599,8 @@ behaviour → tests → acceptance gate.**
 | P9.2 | Customer create/select | P4.4a | queued create | BLOCKED (P3.7) |
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
-| P9.5 | Production batches | P4.3 | online-first | NOT_STARTED |
-| P9.6 | Delivery workflow | P4.5 | queued transitions | NOT_STARTED |
+| P9.5 | Production batches | P4.3 | online-first | **READ PATH COMPLETE** / start+complete NOT_STARTED |
+| P9.6 | Delivery workflow | P4.5 | queued transitions | NOT_STARTED — not live-verifiable while **BLOCKER-012** stands (a delivery requires a ticket) |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | BLOCKED |
 

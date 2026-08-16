@@ -461,6 +461,45 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 }
 
 /**
+ * The recipes named by a set of ids.
+ *
+ * Exists to put names on rows that carry only a `recipe_id` — the production batch list is
+ * the caller. Deliberately id-driven rather than a paged `listRecipes()`: `recipes` has no
+ * tenant-unique text column to key a cursor on (`UNIQUE (tenant_id, product_variant_id,
+ * version)` is composite and `name` is not unique at all), so a keyset page would need a
+ * composite cursor to decorate a set that is already bounded by the page it belongs to.
+ *
+ * Ids that are not visible are simply absent from the result rather than an error. The
+ * caller renders those rows with no recipe name instead of hiding them: a batch whose
+ * recipe was soft-deleted is still a batch that was produced, and dropping it would
+ * under-report what the bakery made.
+ */
+export async function listRecipesByIds(
+  client: BakeflowClient,
+  recipeIds: readonly Uuid[],
+): Promise<Recipe[]> {
+  const unique = [...new Set(recipeIds)];
+  if (unique.length === 0) return [];
+
+  const batches = await Promise.all(
+    chunk(unique, IN_CLAUSE_CHUNK).map(async (ids) =>
+      parseRows(
+        RECIPES.schema,
+        await run(
+          client
+            .from(RECIPES.table)
+            .select(RECIPES.columns)
+            .in('id', ids)
+            .is('deleted_at', null),
+        ),
+        'listRecipesByIds',
+      ),
+    ),
+  );
+  return batches.flat();
+}
+
+/**
  * A recipe with its bill of materials resolved.
  *
  * Lines whose ingredient is not visible are returned in `unresolvedLines` rather than

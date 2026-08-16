@@ -36,6 +36,7 @@ export {
   listProductsByCategory,
   listRecipeIngredients,
   listRecipeVersionsForVariant,
+  listRecipesByIds,
   listVariantsByProduct,
   type KeysetPageOptions,
 } from './queries/catalog';

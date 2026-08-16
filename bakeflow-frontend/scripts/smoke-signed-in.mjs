@@ -32,6 +32,18 @@ const PRODUCT_A1 = 'ae000000-0000-4000-8000-00000000da01';
 const WAREHOUSE_A = 'b0000000-0000-4000-8000-00000000da01';
 const SUGAR = 'b1000000-0000-4000-8000-00000000da02';
 const YEAST = 'b1000000-0000-4000-8000-00000000da03';
+const FLOUR = 'b1000000-0000-4000-8000-00000000da01';
+const RECIPE_A1 = 'b2000000-0000-4000-8000-00000000da01';
+const BATCH_A2 = 'b3000000-0000-4000-8000-00000000da02';
+
+/** Mirrors the projections in packages/api/queries/production.ts. */
+const BATCH_COLUMNS =
+  'id,tenant_id,created_at,updated_at,branch_id,batch_number,recipe_id,ticket_id,' +
+  'planned_quantity::text,actual_quantity::text,status,started_at,completed_at,' +
+  'assigned_to,failure_reason';
+const BATCH_LINE_COLUMNS =
+  'id,tenant_id,created_at,updated_at,batch_id,ingredient_id,' +
+  'planned_quantity::text,actual_quantity::text,waste_quantity::text';
 
 let failures = 0;
 const check = (name, passed, detail = '') => {
@@ -254,6 +266,65 @@ check('finished-good stock levels load', prodLevelsA.error === null &&
   prodLevelsA.data?.[0]?.quantity_on_hand === '42.0000',
   prodLevelsA.error?.message ?? JSON.stringify(prodLevelsA.data));
 
+// ----------------------------------------------- production read (P9.5) --
+// Mirrors packages/api/queries/production.ts: same tables, same ::text casts, same
+// batch_number ordering.
+const batchesA = await supabase
+  .from('production_batches')
+  .select(BATCH_COLUMNS)
+  .is('deleted_at', null)
+  .order('batch_number', { ascending: true });
+check('production batches load for A', batchesA.error === null, batchesA.error?.message ?? '');
+check('A sees exactly its 3 batches, in batch_number order',
+  (batchesA.data ?? []).map((b) => b.batch_number).join(',') ===
+    'BATCH-000001,BATCH-000002,BATCH-000003',
+  (batchesA.data ?? []).map((b) => `${b.batch_number}:${b.status}`).join(' '));
+check('planned_quantity arrives as an exact decimal STRING',
+  (batchesA.data ?? []).every((b) => typeof b.planned_quantity === 'string'),
+  JSON.stringify((batchesA.data ?? []).map((b) => b.planned_quantity)));
+
+// guard_production_batch_transition() stamped started_at on the scheduled -> in_progress
+// UPDATE. Nothing wrote that column directly, so this is the trigger's work.
+const inProgress = (batchesA.data ?? []).find((b) => b.status === 'in_progress');
+check('the in-progress batch carries a trigger-stamped started_at',
+  inProgress !== undefined && inProgress.started_at !== null && inProgress.completed_at === null,
+  JSON.stringify({ started: inProgress?.started_at, completed: inProgress?.completed_at }));
+
+// Filtering happens in the query, exactly as the screen does it.
+const filtered = await supabase
+  .from('production_batches').select(BATCH_COLUMNS)
+  .eq('status', 'in_progress').is('deleted_at', null);
+check('filtering by status returns only that status',
+  (filtered.data ?? []).length === 1 && filtered.data[0].id === BATCH_A2,
+  (filtered.data ?? []).map((b) => `${b.batch_number}:${b.status}`).join(' '));
+
+// The ingredient lines were NEVER inserted — only the batch was. Every value below is
+// copy_batch_planned_ingredients() scaling the recipe by planned/yield and rounding to 4dp.
+const linesA2 = await supabase
+  .from('production_batch_ingredients')
+  .select(BATCH_LINE_COLUMNS)
+  .eq('batch_id', BATCH_A2)
+  .is('deleted_at', null)
+  .order('ingredient_id', { ascending: true });
+check('batch ingredient lines load', linesA2.error === null && (linesA2.data ?? []).length === 1,
+  linesA2.error?.message ?? `n=${linesA2.data?.length}`);
+check('a line is the recipe SCALED and ROUNDED by the trigger (2.5 * 7/3 -> 5.8333)',
+  linesA2.data?.[0]?.planned_quantity === '5.8333' &&
+    linesA2.data?.[0]?.ingredient_id === FLOUR,
+  JSON.stringify(linesA2.data?.[0]?.planned_quantity));
+check('an unstarted line has no actuals yet',
+  linesA2.data?.[0]?.actual_quantity === null && linesA2.data?.[0]?.waste_quantity === '0.0000',
+  JSON.stringify({ actual: linesA2.data?.[0]?.actual_quantity,
+                   waste: linesA2.data?.[0]?.waste_quantity }));
+
+const recipesA = await supabase
+  .from('recipes')
+  .select('id,tenant_id,product_variant_id,name,yield_quantity::text,version,is_active,created_at,updated_at')
+  .in('id', [RECIPE_A1])
+  .is('deleted_at', null);
+check('recipes resolve by id, for naming batches',
+  recipesA.data?.[0]?.name === 'Smoke Agege Recipe', JSON.stringify(recipesA.data?.[0]?.name));
+
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });
 const refreshB = await supabase.auth.refreshSession();
@@ -286,6 +357,32 @@ const warehousesB = await supabase
 check('B sees only its own stockroom',
   (warehousesB.data ?? []).length === 1 && warehousesB.data[0].id !== WAREHOUSE_A,
   (warehousesB.data ?? []).map((w) => w.name).join(', '));
+
+// Production isolates on the same boundary, and on the branch axis too: the batch is
+// asked for by A's primary key, so this is RLS refusing rather than a filter narrowing.
+const aBatchFromB = await supabase
+  .from('production_batches').select(BATCH_COLUMNS).eq('id', BATCH_A2)
+  .is('deleted_at', null).maybeSingle();
+check("A's batch is invisible by direct id while B is active", aBatchFromB.data === null,
+  JSON.stringify(aBatchFromB.data));
+
+const aLinesFromB = await supabase
+  .from('production_batch_ingredients').select(BATCH_LINE_COLUMNS)
+  .eq('batch_id', BATCH_A2).is('deleted_at', null);
+check("A's batch ingredient lines are invisible through the parent batch",
+  aLinesFromB.error === null && (aLinesFromB.data ?? []).length === 0,
+  aLinesFromB.error ? aLinesFromB.error.message : `rows=${aLinesFromB.data?.length}`);
+
+// Document numbers are per tenant: A and B each own a BATCH-000001, and they are
+// different batches. A global sequence would leak how much other bakeries produce.
+const batchesB = await supabase
+  .from('production_batches').select(BATCH_COLUMNS).is('deleted_at', null);
+check('B sees exactly its own 1 batch, numbered from its OWN sequence',
+  (batchesB.data ?? []).length === 1 &&
+    batchesB.data[0].batch_number === 'BATCH-000001' &&
+    batchesB.data[0].id !== BATCH_A2 &&
+    batchesB.data[0].tenant_id === ORG_B,
+  (batchesB.data ?? []).map((b) => `${b.batch_number}:${b.tenant_id}`).join(' '));
 
 // --------------------------------------------- switching to a non-member --
 const rpcC = await supabase.rpc('set_active_organization', { p_tenant_id: ORG_C });

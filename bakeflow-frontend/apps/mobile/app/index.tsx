@@ -80,6 +80,13 @@ export default function CatalogScreen(): React.JSX.Element {
           </Pressable>
           <Pressable
             accessibilityRole="button"
+            onPress={() => router.push('/production')}
+            className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-neutral-900">Batches</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
             onPress={() => router.push('/select-organization')}
             className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
           >
