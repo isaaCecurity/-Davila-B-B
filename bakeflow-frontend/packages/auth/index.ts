@@ -51,8 +51,10 @@ import {
   type SupportedStorage,
 } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 import { createChunkedStorage } from './chunked-storage';
+import { webSessionBackend } from './web-storage';
 
 /* -------------------------------------------------------------------------- */
 /* Session storage                                                             */
@@ -65,8 +67,16 @@ import { createChunkedStorage } from './chunked-storage';
  *
  * SecureStore is the Android Keystore and the iOS Keychain: OS-managed, and hardware-backed
  * where the device supports it. See the AD-014 note at the top of this file.
+ *
+ * **On web the backend is `localStorage`, and only on web.** `expo-secure-store` has no
+ * browser implementation — there is no Keychain in a browser — so without this the first
+ * `getSession()` rejects and nothing renders. That path is a development preview, is
+ * materially weaker than the native one, and must not ship; the reasoning and the debt
+ * record are in `./web-storage`. iOS and Android are untouched by this branch.
  */
-export const secureSessionStorage: SupportedStorage = createChunkedStorage(SecureStore);
+export const secureSessionStorage: SupportedStorage = createChunkedStorage(
+  Platform.OS === 'web' ? webSessionBackend : SecureStore,
+);
 /* -------------------------------------------------------------------------- */
 /* Client                                                                      */
 /* -------------------------------------------------------------------------- */
