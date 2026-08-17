@@ -143,6 +143,31 @@ export function quoteFilterValue(value: string): string {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Batched `IN` lookups                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * PostgREST serialises `.in()` as one `id=in.(…)` query parameter. Each percent-encoded
+ * UUID costs ~40 characters, so an unbounded list overruns the server's URL limit and
+ * 414s. Chunking keeps every request well inside it.
+ *
+ * Deliberately *not* solved by putting a `.limit()` on the caller: truncating there would
+ * silently drop real rows and under-report whatever is being resolved.
+ *
+ * Lives here rather than in one query module because three domains now resolve rows by id
+ * set — recipes for the batch list, ingredients for a bill of materials, and tickets for
+ * the delivery board — and a second copy of a URL-length guard is a copy that gets fixed
+ * once.
+ */
+export const IN_CLAUSE_CHUNK = 100;
+
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Paging                                                                      */
 /* -------------------------------------------------------------------------- */
 

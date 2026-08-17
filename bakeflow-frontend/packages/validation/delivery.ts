@@ -1,9 +1,11 @@
 /**
  * Zod schema for the delivery read model — P4.5.
  *
- * **Provenance caveat, same as `@bakeflow/types` `delivery.ts`:** mirrors
- * `docs/SCHEMA-REFERENCE.md` §6 and `docs/STATE-MACHINES.md` §3 rather than a live
- * `pg_constraint` read (BLOCKER-011). Verify before P4.5 is marked COMPLETE.
+ * **Provenance — live-verified 2026-08-17**, same as `@bakeflow/types` `delivery.ts`. Every
+ * constraint mirrored below was read from `pg_constraint` on the live database, and the three
+ * refinements were additionally proven behaviourally: a signed-in INSERT of an `assigned` row
+ * with no driver, a `failed` row with no reason, and a `delivered` row with neither proof nor
+ * recipient each returned `23514`. The BLOCKER-011 caveat is retired.
  *
  * Looser where the documented constraint is ambiguous, on the established principle: a
  * reader stricter than the database rejects rows the writer legitimately stored, and one

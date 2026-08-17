@@ -81,6 +81,8 @@ import type { z } from 'zod';
 
 import type { BakeflowClient } from '../client';
 import {
+  chunk,
+  IN_CLAUSE_CHUNK,
   parseRow,
   parseRows,
   projectionFor,
@@ -442,22 +444,6 @@ export async function listRecipeIngredients(
       .order('id', { ascending: true }),
   );
   return parseRows(RECIPE_LINES.schema, data, 'listRecipeIngredients');
-}
-
-/**
- * PostgREST serialises `.in()` as one `id=in.(…)` query parameter. Each percent-encoded
- * UUID costs ~40 characters, so an unbounded list overruns the server's URL limit and
- * 414s. Chunking keeps every request well inside it.
- *
- * Deliberately *not* solved by putting a `.limit()` on `listRecipeIngredients`:
- * truncating there would drop real BOM lines and under-report what a recipe consumes.
- */
-const IN_CLAUSE_CHUNK = 100;
-
-function chunk<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
 }
 
 /**

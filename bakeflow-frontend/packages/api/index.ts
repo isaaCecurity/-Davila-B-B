@@ -96,6 +96,7 @@ export {
   listTicketCorrections,
   listTicketItems,
   listTickets,
+  listTicketsByIds,
   type CustomerFilters,
   type TicketFilters,
 } from './queries/sales';

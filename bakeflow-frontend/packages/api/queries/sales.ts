@@ -65,8 +65,10 @@ import { customerSchema, ticketItemSchema, ticketSchema } from '@bakeflow/valida
 
 import type { BakeflowClient } from '../client';
 import {
+  chunk,
   decodeCursor,
   encodeCursor,
+  IN_CLAUSE_CHUNK,
   parseRow,
   parseRows,
   projectionFor,
@@ -418,6 +420,46 @@ export async function getTicketById(
  * This is the lookup a cashier actually performs — a customer arrives quoting a number off
  * a receipt, not a UUID.
  */
+/**
+ * The tickets named by a set of ids.
+ *
+ * Exists to put a human-readable `ticket_number` on rows that carry only a `ticket_id` —
+ * the delivery board is the caller. A delivery's own columns say where the goods are going
+ * but never which order they belong to, and "TKT-000042" is the only identifier a driver or
+ * a manager can match against anything else.
+ *
+ * Id-driven rather than a page of `listTickets()` because the caller already holds the exact
+ * set it needs: paging would fetch tickets nobody asked about and could still miss one whose
+ * delivery is on screen. Chunked for the URL-length reason in `IN_CLAUSE_CHUNK`.
+ *
+ * Soft-deleted tickets are excluded, so a delivery whose ticket was archived resolves to no
+ * name rather than to a deleted one. The caller must handle a missing entry — this returns
+ * the tickets it can see, not one row per id.
+ */
+export async function listTicketsByIds(
+  client: BakeflowClient,
+  ticketIds: readonly Uuid[],
+): Promise<Ticket[]> {
+  const unique = [...new Set(ticketIds)];
+  if (unique.length === 0) return [];
+
+  const batches = await Promise.all(
+    chunk(unique, IN_CLAUSE_CHUNK).map(async (ids) =>
+      parseRows(
+        TICKETS.schema,
+        await run(
+          withSoftDeleteFilter(
+            client.from(TICKETS.table).select(TICKETS.columns).in('id', ids),
+            TICKETS,
+          ),
+        ),
+        'listTicketsByIds',
+      ),
+    ),
+  );
+  return batches.flat();
+}
+
 export async function getTicketByNumber(
   client: BakeflowClient,
   ticketNumber: string,

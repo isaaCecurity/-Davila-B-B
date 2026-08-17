@@ -37,6 +37,12 @@ const YEAST = 'b1000000-0000-4000-8000-00000000da03';
 const FLOUR = 'b1000000-0000-4000-8000-00000000da01';
 const BRANCH_A = 'ac000000-0000-4000-8000-00000000da01';
 const BRANCH_B = 'ac000000-0000-4000-8000-00000000da02';
+// Mirrors the projection queries/delivery.ts derives from deliverySchema. No ::text cast:
+// `deliveries` has no NUMERIC column at all.
+const DELIVERY_COLUMNS =
+  'id,tenant_id,branch_id,ticket_id,driver_id,status,address_line,contact_phone,' +
+  'scheduled_at,dispatched_at,delivered_at,proof_url,recipient_name,failure_reason,' +
+  'created_at,updated_at';
 const VARIANT_A1 = 'af000000-0000-4000-8000-00000000da01';
 const SMOKE_UID = 'aa000000-0000-4000-8000-00000000da01';
 const NOT_MY_UID = '00000000-0000-4000-8000-0000000000ff';
@@ -439,6 +445,121 @@ check('the ticket header totals were RECALCULATED by the database (1700.0000)',
   readBack.data?.subtotal_amount === '1700.0000' && readBack.data?.total_amount === '1700.0000',
   JSON.stringify({ subtotal: readBack.data?.subtotal_amount, total: readBack.data?.total_amount }));
 
+// ------------------------------------------------ deliveries (P9.6) --
+// A delivery hangs off a ticket, which is why none of this could run until BLOCKER-012 and
+// BLOCKER-015 were both resolved. `authenticated` holds INSERT + SELECT on deliveries
+// (grants read live) and deliveries_insert requires an owner/admin/branch_manager/cashier
+// role, so this is RLS authorizing a real signed-in write — not a service key.
+const deliveryTicket = await supabase
+  .from('tickets')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, fulfilment_type: 'delivery' })
+  .select('id,ticket_number,fulfilment_type')
+  .single();
+check('a ticket can be raised with fulfilment_type = delivery',
+  deliveryTicket.error === null && deliveryTicket.data?.fulfilment_type === 'delivery',
+  deliveryTicket.error ? `${deliveryTicket.error.code} ${deliveryTicket.error.message}` : '');
+
+const deliveryInsert = await supabase
+  .from('deliveries')
+  .insert({
+    tenant_id: ORG_A,
+    branch_id: BRANCH_A,
+    ticket_id: deliveryTicket.data?.id,
+    address_line: '12 Adeola Odeku Street, Victoria Island, Lagos',
+    contact_phone: '+2348012345678',
+  })
+  .select(DELIVERY_COLUMNS)
+  .single();
+check('a delivery can be CREATED against that ticket',
+  deliveryInsert.error === null,
+  deliveryInsert.error ? `${deliveryInsert.error.code} ${deliveryInsert.error.message}` : '');
+
+const delivery = deliveryInsert.data;
+check('a new delivery starts pending with no driver',
+  delivery?.status === 'pending' && delivery?.driver_id === null,
+  JSON.stringify({ status: delivery?.status, driver: delivery?.driver_id }));
+
+// deliveries_ticket_id_key is UNIQUE (ticket_id) — read live. One delivery per ticket, which
+// is why a failed delivery is routed failed -> returned rather than re-raised as a new row.
+const secondDelivery = await supabase
+  .from('deliveries')
+  .insert({
+    tenant_id: ORG_A,
+    branch_id: BRANCH_A,
+    ticket_id: deliveryTicket.data?.id,
+    address_line: 'Somewhere else entirely',
+  })
+  .select('id').single();
+check('a SECOND delivery on the same ticket is REFUSED (one delivery per ticket)',
+  secondDelivery.error !== null,
+  secondDelivery.error ? `${secondDelivery.error.code} ${secondDelivery.error.message}` : 'NO ERROR (unexpected)');
+
+// The three standing CHECK constraints the Zod reader mirrors. Each is asserted against a
+// ticket that has NO delivery, so a refusal is the CHECK talking and not the unique index.
+const assignedNoDriver = await supabase
+  .from('deliveries')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, ticket_id: ticket?.id,
+            address_line: 'A', status: 'assigned' })
+  .select('id').single();
+check('an ASSIGNED delivery with no driver is REFUSED (deliveries_assigned_needs_driver)',
+  assignedNoDriver.error !== null,
+  assignedNoDriver.error ? assignedNoDriver.error.code : 'NO ERROR (unexpected)');
+
+const failedNoReason = await supabase
+  .from('deliveries')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, ticket_id: ticket?.id,
+            address_line: 'A', status: 'failed' })
+  .select('id').single();
+check('a FAILED delivery with no reason is REFUSED (deliveries_failed_needs_reason)',
+  failedNoReason.error !== null,
+  failedNoReason.error ? failedNoReason.error.code : 'NO ERROR (unexpected)');
+
+const deliveredNoProof = await supabase
+  .from('deliveries')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, ticket_id: ticket?.id,
+            address_line: 'A', status: 'delivered' })
+  .select('id').single();
+check('a DELIVERED delivery with neither proof nor recipient is REFUSED (deliveries_delivered_needs_proof)',
+  deliveredNoProof.error !== null,
+  deliveredNoProof.error ? deliveredNoProof.error.code : 'NO ERROR (unexpected)');
+
+// Read back through the same projection queries/delivery.ts uses. No ::text cast anywhere:
+// deliveries carries no NUMERIC column at all, which is why this domain is untouched by
+// BLOCKER-003.
+const deliveryRead = await supabase
+  .from('deliveries').select(DELIVERY_COLUMNS)
+  .eq('id', delivery?.id).is('deleted_at', null).maybeSingle();
+check('the new delivery is readable through the delivery read path',
+  deliveryRead.data?.id === delivery?.id &&
+    deliveryRead.data?.address_line === '12 Adeola Odeku Street, Victoria Island, Lagos',
+  JSON.stringify({ id: deliveryRead.data?.id, address: deliveryRead.data?.address_line }));
+
+// openOnly in listDeliveries() is `status IN (pending, assigned, in_transit, failed)`.
+// `failed` is deliberately in that set: its only exit is `returned`, and that hop writes a
+// return stock movement, so a board that hid it would hide the goods still unaccounted for.
+const openDeliveries = await supabase
+  .from('deliveries').select(DELIVERY_COLUMNS)
+  .in('status', ['pending', 'assigned', 'in_transit', 'failed'])
+  .is('deleted_at', null);
+check('the pending delivery appears in the OPEN set',
+  (openDeliveries.data ?? []).some((d) => d.id === delivery?.id),
+  `open rows=${openDeliveries.data?.length}`);
+
+// The screens claim every delivery transition is RPC-only. That is a GRANT-level fact, not a
+// policy one: `authenticated` holds INSERT + SELECT and no UPDATE on deliveries, so PostgREST
+// refuses before RLS is consulted. Asserted behaviourally rather than by reading the grant,
+// because the claim is load-bearing — it is why the UI has no dispatch button.
+const transitionAttempt = await supabase
+  .from('deliveries')
+  .update({ status: 'in_transit' })
+  .eq('id', delivery?.id)
+  .select('id');
+check('a delivery transition through PostgREST is REFUSED — transitions are RPC-only',
+  transitionAttempt.error !== null,
+  transitionAttempt.error
+    ? `${transitionAttempt.error.code} ${transitionAttempt.error.message}`
+    : 'NO ERROR (unexpected)');
+
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });
 const refreshB = await supabase.auth.refreshSession();
@@ -503,6 +624,23 @@ const aTicketFromB = await supabase
   .is('deleted_at', null).maybeSingle();
 check("A's ticket is invisible by direct id while B is active", aTicketFromB.data === null,
   JSON.stringify(aTicketFromB.data));
+
+// deliveries_select is the ONE policy in the system with a disjunction —
+//   tenant_id = current_tenant_id() AND (driver_id = auth.uid() OR has_branch_access(branch_id))
+// — so a driver sees their own drop even outside their branches. This proves the tenant
+// clause is still conjoined: the smoke user is an owner of BOTH organizations, and A's
+// delivery is still invisible under B's claim. The driver escape hatch does not cross tenants.
+const aDeliveryFromB = await supabase
+  .from('deliveries').select(DELIVERY_COLUMNS).eq('id', delivery?.id)
+  .is('deleted_at', null).maybeSingle();
+check("A's delivery is invisible by direct id while B is active", aDeliveryFromB.data === null,
+  JSON.stringify(aDeliveryFromB.data));
+
+const deliveriesFromB = await supabase
+  .from('deliveries').select('id,tenant_id').is('deleted_at', null);
+check('B sees none of A’s deliveries in a full list',
+  !(deliveriesFromB.data ?? []).some((d) => d.tenant_id === ORG_A),
+  `rows=${deliveriesFromB.data?.length}`);
 
 // A ticket for A's branch cannot be written while B's claim is in force. tickets_insert
 // checks tenant_id = current_tenant_id() AND has_branch_access(branch_id), so this is the

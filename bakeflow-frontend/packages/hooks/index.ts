@@ -35,8 +35,10 @@
  */
 
 import {
+  getDeliveryById,
   getProductById,
   getProductionBatchWithIngredients,
+  listDeliveries,
   listIngredientStockLevels,
   listIngredients,
   listMyOrganizationRoles,
@@ -47,15 +49,18 @@ import {
   listProducts,
   listProductionBatches,
   listRecipesByIds,
+  listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
   type BakeflowClient,
+  type DeliveryFilters,
   type KeysetPageOptions,
   type Page,
   type PageOptions,
   type ProductionBatchFilters,
 } from '@bakeflow/api';
 import type {
+  Delivery,
   Ingredient,
   IngredientStockLevel,
   OrganizationMembership,
@@ -67,6 +72,7 @@ import type {
   ProductionBatch,
   ProductionBatchWithIngredients,
   Recipe,
+  Ticket,
   Warehouse,
 } from '@bakeflow/types';
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
@@ -137,6 +143,15 @@ export const queryKeys = {
    */
   recipesByIds: (tenantId: string, recipeIds: readonly string[]): unknown[] =>
     orgScoped(tenantId, 'recipes-by-id', [...new Set(recipeIds)].sort().join(',')),
+
+  /* P9.6 — delivery. */
+  deliveries: (tenantId: string, filters?: DeliveryFilters, options?: PageOptions): unknown[] =>
+    orgScoped(tenantId, 'deliveries', filters ?? {}, options ?? {}),
+  delivery: (tenantId: string, deliveryId: string): unknown[] =>
+    orgScoped(tenantId, 'delivery', deliveryId),
+  /** Sorted id set, for the reason given on `recipesByIds`. */
+  ticketsByIds: (tenantId: string, ticketIds: readonly string[]): unknown[] =>
+    orgScoped(tenantId, 'tickets-by-id', [...new Set(ticketIds)].sort().join(',')),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -402,5 +417,68 @@ export function useRecipesByIds(
     queryKey: queryKeys.recipesByIds(tenantId ?? 'none', recipeIds),
     queryFn: () => listRecipesByIds(client, recipeIds),
     enabled: tenantId !== null && recipeIds.length > 0,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Delivery (P9.6)                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One page of deliveries, newest first.
+ *
+ * **Narrowed differently from every other branch-scoped list.** `deliveries_select` is
+ * `tenant_id = current_tenant_id() AND (driver_id = auth.uid() OR has_branch_access(branch_id))
+ * AND deleted_at IS NULL` — read live. The disjunction means a driver sees a delivery
+ * assigned to them even outside the branches they are assigned to, which is right for the
+ * job but makes `filters.branchId` a convenience filter and never a security boundary.
+ *
+ * Tenant isolation is untouched by that: `tenant_id = current_tenant_id()` is conjoined and
+ * no driver clause escapes it.
+ */
+export function useDeliveries(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: DeliveryFilters,
+  options?: PageOptions,
+): UseQueryResult<Page<Delivery>, Error> {
+  return useQuery({
+    queryKey: queryKeys.deliveries(tenantId ?? 'none', filters, options),
+    queryFn: () => listDeliveries(client, filters ?? {}, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/**
+ * One delivery, or `null` when it does not exist, belongs to another organization, sits in
+ * an unreachable branch, or is soft-deleted. All four are indistinguishable by design, so
+ * the screen renders one "not found" state rather than guessing which.
+ */
+export function useDelivery(
+  client: BakeflowClient,
+  tenantId: string | null,
+  deliveryId: string | null,
+): UseQueryResult<Delivery | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.delivery(tenantId ?? 'none', deliveryId ?? 'none'),
+    queryFn: () => getDeliveryById(client, deliveryId ?? ''),
+    enabled: tenantId !== null && deliveryId !== null,
+  });
+}
+
+/**
+ * Tickets by id, for putting `ticket_number` on rows that carry only a `ticket_id`.
+ *
+ * Disabled on an empty id set, for the reason given on `useRecipesByIds`.
+ */
+export function useTicketsByIds(
+  client: BakeflowClient,
+  tenantId: string | null,
+  ticketIds: readonly string[],
+): UseQueryResult<Ticket[], Error> {
+  return useQuery({
+    queryKey: queryKeys.ticketsByIds(tenantId ?? 'none', ticketIds),
+    queryFn: () => listTicketsByIds(client, ticketIds),
+    enabled: tenantId !== null && ticketIds.length > 0,
   });
 }

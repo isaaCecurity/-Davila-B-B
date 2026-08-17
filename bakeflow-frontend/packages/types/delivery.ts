@@ -1,11 +1,13 @@
 /**
  * Delivery domain types — P4.5 (`deliveries`).
  *
- * ## Provenance
+ * ## Provenance — live-verified 2026-08-17
  *
- * Written from `docs/SCHEMA-REFERENCE.md` §6 and `docs/STATE-MACHINES.md` §3, **not** from
- * a live `information_schema` read — see BLOCKER-011. Verify before P4.5 is marked
- * COMPLETE, and treat any mismatch as the schema being right and this file being wrong.
+ * Written from `docs/SCHEMA-REFERENCE.md` §6 and `docs/STATE-MACHINES.md` §3, and since
+ * **confirmed against `information_schema` and `pg_constraint` on the live database**. Every
+ * field below exists with the nullability stated, and `deliveries_status_check` allows
+ * exactly the six values in `DELIVERY_STATUSES`. No mismatch was found. The BLOCKER-011
+ * caveat that stood here is retired — that blocker was resolved 2026-08-15.
  *
  * ## One delivery per ticket
  *

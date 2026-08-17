@@ -1238,3 +1238,96 @@ The smoke suite now creates one real ticket per run in **each** scratch organiza
 `deliveries`, `ticket_items` and `tickets` were added to the teardown order in
 `CURRENT_TASK.md`, above `document_sequences` and below `production_batches` (which
 references `tickets` through `ticket_id`).
+
+---
+
+## 2026-08-17 — P9.6 delivery read path; P4.5 layer live-verified
+
+### The P4.5 data layer was verified against the live database, not trusted
+
+`packages/types/delivery.ts`, `packages/validation/delivery.ts` and
+`packages/api/queries/delivery.ts` were written from `SCHEMA-REFERENCE.md` §6 and
+`STATE-MACHINES.md` §3 and each carried a standing caveat: *"not from a live read — verify
+before P4.5 is marked COMPLETE"*. Executed:
+
+| Read | Result |
+|---|---|
+| `information_schema.columns` for `deliveries` | 19 columns, every field in the `Delivery` interface present with the stated nullability |
+| `pg_constraint` (CHECK + UNIQUE) | 10 constraints; `deliveries_status_check` allows exactly the six values in `DELIVERY_STATUSES` |
+| `pg_policy` | `deliveries_select`, `deliveries_insert`, `deliveries_update` — the disjunction in SELECT is exactly as documented |
+| `role_table_grants` | `authenticated` = `INSERT, SELECT`; **no UPDATE** |
+
+**No mismatch was found.** The three caveats are corrected in place rather than left to
+mislead the next reader. BLOCKER-011, which they cited, was resolved 2026-08-15.
+
+### The delivery path executed end to end through real auth
+
+The smoke suite raises a `fulfilment_type = 'delivery'` ticket, then inserts a delivery
+against it. That INSERT is authorized by `deliveries_insert`
+(`tenant_id = current_tenant_id() AND has_branch_access(branch_id) AND has_role(...)`) under
+the smoke user's owner role — PostgREST and RLS, not a service key.
+
+Four database rules proven behaviourally rather than read:
+
+```
+second delivery, same ticket   -> 23505 deliveries_ticket_id_key
+status='assigned', no driver   -> 23514 deliveries_assigned_needs_driver
+status='failed',  no reason    -> 23514 deliveries_failed_needs_reason
+status='delivered', no proof   -> 23514 deliveries_delivered_needs_proof
+UPDATE status='in_transit'     -> 42501 permission denied for table deliveries
+```
+
+The last one is the load-bearing one: it is why the screens have no dispatch button. The
+refusal is at GRANT level, so PostgREST rejects before RLS is consulted, and no client-side
+restraint is involved.
+
+**Tenant isolation under the weakest SELECT policy in the schema.** `deliveries_select` is
+the only policy carrying a disjunction, so a driver sees a delivery assigned to them even
+outside their branches. The smoke user owns **both** smoke organizations, and A's delivery is
+still invisible under B's claim — the driver clause does not cross tenants, because
+`tenant_id = current_tenant_id()` is conjoined ahead of it.
+
+### Screens
+
+`app/delivery/index.tsx` (board) and `app/delivery/[deliveryId].tsx` (detail), plus
+`components/DeliveryStatusBadge.tsx`. Reached from a **Drops** button on the catalog header.
+
+`failed` is treated as **open** in the badge styling, the filter chips and the query's
+`openOnly` set, matching `TERMINAL_DELIVERY_STATUSES`, which deliberately excludes it. Until
+`failed → returned` runs, the goods are out of the branch and unaccounted for in the ledger.
+
+### One defect found and fixed en route
+
+Expo Router's generated `apps/mobile/.expo/types/router.d.ts` had registered
+`components/DeliveryStatusBadge` **as a route** — as `/../components/DeliveryStatusBadge` —
+while omitting `/delivery` entirely, which failed `tsc` on both `router.push('/delivery')`
+and `router.push('/delivery/${id}')`. That was a stale incremental scan by the running dev
+server, not a code defect: deleting the file and restarting Metro regenerates it correctly
+with `/delivery` and `/delivery/[deliveryId]` present and the component absent (grep count
+0). Stopping the task did not free port 8081 — the Metro node process survived and had to be
+stopped by PID.
+
+### Small refactor
+
+`chunk` and `IN_CLAUSE_CHUNK` moved from `queries/catalog.ts` to `internal/read.ts` and
+exported. Three domains now resolve rows by id set — recipes for the batch list, ingredients
+for a bill of materials, tickets for the delivery board — and a second copy of a URL-length
+guard is a copy that gets fixed once. `listTicketsByIds` is the new consumer.
+
+### Gates — all executed from `bakeflow-frontend`
+
+| Command | Result |
+|---|---|
+| `node scripts/smoke-signed-in.mjs` | **78 pass / 0 fail** (was 66/0) |
+| `npm run typecheck --workspace apps/mobile` | **exit 0** |
+| `npm run lint` (workspaces + root) | **exit 0** |
+| `npm run verify:cache` | **66 checks, all passed** (was 61) |
+| `.venv/Scripts/python.exe -m pytest -q` | **12 passed** |
+| `entry.bundle?platform=web` | **200, 6,152,317 B** |
+| `entry.bundle?platform=android` | **200, 10,700,325 B** |
+
+### Fixture consequence
+
+Each smoke run now also creates one delivery-fulfilment ticket and one delivery in
+organization A. `deliveries` was already added to the teardown order in `CURRENT_TASK.md`
+ahead of `ticket_items`/`tickets`, so no change is needed there.

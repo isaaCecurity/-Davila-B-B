@@ -89,6 +89,25 @@ check(
   JSON.stringify(queryKeys.recipesByIds(ORG_A, ['r2', 'r1'])),
 );
 
+// Same property for the delivery board's ticket lookup, asserted separately rather than
+// assumed to follow: it is a second hand-written builder, and the two could drift.
+check(
+  'ticketsByIds keys on the id SET, not the array order',
+  JSON.stringify(queryKeys.ticketsByIds(ORG_A, ['t2', 't1'])) ===
+    JSON.stringify(queryKeys.ticketsByIds(ORG_A, ['t1', 't2', 't1'])),
+  JSON.stringify(queryKeys.ticketsByIds(ORG_A, ['t2', 't1'])),
+);
+
+// A delivery list and a delivery detail must not collide, and neither may reuse the
+// production keys' shape — the filter object is part of the key, so an "open only" board and
+// an "all" board are different cache entries rather than one that flips under the user.
+check(
+  'delivery list keys separate open-only from unfiltered',
+  JSON.stringify(queryKeys.deliveries(ORG_A, { openOnly: true })) !==
+    JSON.stringify(queryKeys.deliveries(ORG_A, {})),
+  JSON.stringify(queryKeys.deliveries(ORG_A, { openOnly: true })),
+);
+
 // 2 — organization A's data is unreachable under organization B's key.
 const client = new QueryClient();
 client.setQueryData(queryKeys.products(ORG_A), { rows: [{ id: 'p1', name: 'Agege Bread' }] });

@@ -428,7 +428,9 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 
 **Read path delivered 2026-08-14:** `packages/types/delivery.ts`, `packages/validation/delivery.ts`, `packages/api/queries/delivery.ts` — `listDeliveries`, `getDeliveryById`, `getDeliveryForTicket`. Zero migrations. `deliveries` carries no `NUMERIC` column, so this is the one domain with no money-precision exposure and no `::text` cast.
 
-**Write path BLOCKED.** `failed → returned` and `in_transit → returned` each write a return stock movement, so under `STATE-MACHINES.md` universal rule 4 they must be single RPCs, and those signatures have not been read from the live database (**BLOCKER-011**).
+**READ PATH now live-verified (2026-08-17).** The types, Zod schema and query module were written from docs and have since been confirmed against the live database: all 19 columns, the six-value `status` CHECK, both RLS policies and all ten constraints match, with no mismatch found. The three CHECK-mirroring refinements were also proven behaviourally — `assigned` with no driver, `failed` with no reason, and `delivered` with neither proof nor recipient each return `23514`. P9.6 consumes this layer.
+
+**Write path BLOCKED.** `failed → returned` and `in_transit → returned` each write a return stock movement, so under `STATE-MACHINES.md` universal rule 4 they must be single RPCs. Grants read live confirm the database agrees: `authenticated` holds `INSERT, SELECT` and **no UPDATE**, and an attempted transition through PostgREST returns `42501 permission denied for table deliveries` (executed). BLOCKER-011 is resolved, so what remains is reading the transition RPC signatures, not access.
 
 **Completion gate — delivery gate enforced in DB, not convention:** asserted by D5/D6/D7 in `tests/sql/delivery_read_rls.sql` (D5 refuses `ready → delivered` while the delivery is only `assigned`; D6 permits it once the delivery is `delivered`; D7 shows a pickup ticket skipping the gate). **NOT EXECUTED** — BLOCKER-011. P4.5 is IMPLEMENTED, not COMPLETE.
 
@@ -603,7 +605,7 @@ behaviour → tests → acceptance gate.**
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
 | P9.5 | Production batches | P4.3 | online-first | **READ PATH COMPLETE** / start+complete NOT_STARTED |
-| P9.6 | Delivery workflow | P4.5 | queued transitions | **UNBLOCKED 2026-08-16** — 012 and 015 both resolved, so a delivery now has a ticket to hang from. Read path is startable; note `authenticated` holds no UPDATE on `deliveries`, so transitions are RPC-only |
+| P9.6 | Delivery workflow | P4.5 | queued transitions | **READ PATH COMPLETE 2026-08-17** / transitions NOT_STARTED. Board + detail shipped; delivery created live through RLS. `authenticated` holds no UPDATE on `deliveries` — a PostgREST transition returns `42501`, executed — so every hop is RPC-only |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | BLOCKED |
 

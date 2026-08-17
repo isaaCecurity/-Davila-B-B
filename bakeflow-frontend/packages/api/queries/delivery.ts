@@ -18,11 +18,20 @@
  * Their signatures have not been read from the live database (BLOCKER-011), so none is
  * written here. `adjust_stock()` is the standing precedent for why that matters.
  *
- * ## Provenance
+ * ## Provenance — live-verified 2026-08-17
  *
- * Types, schema and the column set below come from `SCHEMA-REFERENCE.md` §6 and
- * `STATE-MACHINES.md` §3, not from a live read. The queries assert no RLS predicate — they
- * filter what they need explicitly and let the server decide what is visible.
+ * Written from `SCHEMA-REFERENCE.md` §6 and `STATE-MACHINES.md` §3, and since **confirmed
+ * against the live database**: all 19 columns, the six-value `status` CHECK, both RLS
+ * policies and all ten table constraints match. The earlier "not from a live read" caveat is
+ * retired.
+ *
+ * The queries still assert no RLS predicate — they filter what they need explicitly and let
+ * the server decide what is visible.
+ *
+ * Grants read live: `authenticated` holds `INSERT, SELECT` and **no UPDATE**. A transition
+ * attempted through PostgREST returns `42501 permission denied for table deliveries`
+ * (executed, not inferred), so the absence of a write path below is enforced by the database
+ * rather than by this module's restraint.
  *
  * ## No money, so no `::text` cast
  *

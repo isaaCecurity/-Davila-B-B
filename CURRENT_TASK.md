@@ -1,5 +1,72 @@
 # BakeFlow — Current Task
 
+## ✅ P9.6 DELIVERED — delivery board, read path (2026-08-17)
+
+**Screens:** `app/delivery/index.tsx` (board) and `app/delivery/[deliveryId].tsx` (detail),
+plus `components/DeliveryStatusBadge.tsx`. A **Drops** button on the catalog header reaches
+them. The P4.5 query layer is consumed unchanged; only `listTicketsByIds` was added, so the
+board can print `ticket_number` on rows that carry a bare `ticket_id` without an N+1.
+
+**The P4.5 layer was live-verified, not trusted.** It was written from docs in August and
+carried a standing "not from a live read — verify before P4.5 is COMPLETE" caveat on all
+three files. Confirmed against the live database: 19 columns, the six-value `status` CHECK,
+both RLS policies and all ten constraints match, with **no mismatch found**. Those three
+stale caveats are now corrected rather than left to mislead the next reader.
+
+**The delivery path runs end to end, through real auth.** The smoke suite raises a
+`fulfilment_type = 'delivery'` ticket, inserts a delivery against it under
+`deliveries_insert` (owner role, RLS-authorized — not a service key), and reads it back
+through the same projection the app uses. **78 checks pass, 0 fail** (was 66).
+
+**Read-only, and the database enforces that rather than the UI choosing it.** Grants read
+live show `authenticated` holds `INSERT, SELECT` and **no UPDATE** on `deliveries`. Asserted
+behaviourally rather than by reading the grant, because the claim is load-bearing:
+
+```
+UPDATE deliveries SET status='in_transit'  ->  42501 permission denied for table deliveries
+```
+
+So every transition is a SECURITY DEFINER RPC, and two of them (`failed → returned`,
+`in_transit → returned`) each write a return stock movement — universal rule 4 territory.
+
+**Four database rules proven, not assumed:**
+
+| Attempt | Result |
+|---|---|
+| second delivery on the same ticket | `23505 deliveries_ticket_id_key` — one delivery per ticket |
+| `assigned` with no driver | `23514 deliveries_assigned_needs_driver` |
+| `failed` with no reason | `23514 deliveries_failed_needs_reason` |
+| `delivered` with neither proof nor recipient | `23514 deliveries_delivered_needs_proof` |
+
+**Tenant isolation holds despite the weakest SELECT policy in the schema.**
+`deliveries_select` is the only policy with a **disjunction** —
+`tenant_id = current_tenant_id() AND (driver_id = auth.uid() OR has_branch_access(branch_id))`
+— so a driver sees their own drop outside their branches. The smoke suite proves the driver
+escape hatch does not cross tenants: the smoke user owns **both** organizations, and A's
+delivery is still invisible under B's claim. `filters.branchId` is a convenience filter on
+this table and never a security boundary.
+
+**`failed` is treated as open everywhere**, in the badge, the filter chips and the query's
+`openOnly` set. It looks terminal and is not: its only exit is `returned`, and until that hop
+runs the goods are out of the branch and unaccounted for in the ledger. A board that hid
+failed rows would hide exactly the ones someone must chase.
+
+**One defect found and fixed en route.** Expo Router's generated `router.d.ts` had registered
+`components/DeliveryStatusBadge` **as a route** and omitted `/delivery` — a stale incremental
+scan by the running dev server. A clean restart regenerates correctly (`/delivery`,
+`/delivery/[deliveryId]`, and the component absent). Worth knowing: after adding route files,
+typed-route errors may be the generator being stale rather than the code being wrong.
+
+**Small refactor:** `chunk`/`IN_CLAUSE_CHUNK` moved from `queries/catalog.ts` to
+`internal/read.ts`. Three domains now resolve rows by id set, and a second copy of a
+URL-length guard is a copy that gets fixed once.
+
+**Verified:** smoke **78/0**, typecheck 0, lint 0 (workspaces + root), `verify:cache` 66,
+`pytest -q` 12 passed, and both bundles compile against the running dev server
+(web 6,152,317 B / android 10,700,325 B, HTTP 200).
+
+---
+
 ## ✅ BLOCKER-015 RESOLVED — ticket creation works end to end (2026-08-16)
 
 **Migration applied:** `fix_ticket_actor_membership_check_for_multi_org`. The two
