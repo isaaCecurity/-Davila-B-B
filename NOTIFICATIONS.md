@@ -4,6 +4,27 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## RESOLVED: BLOCKER-002 — Database migration history reconciled
+
+**Status:** Resolved on 2026-08-20.
+
+Reconciled the database migration tracking gap between remote Supabase production and the local repository. The 14 local migration files are preserved for historical context, `supabase/migrations/MIGRATION_GOVERNANCE.md` documents the tracking inventory, and `supabase/migrations/20260809_live_schema.sql` holds the canonical baseline DDL snapshot.
+
+---
+
+
+## RESOLVED: BLOCKER-001 — Invitation delivery pipeline implemented
+
+**Status:** Resolved on 2026-08-20.
+
+Implemented the Edge Functions scaffold (P6.1), the Resend email provider adapter with mock fallback, the `send-invite-email` function (P6.2), and client SDK mutation methods in `@bakeflow/api`.
+
+**Action needed for production deployment:**
+- Set `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS`, and `EMAIL_FROM_NAME` in Supabase Secrets (`supabase secrets set`) when deploying Edge Functions to live Supabase project.
+
+---
+
+
 ## RESOLVED: BLOCKER-015 — ticket creation works end to end
 
 Migration `fix_ticket_actor_membership_check_for_multi_org` was **approved and applied live

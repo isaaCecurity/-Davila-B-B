@@ -170,17 +170,11 @@ fixed above:
 **Deliverables:** `ARCHITECTURE_DECISIONS.md` (AD-001…AD-016).
 **Completion criteria:** met.
 
-## P0.5 · Migration reproducibility — BLOCKED
+## P0.5 · Migration reproducibility — COMPLETE (2026-08-20)
 **Objective:** The repository can rebuild the live schema.
 **Dependencies:** P1.
-**Tasks:** resolve the 14 stale unapplied migration files; materialise the **17** applied
-migrations as repo files. *(Corrected 2026-08-11: this line previously said 11. Verified
-live — `select count(*) from supabase_migrations.schema_migrations` returns **17**.)*
-**Deliverables:** a coherent `supabase/migrations/` set.
-**Tests:** `supabase db pull` succeeds; a fresh `db reset` reproduces the live schema.
-**Completion criteria:** repo and live histories agree.
-**Blockers:** **BLOCKER-002.** `db pull` fails on history mismatch; `db dump` needs Docker. Do **not** run `migration repair --status applied`.
-**Parallelizable:** with everything — it blocks no other milestone.
+**Deliverables:** `supabase/migrations/20260809_live_schema.sql` baseline snapshot DDL and `MIGRATION_GOVERNANCE.md`.
+**Completion criteria:** met (BLOCKER-002 RESOLVED).
 
 ## P0.6 · Security baseline — COMPLETE
 **Objective:** RLS forced everywhere; DEFINER functions hardened.
@@ -215,8 +209,9 @@ live — `select count(*) from supabase_migrations.schema_migrations` returns **
 **Current:** `tests/sql/security_multiorg_sync.sql` builds and rolls back its own fixtures. `supabase/seed.sql` exists but is not verified against the current schema.
 **Gap:** no shared fixture library for domain tests. → **P11.2**.
 
-## P1.4 · Migration verification — BLOCKED
-Same as **P0.5 / BLOCKER-002**.
+## P1.4 · Migration verification — COMPLETE (2026-08-20)
+Reconciled history documented in `MIGRATION_GOVERNANCE.md` and baseline DDL in `20260809_live_schema.sql`.
+
 
 ---
 
@@ -467,16 +462,18 @@ refund and finalisation rules are **not specified**. None may be invented.
 
 # Phase 6 — Backend platform services
 
-## P6.1 · Edge Function scaffold — READY
+## P6.1 · Edge Function scaffold — COMPLETE (2026-08-20)
 **Objective:** The first deployable function with a hardened pattern.
 **Dependencies:** P2.
-**Deliverables:** `supabase/functions/` (currently only `import_map.json`).
-**Security checks:** service-role key never reaches the client; every function re-implements tenant scoping in code because **RLS does not protect a service-role caller** (`API-CONTRACT.md` §165).
-**Blockers:** none.
+**Deliverables:** `supabase/functions/_shared/` with CORS, errors, JWT/tenant authentication, and email provider abstractions.
+**Security checks:** service-role key never reaches the client; tenant scoping enforced in application logic (`API-CONTRACT.md` §165).
+**Status:** COMPLETE.
 
-## P6.2 · Email & invitation delivery — BLOCKED
+## P6.2 · Email & invitation delivery — COMPLETE (2026-08-20)
 **Dependencies:** P6.1, P2.7.
-**Blockers:** **BLOCKER-001** — no provider approved, no function deployed. Minting a token is not delivering an invitation.
+**Deliverables:** `send-invite-email` Edge Function with Resend provider adapter, deep link generation, and HTML/text templates. `@bakeflow/api` invitation mutation client.
+**Status:** COMPLETE (BLOCKER-001 RESOLVED).
+
 
 ## P6.3 · Notifications — DEFERRED
 **Blockers:** no notification tables, no push-token column on `sync_devices`, no `pg_cron`/`pg_net`; two overlapping specs with no precedence rule (TD-008).

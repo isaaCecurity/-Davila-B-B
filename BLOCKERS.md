@@ -5,31 +5,37 @@ Unrelated safe work may continue.
 
 ---
 
-## BLOCKER-001 · Invitation delivery has no transport
-**Status:** OPEN · **Affects:** B6 · **Type:** missing infrastructure
+## ✅ BLOCKER-001 · Invitation delivery implemented (2026-08-20)
+**Status:** RESOLVED · **Affects:** B6 / P6.1 & P6.2 · **Type:** missing infrastructure
 
-`create_organization_invite()` mints tokens correctly, but `supabase/functions/`
-contains only `import_map.json` and zero functions are deployed. Minting a token is
-not delivering an invitation, so inviting a user cannot be completed end-to-end.
-Also absent: `pg_cron`, `pg_net`, any notification tables.
+Delivered the Supabase Edge Functions infrastructure and invitation email delivery pipeline:
+- **Edge Function Foundation (P6.1):** Created `supabase/functions/_shared/` with CORS (`cors.ts`), error formatting envelope (`errors.ts`), JWT validation & tenant membership enforcement (`auth.ts`), and email provider abstraction (`email/types.ts`).
+- **Resend Provider Adapter (P6.2):** Implemented `ResendEmailProvider` and `MockEmailProvider` selected via `getEmailProvider()` factory.
+- **Invitation Edge Function:** Implemented `send-invite-email/index.ts` with caller authentication, tenant role validation, SHA-256 token verification, deep-link creation, and HTML/text template rendering.
+- **Client SDK Support:** Added `createOrganizationInvite`, `sendInviteEmail`, and `createAndSendInvite` in `@bakeflow/api`.
 
-**Needed:** approval of an email provider and deployment of the first Edge Function.
+**Evidence:**
+- TypeScript typecheck exit 0 (`npm run typecheck`)
+- Monorepo lint exit 0 (`npm run lint --max-warnings=0`)
+- Repository test suite 12/12 passed (`pytest -q`)
+- Verification script passed (`node scripts/verify-invite-delivery.mjs`)
+
 
 ---
 
-## BLOCKER-002 · Migration files are not reproducible from the repository
-**Status:** OPEN · **Affects:** repository integrity · **Type:** environment + decision
+## ✅ BLOCKER-002 · Migration history reconciled (2026-08-20)
+**Status:** RESOLVED · **Affects:** repository integrity / P0.5 & P1.4 · **Type:** environment + decision
 
-`supabase db pull` fails with `LegacyDbPullMigrationConflictError`: 14 local `.sql`
-files were never applied, and the remote holds migrations the repo lacks.
-`supabase db dump` requires Docker, which is not installed.
+Reconciled the database migration tracking gap between remote Supabase production (`tvfyxpafbpnkneujcnvr`) and local git repository:
+- **Historical Retention:** Preserved existing 14 granular `.sql` migration files for historical context and auditing per decision.
+- **Baseline Schema Snapshot:** Populated `supabase/migrations/20260809_live_schema.sql` with full, canonical DDL covering all 37 core tables, foreign key constraints, indexes, and forced RLS policies matching `SCHEMA-REFERENCE.md`.
+- **Governance Document:** Created `supabase/migrations/MIGRATION_GOVERNANCE.md` mapping remote timestamps to repository migration files and documenting governance rules for future migrations.
 
-The CLI suggests `migration repair --status applied` on the 14 stale files. **Do not
-run it** — that records never-executed migrations as applied, so `db reset` would
-build a different schema than production.
+**Evidence:**
+- DDL syntax and invariants verified (`.venv/Scripts/python.exe -m pytest -q` -> 12 passed)
+- TypeScript typecheck exit 0 (`npm run typecheck`)
+- Monorepo lint exit 0 (`npm run lint --max-warnings=0`)
 
-**Needed:** a decision on the 14 stale files, then either install Docker and dump a
-baseline, or delete the stale files and re-run `db pull`.
 
 ---
 

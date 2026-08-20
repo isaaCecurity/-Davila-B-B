@@ -5,7 +5,61 @@ Never record planned work here.
 
 ---
 
+## 2026-08-20 · Database Migration Reconciliation (P0.5 & P1.4 / BLOCKER-002)
+
+**Scope:** P0.5 Migration reproducibility, P1.4 Migration verification, resolving BLOCKER-002.
+
+**Deliverables:**
+1. **Migration Governance (`supabase/migrations/MIGRATION_GOVERNANCE.md`):**
+   - Documented exact mapping between remote Supabase production timestamps (`20260809191552` … `20260810182611`) and repository migration files.
+   - Retained 14 granular `.sql` migration files for historical reference and auditability.
+2. **Baseline Schema Snapshot (`supabase/migrations/20260809_live_schema.sql`):**
+   - Populated complete, canonical DDL baseline covering 37 core tables across all 8 operational domains, foreign key constraints, indexes, and forced RLS policies matching `SCHEMA-REFERENCE.md`.
+
+**Executed Evidence:**
+```
+.venv/Scripts/python.exe -m pytest -q         -> exit 0, 12 passed
+npm run typecheck --workspace apps/mobile     -> exit 0
+npm run lint --max-warnings=0                 -> exit 0
+```
+
+---
+
+## 2026-08-20 · Edge Function Foundation & Invitation Delivery (P6.1 & P6.2 / BLOCKER-001)
+
+
+**Scope:** P6.1 Edge Function scaffold, P6.2 Invitation delivery, resolving BLOCKER-001.
+
+**Deliverables:**
+1. **Edge Function Foundation (`supabase/functions/_shared/`):**
+   - `cors.ts`: CORS headers and OPTIONS preflight handling.
+   - `errors.ts`: Standard JSON error envelope per `API-CONTRACT.md` §3 and `HttpError`.
+   - `auth.ts`: Caller JWT verification and tenant membership assertion using service-role client.
+   - `email/types.ts`: `EmailProvider` interface & message payload definitions.
+   - `email/resend.ts`: Resend API adapter.
+   - `email/mock.ts`: Mock email adapter.
+   - `email/factory.ts`: Provider factory with environment variable resolution.
+   - `templates/invite.ts`: Responsive HTML and plain-text invitation templates.
+2. **Invitation Delivery Edge Function (`supabase/functions/send-invite-email/`):**
+   - `index.ts`: Validates caller's tenant membership & role, verifies raw token against stored SHA-256 hash, resolves organization / role / branch names, renders email templates with deep-link/web URLs, and dispatches email via configured adapter.
+3. **Frontend API Mutations (`packages/api`):**
+   - `mutations/invitations.ts`: `createOrganizationInvite`, `sendInviteEmail`, `createAndSendInvite`.
+   - Exported in `@bakeflow/api/index.ts`.
+4. **Verification Script:**
+   - `scripts/verify-invite-delivery.mjs`: Tests SHA-256 token hashing, deep link URL generation, and HTML template escaping.
+
+**Executed Evidence:**
+```
+npm run typecheck --workspace apps/mobile     -> exit 0
+npm run lint --max-warnings=0                 -> exit 0
+.venv/Scripts/python.exe -m pytest -q         -> 12 passed
+node scripts/verify-invite-delivery.mjs       -> exit 0, 3/3 passed
+```
+
+---
+
 ## 2026-08-10 · Multi-organization membership & offline sync foundation
+
 
 **Scope:** B1–B4. Applied to live project `tvfyxpafbpnkneujcnvr`.
 

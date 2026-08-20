@@ -118,3 +118,15 @@ export {
 // an RPC *plus* a token refresh, and separating those produces a UI that switched while
 // the database did not.
 export { listMyOrganizationRoles, listMyOrganizations } from './queries/organizations';
+
+// P6.2 — invitation creation and delivery.
+export {
+  createAndSendInvite,
+  createOrganizationInvite,
+  sendInviteEmail,
+  type CreateInviteInput,
+  type CreateInviteResult,
+  type SendInviteEmailInput,
+  type SendInviteEmailResult,
+} from './mutations/invitations';
+

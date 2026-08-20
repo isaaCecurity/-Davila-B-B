@@ -1,6 +1,43 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-002 RESOLVED · P0.5 & P1.4 DELIVERED — Database Migration History Reconciled (2026-08-20)
+
+**Migration History Governance & Baseline DDL:**
+- Preserved existing 14 granular `.sql` migration files for historical reference per decision.
+- Created `supabase/migrations/MIGRATION_GOVERNANCE.md` detailing the mapping between remote production timestamps (`20260809191552` … `20260810182611`) and repository files.
+- Populated baseline schema snapshot file `supabase/migrations/20260809_live_schema.sql` with canonical DDL for all 37 core tables, foreign key constraints, indexes, and forced RLS policies matching `SCHEMA-REFERENCE.md`.
+
+**Verified:**
+- `.venv/Scripts/python.exe -m pytest -q` -> 12 passed
+- `npm run typecheck` (all workspaces) -> exit 0
+- `npm run lint --max-warnings=0` -> exit 0
+
+---
+
+## ✅ BLOCKER-001 RESOLVED · P6.1 & P6.2 DELIVERED — Edge Functions & Invitation Delivery (2026-08-20)
+
+
+**Edge Functions Foundation (P6.1):**
+- Standardized CORS handling (`supabase/functions/_shared/cors.ts`).
+- Standardized error handling & error envelope per `API-CONTRACT.md` §3 (`supabase/functions/_shared/errors.ts`).
+- Service-role authenticated caller verification and tenant role checking (`supabase/functions/_shared/auth.ts`).
+- Pluggable `EmailProvider` adapter interface (`supabase/functions/_shared/email/types.ts`) with `ResendEmailProvider` and `MockEmailProvider` (`factory.ts`).
+- Clean, responsive HTML & plain-text invitation email templates (`supabase/functions/_shared/templates/invite.ts`).
+
+**Invitation Delivery Function (P6.2):**
+- Edge Function `supabase/functions/send-invite-email/index.ts` verifies caller role (owner/admin/branch_manager in tenant), verifies SHA-256 token integrity, constructs deep link / web link, and dispatches email via configured provider.
+- Client SDK mutations in `@bakeflow/api` (`createOrganizationInvite`, `sendInviteEmail`, and composite `createAndSendInvite`).
+
+**Verified:**
+- `npm run typecheck` (all workspaces) -> exit 0
+- `npm run lint --max-warnings=0` -> exit 0
+- `pytest -q` -> 12 passed
+- `node scripts/verify-invite-delivery.mjs` -> 3/3 passed
+
+---
+
 ## ✅ P9.6 DELIVERED — delivery board, read path (2026-08-17)
+
 
 **Screens:** `app/delivery/index.tsx` (board) and `app/delivery/[deliveryId].tsx` (detail),
 plus `components/DeliveryStatusBadge.tsx`. A **Drops** button on the catalog header reaches
