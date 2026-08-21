@@ -602,7 +602,7 @@ behaviour → tests → acceptance gate.**
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | queued movement | **READ PATH COMPLETE** / adjust NOT_STARTED |
 | P9.5 | Production batches | P4.3 | online-first | **READ PATH COMPLETE** / start+complete NOT_STARTED |
-| P9.6 | Delivery workflow | P4.5 | queued transitions | **READ PATH COMPLETE 2026-08-17** / transitions NOT_STARTED. Board + detail shipped; delivery created live through RLS. `authenticated` holds no UPDATE on `deliveries` — a PostgREST transition returns `42501`, executed — so every hop is RPC-only |
+| P9.6 | Delivery workflow | P4.5 | online-only for now — queuing needs P10 | **READ PATH COMPLETE 2026-08-17 / WRITE PATH COMPLETE 2026-08-21.** Board + detail + transitions shipped, live-verified: `transition_delivery()` and `update_delivery_details()` RPCs (no client UPDATE grant on `deliveries`, so PostgREST is not the write path). `DeliveryActions` renders the legal hops per the live trigger graph; `delivered`/`failed` gate on the CHECK-required field first. No "assign driver" control yet — needs a driver-picker read path that doesn't exist. **BLOCKER-016 open:** `returned` writes no `stock_movements` row, so stock is not restored — see `BLOCKERS.md` |
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | BLOCKED |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | BLOCKED |
 
