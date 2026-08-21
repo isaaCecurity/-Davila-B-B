@@ -6,6 +6,7 @@ import { useMemo } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DeliveryActions } from '../../components/DeliveryActions';
 import { DeliveryStatusBadge } from '../../components/DeliveryStatusBadge';
 import {
   EmptyState,
@@ -34,11 +35,12 @@ import { useSessionStore } from '../../stores/session';
  * the two can legitimately be absent, and the screen shows whichever exists rather than
  * implying both were captured.
  *
- * ## No controls
+ * ## Controls
  *
  * `authenticated` holds `INSERT, SELECT` and no UPDATE on `deliveries` (grants read live),
- * and the two hops into `returned` each write a stock movement, so every transition is a
- * SECURITY DEFINER RPC. There is nothing to render as a button yet.
+ * so every transition goes through `transition_delivery()`, a SECURITY DEFINER RPC.
+ * `DeliveryActions` renders the hops that are legal from the current status; the trigger
+ * remains the authority on whether any of them actually is.
  */
 export default function DeliveryDetailScreen(): React.JSX.Element {
   const client = getSupabaseClient();
@@ -107,6 +109,8 @@ export default function DeliveryDetailScreen(): React.JSX.Element {
             {ticket === null ? 'Ticket unavailable' : ticket.ticket_number}
           </Text>
         </View>
+
+        <DeliveryActions delivery={row} tenantId={activeTenantId} />
 
         {row.status === 'failed' && row.failure_reason !== null && (
           <View className="gap-1 rounded-xl bg-amber-50 p-4">

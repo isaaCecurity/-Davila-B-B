@@ -52,12 +52,16 @@ import {
   listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
+  transitionDelivery,
+  updateDeliveryDetails,
   type BakeflowClient,
   type DeliveryFilters,
+  type DeliveryTransition,
   type KeysetPageOptions,
   type Page,
   type PageOptions,
   type ProductionBatchFilters,
+  type UpdateDeliveryDetailsInput,
 } from '@bakeflow/api';
 import type {
   Delivery,
@@ -75,7 +79,14 @@ import type {
   Ticket,
   Warehouse,
 } from '@bakeflow/types';
-import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 
 /* -------------------------------------------------------------------------- */
 /* Keys                                                                        */
@@ -480,5 +491,107 @@ export function useTicketsByIds(
     queryKey: queryKeys.ticketsByIds(tenantId ?? 'none', ticketIds),
     queryFn: () => listTicketsByIds(client, ticketIds),
     enabled: tenantId !== null && ticketIds.length > 0,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Mutations                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Refresh what a changed delivery invalidates.
+ *
+ * **`invalidateQueries`, not `removeQueries`** — the opposite of the organization switch
+ * above, and for the opposite reason. There the cached rows belonged to a *different*
+ * bakery and showing them for even one frame was the bug. Here they belong to this
+ * bakery and are merely one status behind, so keeping them on screen while the refetch
+ * runs is the better experience; removing them would blank a board the user is reading.
+ *
+ * The fresh row is written straight into the detail key rather than waiting for a refetch,
+ * because the mutation already returned it — re-read through the same projection the
+ * detail screen caches, so it is not a differently-shaped object.
+ *
+ * The list key is invalidated by **prefix**: `['org', tenantId, 'deliveries']` matches
+ * every filter and page combination, and a transition changes which of those a row belongs
+ * to. Invalidating only the filters currently mounted would leave a dispatched delivery
+ * sitting in the "Open" board it just left.
+ */
+function invalidateDelivery(
+  queryClient: QueryClient,
+  tenantId: string,
+  row: Delivery,
+): void {
+  queryClient.setQueryData(queryKeys.delivery(tenantId, row.id), row);
+  void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, 'deliveries') });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.delivery(tenantId, row.id) });
+}
+
+/**
+ * A hook whose mutation needs an active organization refuses to run without one.
+ *
+ * A query in that state is simply `enabled: false`. A mutation has no such switch — it is
+ * fired by a tap, and the tap has to do something — so the guard is thrown from inside
+ * `mutationFn`, where it lands in `error` like any other failure rather than escaping as
+ * an unhandled rejection.
+ */
+function requireTenant(tenantId: string | null): string {
+  if (tenantId === null) {
+    throw new Error('No active organization. Choose a bakery before changing a delivery.');
+  }
+  return tenantId;
+}
+
+export interface TransitionDeliveryVariables {
+  deliveryId: string;
+  transition: DeliveryTransition;
+}
+
+/**
+ * Move a delivery to its next status.
+ *
+ * No retry. The default TanStack Query mutation behaviour is already no-retry, and it is
+ * left that way deliberately: these calls are not idempotent in the way a GET is — a
+ * replayed `failed` overwrites the stored reason, and a replayed hop against a row that
+ * has since moved returns `invalid_transition`, which would surface to the user as a
+ * confusing failure of an action that actually succeeded.
+ *
+ * Errors arrive as `BakeflowApiError` with a `code` the screen may branch on —
+ * `invalid_transition`, `insufficient_role` — never as text to render raw.
+ */
+export function useTransitionDelivery(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<Delivery, Error, TransitionDeliveryVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ deliveryId, transition }: TransitionDeliveryVariables) => {
+      requireTenant(tenantId);
+      return transitionDelivery(client, deliveryId, transition);
+    },
+    onSuccess: (row) => {
+      invalidateDelivery(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface UpdateDeliveryDetailsVariables {
+  deliveryId: string;
+  input: UpdateDeliveryDetailsInput;
+}
+
+/** Correct a delivery's address, contact number or scheduled time. */
+export function useUpdateDeliveryDetails(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<Delivery, Error, UpdateDeliveryDetailsVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ deliveryId, input }: UpdateDeliveryDetailsVariables) => {
+      requireTenant(tenantId);
+      return updateDeliveryDetails(client, deliveryId, input);
+    },
+    onSuccess: (row) => {
+      invalidateDelivery(queryClient, requireTenant(tenantId), row);
+    },
   });
 }

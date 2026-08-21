@@ -6,17 +6,20 @@
  * Same rule as every other domain (`API-CONTRACT.md` §1). No delivery read RPC exists and
  * none should be written.
  *
- * ## Why there is no write path
+ * ## The write path lives in `mutations/delivery.ts`
  *
- * Every delivery mutation is a guarded transition, and two of them move stock:
- * `failed → returned` and `in_transit → returned` each write a return movement
- * (`STATE-MACHINES.md` §3). Under universal rule 4 a transition that moves stock runs in
- * one transaction with the movement it causes — so those hops are RPCs by construction, in
- * exactly the way `complete_production_batch()` is, and assembling one from client calls
- * would risk marking a delivery returned with no stock movement recorded.
+ * Every delivery mutation is a guarded transition performed by a `SECURITY DEFINER` RPC —
+ * `transition_delivery()` and `update_delivery_details()`, both read live 2026-08-21 and
+ * both EXECUTE-able by `authenticated`. This module stays read-only; it does not mean the
+ * write path is missing.
  *
- * Their signatures have not been read from the live database (BLOCKER-011), so none is
- * written here. `adjust_stock()` is the standing precedent for why that matters.
+ * **A correction worth keeping.** This header previously stated that `failed → returned`
+ * and `in_transit → returned` each write a return stock movement, making them RPCs by
+ * universal rule 4. The rule is real, but the premise was not: the live
+ * `transition_delivery()` writes no stock movement, and the only two triggers on
+ * `deliveries` are the transition guard and `set_updated_at`. Returned goods are therefore
+ * not restored to inventory by anything today — recorded as BLOCKER-016 rather than
+ * papered over with a client-side movement.
  *
  * ## Provenance — live-verified 2026-08-17
  *

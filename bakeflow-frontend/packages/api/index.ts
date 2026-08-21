@@ -101,16 +101,28 @@ export {
   type TicketFilters,
 } from './queries/sales';
 
-// P4.5 — the delivery READ path. No mutation: `failed -> returned` and
-// `in_transit -> returned` each write a return stock movement, so under STATE-MACHINES.md
-// universal rule 4 they are RPCs by construction, and their signatures have not been read
-// from the live database (BLOCKER-011).
+// P4.5 — delivery, read and write.
+//
+// The write path is two SECURITY DEFINER RPCs, whose bodies were read live 2026-08-21:
+// `authenticated` holds no UPDATE on `deliveries`, so there is no table-write alternative.
+//
+// The earlier note here — that the signatures had not been read (BLOCKER-011, resolved
+// 2026-08-15) and that the two hops into `returned` write a return stock movement — was
+// wrong on both counts. `transition_delivery` writes no stock movement and neither trigger
+// on the table does either. See BLOCKER-016 and the header of `mutations/delivery.ts`.
 export {
   getDeliveryById,
   getDeliveryForTicket,
   listDeliveries,
   type DeliveryFilters,
 } from './queries/delivery';
+export {
+  TRANSITIONABLE_DELIVERY_STATUSES,
+  transitionDelivery,
+  updateDeliveryDetails,
+  type DeliveryTransition,
+  type UpdateDeliveryDetailsInput,
+} from './mutations/delivery';
 
 // P8.1 — organization membership reads. The one read path that works with a null tenant
 // claim, because `organizations_select` keys off auth.uid() rather than
