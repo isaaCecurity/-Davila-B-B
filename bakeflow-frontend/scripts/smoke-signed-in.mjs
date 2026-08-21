@@ -560,6 +560,76 @@ check('a delivery transition through PostgREST is REFUSED — transitions are RP
     ? `${transitionAttempt.error.code} ${transitionAttempt.error.message}`
     : 'NO ERROR (unexpected)');
 
+// The two write RPCs the a1985a29 commit added (`@bakeflow/api` mutations/delivery.ts).
+// Landed with a docstring describing their contracts from the live function bodies, but
+// never previously exercised against the live project — closing that gap here.
+
+// transition_delivery() checks the nominated assignee holds 'driver' in THIS tenant before
+// the trigger ever runs. SMOKE_UID is an owner, not a driver, so this must be refused by
+// the RPC's own guard, not by guard_delivery_transition().
+const assignNonDriver = await supabase.rpc('transition_delivery', {
+  p_delivery_id: delivery?.id,
+  p_to_status: 'assigned',
+  p_proof_url: null,
+  p_recipient_name: null,
+  p_reason: null,
+  p_driver_id: SMOKE_UID,
+});
+check('transition_delivery(assigned, non-driver assignee) is REFUSED (insufficient_role)',
+  assignNonDriver.error !== null,
+  assignNonDriver.error ? assignNonDriver.error.message : 'NO ERROR (unexpected)');
+
+// deliveryTicket was just raised and is still 'draft' (the column default), not 'ready'.
+// transition_delivery() reads the parent ticket and refuses in_transit itself — a
+// precondition check in the RPC, ahead of and independent from the trigger's legal-hop
+// graph (which would refuse this same call anyway, since pending's only exit is assigned).
+const dispatchNotReady = await supabase.rpc('transition_delivery', {
+  p_delivery_id: delivery?.id,
+  p_to_status: 'in_transit',
+  p_proof_url: null,
+  p_recipient_name: null,
+  p_reason: null,
+  p_driver_id: null,
+});
+check('transition_delivery(in_transit, ticket not ready) is REFUSED (invalid_transition)',
+  dispatchNotReady.error !== null,
+  dispatchNotReady.error ? dispatchNotReady.error.message : 'NO ERROR (unexpected)');
+
+// update_delivery_details() is the other RPC the commit added — owner/admin/branch_manager/
+// cashier may correct address/phone/schedule on any hop, not just pending. Exercised end to
+// end: call it, then read the row back through the same projection the detail screen uses.
+const detailsUpdate = await supabase.rpc('update_delivery_details', {
+  p_delivery_id: delivery?.id,
+  p_address_line: '45 Broad Street, Lagos Island, Lagos',
+  p_contact_phone: '+2348099999999',
+  p_scheduled_at: null,
+});
+check('update_delivery_details() succeeds for an owner',
+  detailsUpdate.error === null && detailsUpdate.data?.delivery?.address_line === '45 Broad Street, Lagos Island, Lagos',
+  detailsUpdate.error ? detailsUpdate.error.message : JSON.stringify(detailsUpdate.data?.delivery?.address_line));
+
+const detailsReadBack = await supabase
+  .from('deliveries').select(DELIVERY_COLUMNS)
+  .eq('id', delivery?.id).is('deleted_at', null).maybeSingle();
+check('the address/phone correction is visible through the delivery read path',
+  detailsReadBack.data?.address_line === '45 Broad Street, Lagos Island, Lagos' &&
+    detailsReadBack.data?.contact_phone === '+2348099999999',
+  JSON.stringify({ address: detailsReadBack.data?.address_line, phone: detailsReadBack.data?.contact_phone }));
+
+// COALESCE means a call that supplies none of the three fields rewrites the row to its
+// current values rather than erroring — the client wrapper refuses this case locally
+// (mutations/delivery.ts), but the database itself has no such guard, so the RPC still
+// succeeds and leaves the just-corrected values untouched.
+const detailsNoop = await supabase.rpc('update_delivery_details', {
+  p_delivery_id: delivery?.id,
+  p_address_line: null,
+  p_contact_phone: null,
+  p_scheduled_at: null,
+});
+check('update_delivery_details() with all-null args is a DB-level no-op, not an error',
+  detailsNoop.error === null && detailsNoop.data?.delivery?.address_line === '45 Broad Street, Lagos Island, Lagos',
+  detailsNoop.error ? detailsNoop.error.message : JSON.stringify(detailsNoop.data?.delivery?.address_line));
+
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });
 const refreshB = await supabase.auth.refreshSession();

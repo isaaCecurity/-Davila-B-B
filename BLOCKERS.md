@@ -589,6 +589,41 @@ their SECOND organization (BLOCKER-015)"**, plus a printed diagnosis banner if t
 
 ---
 
+## BLOCKER-016 · `returned` deliveries do not restore stock
+**Status:** OPEN · **Affects:** B4 (inventory), B5 (delivery) · **Type:** live defect
+
+`STATE-MACHINES.md` §3 and this repository's own earlier comments in
+`packages/api/queries/delivery.ts` state that `in_transit -> returned` and
+`failed -> returned` each write a return `stock_movements` row, under universal rule 4
+(stock changes only through the immutable ledger). **The live database does not do this.**
+
+Read live from `pg_trigger` while building the P9.6 write path (2026-08-21): `deliveries`
+carries exactly two triggers, `deliveries_guard_transition` (the legal-hop graph) and
+`deliveries_set_updated_at`. Neither touches `stock_movements`, and
+`transition_delivery()` — the only path into `returned`, since `authenticated` has no
+`UPDATE` grant on `deliveries` — does nothing but write the new `status` and the
+already-supplied `driver_id`/`proof_url`/`recipient_name`/`failure_reason` columns.
+
+So a `returned` delivery today just changes a status label. The goods physically came back
+to the branch, but no ledger row says so — inventory stays exactly as depleted as it was
+while the delivery was still out, and there is no record it ever came back.
+
+**Why this is not patched from the client.** Appending a `stock_movements` row from
+`@bakeflow/api` after the RPC returns would be the exact split transaction universal rule 4
+exists to prevent: a client crash or dropped connection between the two calls leaves the
+delivery `returned` with the stock never restored, silently. The fix has to be inside
+`transition_delivery()` itself, in the same transaction as the status write, so either both
+happen or neither does. Deciding what that movement looks like — which warehouse receives
+it, whether by product variant or by the ticket's original line items, whether partial
+returns are in scope for MVP 1 — is a business-rule question, not one for an agent to guess.
+
+**Needed:** approval for the return-movement shape, then a migration adding that write to
+`transition_delivery()`'s `returned` branch, verified live the same way BLOCKER-015 was
+(execute the transition, re-read `stock_movements`, confirm the row and the resulting
+`quantity_on_hand`).
+
+---
+
 ## Template
 
 ```

@@ -4,6 +4,22 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-016
+
+**Question:** What should the return `stock_movements` write look like for a delivery that
+reaches `returned` — which warehouse, by variant or by the ticket's original lines, and are
+partial returns in scope for MVP 1?
+
+**Affected:** inventory accuracy for every delivery that fails or is returned; the goods are
+physically back at the branch but no ledger row says so, and `quantity_on_hand` stays as
+depleted as while the delivery was still out.
+
+**Status:** BLOCKED — the P9.6 delivery write path (transitions, address/phone corrections)
+shipped and is fully working; this is the one gap in it, discovered live while building that
+path on 2026-08-21, not a defect in what shipped. Unrelated work may continue.
+
+---
+
 ## RESOLVED: BLOCKER-002 — Database migration history reconciled
 
 **Status:** Resolved on 2026-08-20.

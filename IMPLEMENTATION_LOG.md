@@ -1385,3 +1385,60 @@ guard is a copy that gets fixed once. `listTicketsByIds` is the new consumer.
 Each smoke run now also creates one delivery-fulfilment ticket and one delivery in
 organization A. `deliveries` was already added to the teardown order in `CURRENT_TASK.md`
 ahead of `ticket_items`/`tickets`, so no change is needed there.
+
+---
+
+## 2026-08-21 · Delivery write path — transitions and detail corrections (P9.6 write half)
+
+**Scope:** the write half of P9.6 — moving a delivery through its status graph and
+correcting address/phone/schedule, both routed through `SECURITY DEFINER` RPCs since
+`authenticated` holds no `UPDATE` grant on `deliveries`.
+
+**Deliverables (commit `a1985a29`):**
+1. `bakeflow-frontend/packages/api/mutations/delivery.ts` — `transitionDelivery()` and
+   `updateDeliveryDetails()`, calling `transition_delivery()` and
+   `update_delivery_details()` respectively. `DeliveryTransition` is a discriminated union
+   so the argument combinations the database rejects (`assigned` with no driver, `failed`
+   with no reason) cannot be constructed. Both re-read the row via `getDeliveryById` after
+   the RPC returns rather than parsing the `jsonb` envelope, for precision-safety and to
+   prove the row is still visible under `deliveries_select` post-change.
+2. `bakeflow-frontend/packages/hooks/index.ts` — `useTransitionDelivery`,
+   `useUpdateDeliveryDetails`. No retry (replaying `failed` would overwrite the stored
+   reason). `invalidateDelivery()` writes the returned row into the detail query key and
+   invalidates the list key by tenant-scoped prefix, so a transitioned delivery moves boards
+   without a manual refetch.
+3. `bakeflow-frontend/apps/mobile/components/DeliveryActions.tsx` (new) — renders the legal
+   next hops per status, transcribed from `guard_delivery_transition()` read live. `delivered`
+   and `failed` gate on a small form (proof/recipient, reason) before the button arms, ahead
+   of the standing CHECK constraints that would otherwise refuse the bare call. No control
+   for `pending -> assigned` — needs a driver picker this app does not have a read path for
+   yet; the screen states that rather than guessing at one.
+4. `bakeflow-frontend/apps/mobile/app/delivery/[deliveryId].tsx` — mounts `DeliveryActions`.
+
+**Verification performed this session** (the commit had landed with gates unrun and
+undocumented; this closed both gaps):
+- Read `transition_delivery`, `update_delivery_details`, and `guard_delivery_transition`
+  live from `pg_proc`/`pg_trigger` and confirmed the module's docstring claims match the
+  function bodies exactly — the legal-hop graph, the two RPC-level preconditions
+  (driver-role check for `assigned`, ticket-ready check for `in_transit`), and the
+  `COALESCE` set-but-never-clear semantics.
+- Read `pg_trigger` for `deliveries` and confirmed only `deliveries_guard_transition` and
+  `deliveries_set_updated_at` exist — neither writes `stock_movements`, so `returned`
+  restores no stock. Recorded as **BLOCKER-016** in `BLOCKERS.md` and `NOTIFICATIONS.md`
+  (open; not patched from the client, since that would split the transaction rule 4 exists
+  to prevent).
+- Extended `scripts/smoke-signed-in.mjs` with six checks exercising both RPCs directly
+  against the live project as the signed-in owner: `assigned` with a non-driver assignee
+  refused `insufficient_role`; `in_transit` against a not-ready ticket refused
+  `invalid_transition`; `update_delivery_details()` succeeds and the correction reads back
+  through the same projection the screen caches; an all-null call is confirmed to be a
+  DB-level no-op via `COALESCE` rather than an error.
+
+**Executed evidence (from `bakeflow-frontend`):**
+```
+node scripts/smoke-signed-in.mjs           -> 84 pass / 0 fail (was 78/0)
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+npm run verify:cache                       -> all checks passed
+.venv/Scripts/python.exe -m pytest -q      -> 12 passed
+```

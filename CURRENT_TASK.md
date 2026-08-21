@@ -1,5 +1,51 @@
 # BakeFlow — Current Task
 
+## ✅ P9.6 DELIVERED — delivery write path (transitions + detail corrections) (2026-08-21)
+
+**Two `SECURITY DEFINER` RPCs, wired to the detail screen:**
+- `packages/api/mutations/delivery.ts`: `transitionDelivery()` calls `transition_delivery()`
+  (the only path into a status change — `authenticated` holds no `UPDATE` on `deliveries`),
+  modelled as a `DeliveryTransition` discriminated union so an `assigned` with no driver or
+  a `failed` with no reason is a compile error rather than a round trip that comes back
+  `23514`. `updateDeliveryDetails()` calls `update_delivery_details()` for address/phone/
+  schedule corrections (owner/admin/branch_manager/cashier).
+- `packages/hooks/index.ts`: `useTransitionDelivery` / `useUpdateDeliveryDetails` —
+  no-retry mutations (a replayed `failed` would overwrite the stored reason), invalidate the
+  delivery list by tenant-scoped key prefix plus the single detail key, and write the
+  returned row straight into the detail cache.
+- `apps/mobile/components/DeliveryActions.tsx`: renders the legal next hops per
+  `guard_delivery_transition()`'s graph, transcribed from the live trigger body (2026-08-21).
+  `delivered` and `failed` open a small form first, since each needs a value a standing
+  CHECK constraint requires. No "assign driver" control yet — that needs a driver picker
+  (a `user_roles`/`profiles` read path that doesn't exist and whose RLS isn't verified live
+  yet), so the pending state explains the gap rather than inventing the query.
+- `apps/mobile/app/delivery/[deliveryId].tsx`: mounts `DeliveryActions` below the detail
+  view.
+
+**Everything the module claims about the database was read live, not assumed** — the three
+RPC/trigger bodies were pulled from `pg_proc`/`pg_trigger` and match the code exactly: the
+legal-hop graph, the `assigned`-requires-driver-role and `in_transit`-requires-ready-ticket
+preconditions, and the `COALESCE` semantics that mean a field can be set but never cleared
+through these RPCs.
+
+**One gap found while verifying, not patched here:** `returned` writes no `stock_movements`
+row — recorded as **BLOCKER-016** (`BLOCKERS.md`, `NOTIFICATIONS.md`), since the fix belongs
+inside the RPC's transaction and the return-movement shape is a business-rule decision.
+
+**Verified — smoke coverage added, not just gates run:**
+- `node scripts/smoke-signed-in.mjs` — **84 pass / 0 fail** (was 78/0). New checks exercise
+  both RPCs directly: `transition_delivery(assigned, non-driver)` refused
+  `insufficient_role`; `transition_delivery(in_transit, ticket not ready)` refused
+  `invalid_transition`; `update_delivery_details()` succeeds for an owner and the correction
+  reads back through the same projection the screen uses; an all-null call is a DB-level
+  no-op via `COALESCE`, not an error.
+- `npm run typecheck --workspace apps/mobile` -> exit 0
+- `npm run lint --workspace apps/mobile` -> exit 0
+- `npm run verify:cache` -> all checks passed (unaffected by this change; run for regression)
+- `.venv/Scripts/python.exe -m pytest -q` -> 12 passed
+
+---
+
 ## ✅ BLOCKER-002 RESOLVED · P0.5 & P1.4 DELIVERED — Database Migration History Reconciled (2026-08-20)
 
 **Migration History Governance & Baseline DDL:**
