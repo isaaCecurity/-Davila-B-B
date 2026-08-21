@@ -8,6 +8,7 @@ import { ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BatchStatusBadge } from '../../components/BatchStatusBadge';
+import { ProductionBatchActions } from '../../components/ProductionBatchActions';
 import {
   EmptyState,
   ErrorState,
@@ -129,6 +130,8 @@ export default function ProductionBatchScreen(): React.JSX.Element {
           <Field label="Finished" value={formatTimestamp(row.completed_at)} />
           {row.ticket_id !== null && <Field label="For ticket" value={row.ticket_id} />}
         </View>
+
+        <ProductionBatchActions batch={row} tenantId={activeTenantId} />
 
         <View className="gap-3">
           <Text className="text-lg font-semibold text-neutral-900">Ingredients</Text>

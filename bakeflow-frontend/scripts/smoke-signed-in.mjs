@@ -338,6 +338,235 @@ const recipesA = await supabase
 check('recipes resolve by id, for naming batches',
   recipesA.data?.[0]?.name === 'Smoke Agege Recipe', JSON.stringify(recipesA.data?.[0]?.name));
 
+// ---------------------------------------- production batch transitions (P9.5) --
+// `scheduled -> in_progress` and `scheduled -> cancelled` are plain PostgREST updates
+// (authenticated holds UPDATE on production_batches, unlike deliveries), policed by
+// guard_production_batch_transition(). `in_progress -> completed` and `-> failed` are the
+// two SECURITY DEFINER RPCs that atomically write stock_movements alongside the status
+// change — mutations/production.ts, RPC bodies read live 2026-08-21.
+//
+// A real completion/failure consumes real ingredient stock and produces real finished-good
+// stock, permanently — the ledger is immutable. RECIPE_A1 resolves to FLOUR/SUGAR and to
+// VARIANT_A1, and this file's own inventory assertions above hardcode their levels
+// (120.0000, 25.0000, 42.0000) as exact, unchanging values. Running a real completion
+// against RECIPE_A1 would corrupt those assertions on every subsequent run. So this section
+// creates its own disposable ingredient/product/recipe graph — never touching any fixture
+// another check depends on — and is the only place in this file that calls adjust_stock,
+// complete_production_batch or fail_production_batch for real.
+const suffix = Date.now().toString(36);
+const throwawayIngredient = await supabase
+  .from('ingredients')
+  .insert({ tenant_id: ORG_A, name: `Smoke Batch Ingredient ${suffix}`, unit_of_measure: 'kg' })
+  .select('id').single();
+check('a disposable ingredient can be created for this section',
+  throwawayIngredient.error === null,
+  throwawayIngredient.error ? throwawayIngredient.error.message : '');
+
+const throwawayProduct = await supabase
+  .from('products')
+  .insert({ tenant_id: ORG_A, name: `Smoke Batch Product ${suffix}` })
+  .select('id').single();
+const throwawayVariant = await supabase
+  .from('product_variants')
+  .insert({
+    tenant_id: ORG_A, product_id: throwawayProduct.data?.id,
+    name: `Smoke Batch Variant ${suffix}`, sku: `SMOKE-BATCH-${suffix}`, unit_price: '1.0000',
+  })
+  .select('id').single();
+const throwawayRecipe = await supabase
+  .from('recipes')
+  .insert({
+    tenant_id: ORG_A, product_variant_id: throwawayVariant.data?.id,
+    name: `Smoke Batch Recipe ${suffix}`, yield_quantity: '1.0000',
+  })
+  .select('id').single();
+const throwawayRecipeIngredient = await supabase
+  .from('recipe_ingredients')
+  .insert({
+    tenant_id: ORG_A, recipe_id: throwawayRecipe.data?.id,
+    ingredient_id: throwawayIngredient.data?.id, quantity: '1.0000',
+  })
+  .select('id').single();
+check('the disposable product/variant/recipe/recipe-ingredient graph was created',
+  throwawayProduct.error === null && throwawayVariant.error === null &&
+    throwawayRecipe.error === null && throwawayRecipeIngredient.error === null,
+  JSON.stringify({
+    product: throwawayProduct.error?.message, variant: throwawayVariant.error?.message,
+    recipe: throwawayRecipe.error?.message, line: throwawayRecipeIngredient.error?.message,
+  }));
+
+// adjust_stock's own P4.2b contract: p_new_quantity is an absolute target. Giving the
+// disposable ingredient an opening balance of 10 kg is what lets a completion consume 1 kg
+// without ever touching FLOUR, SUGAR or YEAST.
+const openingBalance = await supabase.rpc('adjust_stock', {
+  p_warehouse_id: WAREHOUSE_A, p_item_type: 'ingredient', p_item_id: throwawayIngredient.data?.id,
+  p_new_quantity: '10.0000', p_reason: 'opening_balance', p_note: null,
+});
+check('adjust_stock gives the disposable ingredient a 10kg opening balance',
+  openingBalance.error === null,
+  openingBalance.error ? openingBalance.error.message : '');
+
+// Two batches against the same disposable recipe: one completed, one failed. Each starts
+// scheduled (the INSERT default) with no explicit status.
+const batchToComplete = await supabase
+  .from('production_batches')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, recipe_id: throwawayRecipe.data?.id, planned_quantity: '1.0000' })
+  .select('id,status,batch_number').single();
+check('a batch can be scheduled against the disposable recipe',
+  batchToComplete.error === null && batchToComplete.data?.status === 'scheduled',
+  batchToComplete.error ? batchToComplete.error.message : JSON.stringify(batchToComplete.data));
+
+const linesSnapshotted = await supabase
+  .from('production_batch_ingredients').select('ingredient_id,planned_quantity::text')
+  .eq('batch_id', batchToComplete.data?.id);
+check('copy_batch_planned_ingredients() snapshotted one line at 1.0000 (1 * 1/1)',
+  linesSnapshotted.data?.length === 1 && linesSnapshotted.data[0].planned_quantity === '1.0000',
+  JSON.stringify(linesSnapshotted.data));
+
+// The RPC's own precondition — batch must already be in_progress — fires before any
+// stock_movements write, so this is safe to attempt against a still-scheduled batch.
+const completeTooEarly = await supabase.rpc('complete_production_batch', {
+  p_batch_id: batchToComplete.data?.id, p_actual_quantity: '1.0000',
+  p_ingredient_actuals: [], p_warehouse_id: null,
+});
+check('complete_production_batch() on a SCHEDULED batch is REFUSED (invalid_transition)',
+  completeTooEarly.error !== null,
+  completeTooEarly.error ? completeTooEarly.error.message : 'NO ERROR (unexpected)');
+
+const startBatch = await supabase
+  .from('production_batches').update({ status: 'in_progress' })
+  .eq('id', batchToComplete.data?.id).select('id,status,started_at').single();
+check('a plain UPDATE moves scheduled -> in_progress and stamps started_at',
+  startBatch.data?.status === 'in_progress' && startBatch.data?.started_at !== null,
+  startBatch.error ? startBatch.error.message : JSON.stringify(startBatch.data));
+
+const illegalHop = await supabase
+  .from('production_batches').update({ status: 'cancelled' })
+  .eq('id', batchToComplete.data?.id).select('id');
+check('an UPDATE from in_progress to cancelled is REFUSED (not a legal hop)',
+  illegalHop.error !== null,
+  illegalHop.error ? illegalHop.error.message : 'NO ERROR (unexpected)');
+
+const completion = await supabase.rpc('complete_production_batch', {
+  p_batch_id: batchToComplete.data?.id, p_actual_quantity: '1.0000',
+  p_ingredient_actuals: [], p_warehouse_id: null,
+});
+check('complete_production_batch() succeeds on an in_progress batch',
+  completion.error === null, completion.error ? completion.error.message : '');
+
+const completedRead = await supabase
+  .from('production_batches')
+  .select('status,actual_quantity::text,completed_at')
+  .eq('id', batchToComplete.data?.id).maybeSingle();
+check('the completed batch reads back completed, actual 1.0000, completed_at set',
+  completedRead.data?.status === 'completed' && completedRead.data?.actual_quantity === '1.0000' &&
+    completedRead.data?.completed_at !== null,
+  JSON.stringify(completedRead.data));
+
+const movementsForCompletion = await supabase
+  .from('stock_movements').select('reason,item_type,quantity_delta::text')
+  .eq('reference_type', 'production_batch').eq('reference_id', batchToComplete.data?.id);
+check('completion wrote exactly one consume (-1kg ingredient) and one output (+1 product)',
+  movementsForCompletion.data?.length === 2 &&
+    movementsForCompletion.data.some((m) => m.reason === 'production_consume' && m.item_type === 'ingredient' && m.quantity_delta === '-1.0000') &&
+    movementsForCompletion.data.some((m) => m.reason === 'production_output' && m.item_type === 'product' && m.quantity_delta === '1.0000'),
+  JSON.stringify(movementsForCompletion.data));
+
+const ingredientLevelAfterCompletion = await supabase
+  .from('ingredient_stock_levels').select('quantity_on_hand::text')
+  .eq('warehouse_id', WAREHOUSE_A).eq('ingredient_id', throwawayIngredient.data?.id).maybeSingle();
+check('the disposable ingredient level dropped from 10 to 9 (10 - 1)',
+  ingredientLevelAfterCompletion.data?.quantity_on_hand === '9.0000',
+  JSON.stringify(ingredientLevelAfterCompletion.data));
+
+// A second batch, same disposable recipe, for the failure path.
+const batchToFail = await supabase
+  .from('production_batches')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, recipe_id: throwawayRecipe.data?.id, planned_quantity: '1.0000' })
+  .select('id').single();
+await supabase.from('production_batches').update({ status: 'in_progress' }).eq('id', batchToFail.data?.id);
+
+const failure = await supabase.rpc('fail_production_batch', {
+  p_batch_id: batchToFail.data?.id, p_reason: 'smoke test — oven fault',
+  p_ingredient_actuals: [], p_warehouse_id: null,
+});
+check('fail_production_batch() succeeds on an in_progress batch',
+  failure.error === null, failure.error ? failure.error.message : '');
+
+const failedRead = await supabase
+  .from('production_batches').select('status,failure_reason,completed_at')
+  .eq('id', batchToFail.data?.id).maybeSingle();
+check('the failed batch reads back failed, with its reason and completed_at set',
+  failedRead.data?.status === 'failed' &&
+    failedRead.data?.failure_reason === 'smoke test — oven fault' &&
+    failedRead.data?.completed_at !== null,
+  JSON.stringify(failedRead.data));
+
+const movementsForFailure = await supabase
+  .from('stock_movements').select('reason,item_type,quantity_delta::text')
+  .eq('reference_type', 'production_batch').eq('reference_id', batchToFail.data?.id);
+check('failure wrote exactly one consume movement and NO output movement (ingredients used, nothing made)',
+  movementsForFailure.data?.length === 1 &&
+    movementsForFailure.data[0].reason === 'production_consume' &&
+    movementsForFailure.data[0].quantity_delta === '-1.0000',
+  JSON.stringify(movementsForFailure.data));
+
+const ingredientLevelAfterFailure = await supabase
+  .from('ingredient_stock_levels').select('quantity_on_hand::text')
+  .eq('warehouse_id', WAREHOUSE_A).eq('ingredient_id', throwawayIngredient.data?.id).maybeSingle();
+check('the disposable ingredient level dropped from 9 to 8 (9 - 1) — a failed batch still consumes',
+  ingredientLevelAfterFailure.data?.quantity_on_hand === '8.0000',
+  JSON.stringify(ingredientLevelAfterFailure.data));
+
+// BLOCKER-017, proven live rather than left as a read-code claim: authenticated holds a
+// blanket UPDATE on production_batches, so nothing at the grant layer stops a raw
+// PostgREST update from reaching 'completed' without ever calling the RPC — silently
+// skipping the stock_movements it exists to guarantee.
+//
+// The first attempt here supplied only status + actual_quantity and was refused —
+// production_batches_completed_fields also requires completed_at IS NOT NULL, and only
+// the RPCs stamp it; the trigger does not. That is a real (small) mitigation, not a
+// disproof: it costs a bypass exactly one more column to fabricate, and the second
+// attempt below — status + actual_quantity + a client-supplied completed_at — is what
+// actually proves the finding.
+const batchForBypass = await supabase
+  .from('production_batches')
+  .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, recipe_id: throwawayRecipe.data?.id, planned_quantity: '1.0000' })
+  .select('id').single();
+await supabase.from('production_batches').update({ status: 'in_progress' }).eq('id', batchForBypass.data?.id);
+
+const incompleteBypass = await supabase
+  .from('production_batches')
+  .update({ status: 'completed', actual_quantity: '1.0000' })
+  .eq('id', batchForBypass.data?.id)
+  .select('id');
+check('a raw UPDATE with no completed_at is refused by production_batches_completed_fields',
+  incompleteBypass.error !== null,
+  incompleteBypass.error ? incompleteBypass.error.message : 'NO ERROR (unexpected)');
+
+const rawBypass = await supabase
+  .from('production_batches')
+  .update({ status: 'completed', actual_quantity: '1.0000', completed_at: new Date().toISOString() })
+  .eq('id', batchForBypass.data?.id)
+  .select('status,actual_quantity::text');
+check('BLOCKER-017 reproduced: a raw UPDATE supplying completed_at itself SUCCEEDS, bypassing the RPC',
+  rawBypass.error === null && rawBypass.data?.[0]?.status === 'completed',
+  rawBypass.error ? rawBypass.error.message : JSON.stringify(rawBypass.data));
+
+const movementsForBypass = await supabase
+  .from('stock_movements').select('id')
+  .eq('reference_type', 'production_batch').eq('reference_id', batchForBypass.data?.id);
+check('BLOCKER-017 confirmed: the bypassed completion wrote ZERO stock movements',
+  (movementsForBypass.data ?? []).length === 0,
+  `movements=${movementsForBypass.data?.length}`);
+
+const ingredientLevelAfterBypass = await supabase
+  .from('ingredient_stock_levels').select('quantity_on_hand::text')
+  .eq('warehouse_id', WAREHOUSE_A).eq('ingredient_id', throwawayIngredient.data?.id).maybeSingle();
+check('the disposable ingredient level is UNCHANGED by the bypass (still 8, not 7)',
+  ingredientLevelAfterBypass.data?.quantity_on_hand === '8.0000',
+  JSON.stringify(ingredientLevelAfterBypass.data));
+
 // ------------------------- ticket creation (BLOCKER-012 + BLOCKER-015 fix) --
 // Two defects had to fall before this INSERT could work, and both are real:
 //   BLOCKER-012 — assign_order_number() passed 'ticket' while

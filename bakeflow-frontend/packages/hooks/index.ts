@@ -35,6 +35,9 @@
  */
 
 import {
+  cancelProductionBatch,
+  completeProductionBatch,
+  failProductionBatch,
   getDeliveryById,
   getProductById,
   getProductionBatchWithIngredients,
@@ -52,11 +55,14 @@ import {
   listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
+  startProductionBatch,
   transitionDelivery,
   updateDeliveryDetails,
   type BakeflowClient,
+  type CompleteProductionBatchInput,
   type DeliveryFilters,
   type DeliveryTransition,
+  type FailProductionBatchInput,
   type KeysetPageOptions,
   type Page,
   type PageOptions,
@@ -592,6 +598,109 @@ export function useUpdateDeliveryDetails(
     },
     onSuccess: (row) => {
       invalidateDelivery(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+/**
+ * Refresh what a changed batch invalidates. Same shape as `invalidateDelivery`, for the
+ * same reason: the list is invalidated by tenant-scoped prefix (a transition changes which
+ * status filter the row belongs to), and the fresh row is written straight into the detail
+ * key rather than waiting on a refetch.
+ */
+function invalidateProductionBatch(
+  queryClient: QueryClient,
+  tenantId: string,
+  batchId: string,
+): void {
+  void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, 'production-batches') });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.productionBatch(tenantId, batchId) });
+}
+
+export interface ProductionBatchIdVariables {
+  batchId: string;
+}
+
+/**
+ * Move a scheduled batch to `in_progress`.
+ *
+ * No retry, for the same reason as the delivery transitions: a replay against a batch that
+ * has already moved on returns `invalid_transition`, which would read to the user as a
+ * failure of an action that actually succeeded the first time.
+ */
+export function useStartProductionBatch(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<ProductionBatch, Error, ProductionBatchIdVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ batchId }: ProductionBatchIdVariables) => {
+      requireTenant(tenantId);
+      return startProductionBatch(client, batchId);
+    },
+    onSuccess: (row) => {
+      invalidateProductionBatch(queryClient, requireTenant(tenantId), row.id);
+    },
+  });
+}
+
+/** Cancel a batch before it starts. */
+export function useCancelProductionBatch(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<ProductionBatch, Error, ProductionBatchIdVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ batchId }: ProductionBatchIdVariables) => {
+      requireTenant(tenantId);
+      return cancelProductionBatch(client, batchId);
+    },
+    onSuccess: (row) => {
+      invalidateProductionBatch(queryClient, requireTenant(tenantId), row.id);
+    },
+  });
+}
+
+export interface CompleteProductionBatchVariables {
+  batchId: string;
+  input: CompleteProductionBatchInput;
+}
+
+/** Complete an in-progress batch — writes its consumption and output movements. */
+export function useCompleteProductionBatch(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<ProductionBatchWithIngredients, Error, CompleteProductionBatchVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ batchId, input }: CompleteProductionBatchVariables) => {
+      requireTenant(tenantId);
+      return completeProductionBatch(client, batchId, input);
+    },
+    onSuccess: ({ batch }) => {
+      invalidateProductionBatch(queryClient, requireTenant(tenantId), batch.id);
+    },
+  });
+}
+
+export interface FailProductionBatchVariables {
+  batchId: string;
+  input: FailProductionBatchInput;
+}
+
+/** Fail an in-progress batch — writes its consumption movements, no output. */
+export function useFailProductionBatch(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<ProductionBatchWithIngredients, Error, FailProductionBatchVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ batchId, input }: FailProductionBatchVariables) => {
+      requireTenant(tenantId);
+      return failProductionBatch(client, batchId, input);
+    },
+    onSuccess: ({ batch }) => {
+      invalidateProductionBatch(queryClient, requireTenant(tenantId), batch.id);
     },
   });
 }

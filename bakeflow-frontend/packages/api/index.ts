@@ -68,10 +68,7 @@ export {
 export { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from './internal/read';
 export type { Page, PageOptions } from './internal/read';
 
-// P4.3a — production READ path. No batch mutation is exported: STATE-MACHINES.md §2
-// requires completion to be the single `complete_production_batch()` RPC, never a
-// sequence of client calls, and that signature has not been read from the live database
-// yet.
+// P4.3a — production, read path.
 export {
   getProductionBatchById,
   getProductionBatchWithIngredients,
@@ -79,6 +76,22 @@ export {
   listProductionBatches,
   type ProductionBatchFilters,
 } from './queries/production';
+
+// P9.5 — production, write path. `scheduled`'s two exits are plain PostgREST updates,
+// policed by `guard_production_batch_transition()`; `in_progress`'s two exits are the
+// SECURITY DEFINER RPCs `STATE-MACHINES.md` §2 requires, since each has to write
+// `stock_movements` atomically with the status change. `authenticated` holds a blanket
+// `UPDATE` on `production_batches` (unlike `deliveries`), which means nothing at the grant
+// layer stops a client from reaching `completed`/`failed` without those RPCs and silently
+// skipping the movements — see BLOCKER-017 and the header of `mutations/production.ts`.
+export {
+  cancelProductionBatch,
+  completeProductionBatch,
+  failProductionBatch,
+  startProductionBatch,
+  type CompleteProductionBatchInput,
+  type FailProductionBatchInput,
+} from './mutations/production';
 
 // P4.4a/P4.4b — the sales READ path (customers, tickets, ticket_items). No ticket mutation
 // is exported. `guard_ticket_status_transition()` is the sole authority on status since
