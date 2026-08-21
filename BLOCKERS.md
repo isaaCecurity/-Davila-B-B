@@ -624,6 +624,51 @@ returns are in scope for MVP 1 — is a business-rule question, not one for an a
 
 ---
 
+## BLOCKER-017 · A raw UPDATE reaches `production_batches.completed` without the RPC, silently skipping stock movements
+**Status:** OPEN · **Affects:** B4 (inventory), B7/P9.5 (production) · **Type:** live defect, grant-layer
+
+Unlike `deliveries` (no `UPDATE` grant on `authenticated` at all, which is what forces every
+delivery transition through an RPC), `production_batches` grants `authenticated` a blanket
+`UPDATE`, and `production_batches_update`'s RLS is a plain tenant/branch/role check with no
+awareness of *which* columns are changing. `guard_production_batch_transition()` only
+validates the legal-hop graph and the actor's role — it has no way to know whether a write
+originated from `complete_production_batch()` or from a client's own PostgREST call, so it
+cannot distinguish "legitimate completion" from "a client that skipped the RPC."
+
+**Reproduced live while building P9.5** (2026-08-21), not inferred: a batch was raised
+in_progress, then updated directly via `supabase-js` — `status: 'completed',
+actual_quantity: '1.0000'` — and refused with `production_batches_completed_fields`
+(42514), since that CHECK also requires `completed_at IS NOT NULL` and only the RPCs stamp
+it. Supplying `completed_at` from the client as well made the same raw UPDATE **succeed**.
+`stock_movements` was then queried for that batch's `reference_id`: **zero rows**. The
+ingredient's `ingredient_stock_levels.quantity_on_hand` was confirmed unchanged. So the
+`completed_at` CHECK is a real but small speed bump — one extra column to fabricate — not a
+closed door. This is now a **permanent regression check in `scripts/smoke-signed-in.mjs`**
+("BLOCKER-017 reproduced…" / "…confirmed…"), so a future migration that closes this can flip
+those two checks' expectations rather than deleting them.
+
+**Consequence:** any caller with a valid session and an authorized role — this app's own
+future code with a bug, a differently-careful second client, or someone constructing
+PostgREST calls by hand — can move a batch to `completed` or `failed` while silently
+skipping the ingredient consumption and product output the RPC pair exists to guarantee.
+The batch row looks correctly finished; the inventory ledger simply never heard about it.
+
+**Why this is not patched from the client.** `packages/api/mutations/production.ts` never
+takes this path — `completeProductionBatch()`/`failProductionBatch()` always call the RPCs
+— so nothing here blocks P9.5 from being correct as shipped. But a client-side convention
+cannot be the *only* thing standing between this table and a silent inventory
+mismatch, and closing it is a backend decision: options include narrowing
+`production_batches_update`'s grant/RLS the way `deliveries` already is (moving the two
+plain-update hops behind small RPCs too, for symmetry) or a trigger that refuses
+`status -> completed`/`failed` unless a session-local flag the RPCs set is present. Either
+is a real design choice, not a guess this agent should make unilaterally.
+
+**Needed:** a decision on how to close the gap (narrower grant/RLS vs. a trigger-side guard
+flag), then a migration, verified live the same way this finding was — attempt the same raw
+UPDATE, confirm it is now refused.
+
+---
+
 ## Template
 
 ```

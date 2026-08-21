@@ -4,6 +4,28 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-017
+
+**Question:** How should the completion/failure gap be closed — narrow
+`production_batches`' grant/RLS the way `deliveries` already is (small RPCs for the two
+plain-update hops too), or a trigger-side guard that refuses `status -> completed`/`failed`
+unless it detects the write came from the RPC?
+
+**Affected:** inventory accuracy for every production batch. Reproduced live: a raw
+PostgREST `UPDATE` (status + actual_quantity + completed_at) reaches `completed` without
+ever calling `complete_production_batch()`, and writes zero `stock_movements` rows — the
+batch looks finished but the ingredient consumption and product output it should have
+recorded never happened. `packages/api/mutations/production.ts` never takes this path, so
+nothing shipped in P9.5 is affected, but the gap is open to any other caller.
+
+**Status:** BLOCKED — the P9.5 production-batch write path (start, cancel, complete, fail)
+shipped and is fully working; this is a backend hardening gap adjacent to it, found live
+while building it on 2026-08-21, not a defect in what shipped. A permanent regression check
+now lives in `scripts/smoke-signed-in.mjs` proving the gap and will need its expectations
+flipped once this is closed. Unrelated work may continue.
+
+---
+
 ## ACTION REQUIRED: BLOCKER-016
 
 **Question:** What should the return `stock_movements` write look like for a delivery that

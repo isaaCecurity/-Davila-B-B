@@ -1442,3 +1442,65 @@ npm run lint --workspace apps/mobile       -> exit 0
 npm run verify:cache                       -> all checks passed
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed
 ```
+
+---
+
+## 2026-08-21 · Production batch write path — transitions (P9.5 write half)
+
+**Scope:** the write half of P9.5 — moving a production batch through `scheduled ->
+in_progress -> completed/failed` and `scheduled -> cancelled`, the second pair required to
+be atomic with `stock_movements` writes per `STATE-MACHINES.md` §2.
+
+**Deliverables:**
+1. `bakeflow-frontend/packages/api/mutations/production.ts` (new) — `startProductionBatch()`
+   and `cancelProductionBatch()` as plain PostgREST updates (re-read through
+   `getProductionBatchById` afterward for precision, since `production_batches` carries
+   `NUMERIC` columns unlike `deliveries`); `completeProductionBatch()` and
+   `failProductionBatch()` calling `complete_production_batch()`/`fail_production_batch()`,
+   re-read through `getProductionBatchWithIngredients`.
+2. `bakeflow-frontend/packages/api/index.ts` — exported the four mutations and their input
+   types; updated the module-header comment that previously said no batch mutation existed.
+3. `bakeflow-frontend/packages/hooks/index.ts` — `useStartProductionBatch`,
+   `useCancelProductionBatch`, `useCompleteProductionBatch`, `useFailProductionBatch`. All
+   four invalidate the tenant-scoped batch-list prefix plus the single detail key on success.
+4. `bakeflow-frontend/apps/mobile/components/ProductionBatchActions.tsx` (new) — the
+   transition controls, mounted into `apps/mobile/app/production/[batchId].tsx` below the
+   batch fields.
+
+**Verification performed this session:**
+- Read `complete_production_batch`, `fail_production_batch`, and
+  `guard_production_batch_transition` live from `pg_proc`/`pg_trigger`, and the grants/RLS
+  on `production_batches` from `information_schema.role_table_grants`/`pg_policy` —
+  confirmed `authenticated` holds `UPDATE` here (unlike `deliveries`), which is why the
+  `scheduled` hops are plain updates and the `in_progress` hops are RPCs.
+- Found and reproduced live a gap the grants don't close: a raw `UPDATE` supplying
+  `status`, `actual_quantity`, and a client-fabricated `completed_at` reaches `completed`
+  without ever calling the RPC, and writes zero `stock_movements` rows. A first attempt
+  omitting `completed_at` was refused by the `production_batches_completed_fields` CHECK —
+  a real but small mitigation, not a closed door. Recorded as **BLOCKER-017**.
+- Extended `scripts/smoke-signed-in.mjs` with a full production-batch-transitions section:
+  illegal-hop/precondition refusals (no stock touched), then a real completion and a real
+  failure against a purpose-built disposable ingredient/product/variant/recipe graph (an
+  opening balance via `adjust_stock()`), each verified against the resulting
+  `stock_movements` rows and `ingredient_stock_levels`. Also reproduces BLOCKER-017 and
+  confirms it writes zero movements.
+- Discovered mid-session that this client-side soft-delete (`UPDATE ... SET deleted_at`)
+  against the disposable fixtures is refused by RLS with a bare `42501`, for a reason not
+  run down (the read policies looked permissive; not chased further, since this is a smoke
+  fixture hygiene question, not a product path). Fixed the resulting three previously-exact-
+  count assertions in the smoke file (`catalog A`'s product count, the batch list count, the
+  `in_progress` status filter) to tolerate the resulting permanent row growth, matching how
+  the file already tolerates the tickets/deliveries it creates every run. One orphaned
+  `in_progress` batch left over from an earlier iteration of this same debugging session
+  (before the `completed_at` requirement was discovered) was cleaned up directly against the
+  database.
+
+**Executed evidence (from `bakeflow-frontend`):**
+```
+node scripts/smoke-signed-in.mjs           -> 103 pass / 0 fail, repeatable over 3 runs (was 84/0)
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+npx eslint packages --max-warnings=0       -> exit 0
+npm run verify:cache                       -> all checks passed
+.venv/Scripts/python.exe -m pytest -q      -> 12 passed
+```

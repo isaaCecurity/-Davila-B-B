@@ -1,5 +1,60 @@
 # BakeFlow — Current Task
 
+## ✅ P9.5 DELIVERED — production batch write path (transitions) (2026-08-21)
+
+**Two shapes of write, both live-verified against the deployed database:**
+- `packages/api/mutations/production.ts`: `startProductionBatch()`/`cancelProductionBatch()`
+  are plain PostgREST updates (`scheduled -> in_progress`/`cancelled`) — `authenticated`
+  holds `UPDATE` on `production_batches`, unlike `deliveries`, so `guard_production_batch_
+  transition()` alone polices legality and role. `completeProductionBatch()`/
+  `failProductionBatch()` call the SECURITY DEFINER RPCs `complete_production_batch()`/
+  `fail_production_batch()` — the only path that atomically writes `stock_movements`
+  (ingredient consumption, plus a product output on completion) alongside the status
+  change, per `STATE-MACHINES.md` §2's "must not be assembled from separate client calls."
+- `packages/hooks/index.ts`: four no-retry mutation hooks, same reasoning as the delivery
+  hooks — a replayed transition against a batch that already moved returns
+  `invalid_transition` rather than silently double-applying.
+- `apps/mobile/components/ProductionBatchActions.tsx`: renders the legal next hops per
+  `guard_production_batch_transition()`'s graph, read live. `completed`/`failed` open a
+  form first (whole-batch actual quantity; failure reason) since both are CHECK-required.
+  Per-ingredient actuals/waste are not collected by this screen — omitting them is a
+  legitimate RPC default (each line falls back to its planned quantity), not a gap.
+- `apps/mobile/app/production/[batchId].tsx`: mounts the actions below the batch fields.
+
+**One gap found while verifying, not patched here:** unlike `deliveries`, `authenticated`
+holds a blanket `UPDATE` on `production_batches`, so nothing at the grant layer stops a raw
+update from reaching `completed`/`failed` without the RPC — silently skipping the stock
+movements. Reproduced live (a raw update with `completed_at` supplied succeeds; zero
+`stock_movements` rows result). Recorded as **BLOCKER-017** (`BLOCKERS.md`,
+`NOTIFICATIONS.md`) — this app's own mutations never take that path, so nothing shipped is
+affected, but closing the gap itself is a backend design decision.
+
+**Verified — smoke coverage added, not just gates run.** The new checks needed real
+`complete_production_batch()`/`fail_production_batch()` calls to prove anything, and those
+write real, permanent `stock_movements`/`*_stock_levels` rows — running them against the
+existing `RECIPE_A1` fixture would have permanently corrupted this file's own hardcoded
+inventory assertions (`120.0000`, `25.0000`, `42.0000`). So the new section creates its own
+disposable ingredient/product/variant/recipe graph, gives it an opening balance via
+`adjust_stock()`, and is the only place in the smoke suite that calls those two RPCs for
+real. `production_batches` and the disposable product can't be soft-deleted by this
+client (a `42501` RLS refusal on the UPDATE, cause not run down — noted in the script), so
+three previously-exact-count assertions (`catalog A`, batch count, status filter) were
+rewritten to tolerate the resulting permanent growth, the same way this file already
+tolerates the tickets/deliveries it creates every run.
+
+- `node scripts/smoke-signed-in.mjs` — **103 pass / 0 fail**, confirmed repeatable across 3
+  consecutive runs (was 84/0). New checks: illegal-hop and precondition refusals
+  (`complete` on a scheduled batch, `in_progress -> cancelled`), a real completion and a
+  real failure each verified against `stock_movements` and the resulting
+  `ingredient_stock_levels`, and BLOCKER-017 reproduced and confirmed live.
+- `npm run typecheck --workspace apps/mobile` -> exit 0
+- `npm run lint --workspace apps/mobile` -> exit 0
+- `npx eslint packages --max-warnings=0` -> exit 0
+- `npm run verify:cache` -> all checks passed (unaffected by this change; run for regression)
+- `.venv/Scripts/python.exe -m pytest -q` -> 12 passed
+
+---
+
 ## ✅ P9.6 DELIVERED — delivery write path (transitions + detail corrections) (2026-08-21)
 
 **Two `SECURITY DEFINER` RPCs, wired to the detail screen:**
