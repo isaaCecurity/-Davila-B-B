@@ -4,41 +4,45 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-017
+## RESOLVED: BLOCKER-017 — production batch completion/failure now requires the RPC
 
-**Question:** How should the completion/failure gap be closed — narrow
-`production_batches`' grant/RLS the way `deliveries` already is (small RPCs for the two
-plain-update hops too), or a trigger-side guard that refuses `status -> completed`/`failed`
-unless it detects the write came from the RPC?
+**Status:** Resolved on 2026-08-22 (decision: trigger-side guard flag, over narrowing the
+grant/RLS).
 
-**Affected:** inventory accuracy for every production batch. Reproduced live: a raw
-PostgREST `UPDATE` (status + actual_quantity + completed_at) reaches `completed` without
-ever calling `complete_production_batch()`, and writes zero `stock_movements` rows — the
-batch looks finished but the ingredient consumption and product output it should have
-recorded never happened. `packages/api/mutations/production.ts` never takes this path, so
-nothing shipped in P9.5 is affected, but the gap is open to any other caller.
-
-**Status:** BLOCKED — the P9.5 production-batch write path (start, cancel, complete, fail)
-shipped and is fully working; this is a backend hardening gap adjacent to it, found live
-while building it on 2026-08-21, not a defect in what shipped. A permanent regression check
-now lives in `scripts/smoke-signed-in.mjs` proving the gap and will need its expectations
-flipped once this is closed. Unrelated work may continue.
+`complete_production_batch()`/`fail_production_batch()` now set a transaction-local flag
+immediately before their own final `UPDATE`; `guard_production_batch_transition()` refuses
+`status -> completed`/`failed` unless it's present. The raw-update bypass that proved this
+blocker is refused live; the legitimate RPC path was re-run immediately after and still
+works. `scripts/smoke-signed-in.mjs` carries this as a permanent regression guard.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-016
+## RESOLVED: BLOCKER-016 — closed as not-a-bug; a real adjacent defect found and fixed
 
-**Question:** What should the return `stock_movements` write look like for a delivery that
-reaches `returned` — which warehouse, by variant or by the ticket's original lines, and are
-partial returns in scope for MVP 1?
+**Status:** Resolved on 2026-08-22.
 
-**Affected:** inventory accuracy for every delivery that fails or is returned; the goods are
-physically back at the branch but no ledger row says so, and `quantity_on_hand` stays as
-depleted as while the delivery was still out.
+Investigating the requested fix found that the scenario this blocker described — a
+delivery returning stock it once took — **cannot happen under the current design**: a
+delivery reaching `returned` was, by construction (walked from the live trigger graphs),
+never on a ticket whose stock had actually been deducted, since `delivered` and `returned`
+are mutually exclusive delivery outcomes and ticket completion (where a sale would be
+recorded) requires having passed through `delivered` first. So there was nothing to
+restore, and no restoration mechanism was built.
 
-**Status:** BLOCKED — the P9.6 delivery write path (transitions, address/phone corrections)
-shipped and is fully working; this is the one gap in it, discovered live while building that
-path on 2026-08-21, not a defect in what shipped. Unrelated work may continue.
+The same investigation found the real, previously-undiscovered defect:
+**`complete_ticket()` already implements sale-side stock deduction and has never once
+worked** — it wrote `stock_movements.reference_type = 'ticket'`, which the live CHECK
+constraint has never allowed (only `'order'`, the historical wart `CLAUDE.md` already
+documents elsewhere). Every real call has always failed `23514`. Fixed by changing the one
+literal; verified live end to end via a real signed-in owner completing a real ticket
+(disposable fixtures, JWT claims simulated the same way BLOCKER-015's verification worked)
+— one `sale` movement written, the resulting stock level correct.
+
+**No smoke-suite automation added for this flow**: `authenticated` has no `UPDATE` grant on
+`tickets` and most of the intermediate lifecycle hops have no RPC at all
+(`STATE-MACHINES.md` §1 already documents this as a known, separate gap), so a signed-in
+client cannot currently drive a ticket to `delivered` on its own. Not something this
+resolution should paper over with a check that can only run via simulated credentials.
 
 ---
 

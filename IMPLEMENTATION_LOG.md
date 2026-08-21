@@ -1539,3 +1539,86 @@ npx eslint packages --max-warnings=0       -> exit 0
 ```
 On-device / Expo Go run not performed — no anon key available on a device in this
 environment, consistent with every prior milestone in this log.
+
+---
+
+## 2026-08-22 · BLOCKER-016 & BLOCKER-017 resolved — one migration, one closed-as-not-a-bug, one real defect found and fixed
+
+**Scope:** resolve the two open findings from the P9.5/P9.6 sessions, per explicit
+instruction to proceed.
+
+**BLOCKER-017 — trigger-side guard flag, applied live.** Human decision (of the two options
+presented): keep `production_batches`' `UPDATE` grant and the plain-update path for
+`scheduled`'s two exits, close the gap specifically for `completed`/`failed`.
+`complete_production_batch()` and `fail_production_batch()` now call
+`perform set_config('bakeflow.production_batch_rpc', 'true', true)` immediately before
+their own final `UPDATE`. `guard_production_batch_transition()` refuses
+`new.status IN ('completed','failed')` unless
+`current_setting('bakeflow.production_batch_rpc', true) = 'true'`. Transaction-local
+(`is_local = true`), so it cannot leak between requests.
+
+**BLOCKER-016 — investigated, reclassified, and the real defect behind it fixed.** The
+original ask (approved, then walked back after further investigation in the same session)
+was to add a `sales_return` stock movement on `in_transit/failed -> returned`. Two live
+facts changed the plan:
+
+1. `stock_movements` had zero `reason = 'sale'` rows ever, and no trigger deducts stock on
+   a ticket sale — so "restoring" stock on a delivery return would have inflated it.
+2. The delivery/ticket state machines make the scenario unreachable: `guard_delivery_
+   transition()` has no exit from `delivered`, so a delivery can never be both `delivered`
+   and later `returned`; `guard_ticket_status_transition()`'s delivery gate requires the
+   linked delivery to already be `delivered` before the ticket itself can reach
+   `delivered` (and therefore `completed`, where a sale would be recorded). A `returned`
+   delivery was therefore never on a ticket whose stock had been deducted.
+
+Closed as not-a-bug. The real defect found in the same investigation: `complete_ticket()`
+already implements sale-side deduction (one negative movement per ticket line, atomic with
+`status -> completed`) and has **never once succeeded** — it inserted
+`stock_movements.reference_type = 'ticket'`, and the live `stock_movements_reference_type_
+check` has only ever allowed `'order'` (the historical wart `CLAUDE.md` and
+`packages/types/inventory.ts` already document for this exact column). Every real call has
+always raised `23514`. Fixed by changing the one literal to `'order'`; no other change to
+the function's logic.
+
+**Migration applied:** `fix_complete_ticket_reference_type_and_guard_batch_rpc_only` (via
+`mcp__supabase__apply_migration`), covering four functions: `complete_ticket()` (the fix),
+`guard_production_batch_transition()`, `complete_production_batch()`,
+`fail_production_batch()` (the BLOCKER-017 guard). All four re-read from `pg_proc`
+afterward: owner `postgres`, `SECURITY DEFINER`, `search_path=public` unchanged on every
+one.
+
+**Verification performed:**
+- **BLOCKER-017:** the exact bypass that originally proved the blocker (`status:
+  'completed', actual_quantity, completed_at` all client-supplied) is now refused with
+  `invalid_transition: completed must be set through complete_production_batch() or
+  fail_production_batch()`. The legitimate RPC path was re-run against the same batch
+  immediately after and still succeeds — confirming the guard doesn't also block what it
+  exists to protect. `scripts/smoke-signed-in.mjs`'s BLOCKER-017 section was rewritten from
+  a reproduction into a permanent regression guard (two independent refusals asserted: the
+  standing `completed_at` CHECK, then the new trigger guard; plus a real completion
+  afterward proving the RPC path is unaffected).
+- **BLOCKER-016 / `complete_ticket()`:** verified live end to end as a real signed-in
+  owner. `request.jwt.claims` was simulated via `set_config(..., true)` inside a single
+  PL/pgSQL `DO` block (the same technique BLOCKER-015's verification used) — `auth.uid()`,
+  `current_tenant_id()` and `has_role()` all resolve from that GUC, so this exercises
+  exactly the code path a real PostgREST request would. A disposable product/variant was
+  given a 5.0000 opening balance via `adjust_stock()`, a pickup ticket was created and
+  raised through `draft -> submitted -> confirmed -> scheduled -> in_production -> ready ->
+  delivered -> completed`, and `complete_ticket()` was called for real. Result: ticket
+  `TKT-000041` reached `completed`; exactly one `stock_movements` row was written
+  (`reason='sale', reference_type='order', quantity_delta=-2.0000`); `product_stock_levels
+  .quantity_on_hand` read back as `3.0000` (5 − 2).
+- No smoke-suite check was added for this flow: `authenticated` holds no `UPDATE` grant on
+  `tickets`, and most of the intermediate lifecycle hops have no RPC at all
+  (`STATE-MACHINES.md` §1 already documents this as a known, separate gap) — a signed-in
+  client genuinely cannot drive a ticket to `delivered` today, so an automated check here
+  could only run via simulated credentials rather than what a real client can do.
+
+**Executed evidence (from `bakeflow-frontend` unless noted):**
+```
+node scripts/smoke-signed-in.mjs           -> pass, repeatable over 3 consecutive runs
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+npx eslint packages --max-warnings=0       -> exit 0
+.venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
+```

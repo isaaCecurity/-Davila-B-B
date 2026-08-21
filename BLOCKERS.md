@@ -590,42 +590,65 @@ their SECOND organization (BLOCKER-015)"**, plus a printed diagnosis banner if t
 ---
 
 ## BLOCKER-016 · `returned` deliveries do not restore stock
-**Status:** OPEN · **Affects:** B4 (inventory), B5 (delivery) · **Type:** live defect
+**Status:** ✅ **RESOLVED 2026-08-22 — closed as not-a-bug; a real, adjacent live defect found and fixed instead** · **Affects:** B4 (inventory), B5 (delivery) · **Type:** live defect (reclassified)
 
 `STATE-MACHINES.md` §3 and this repository's own earlier comments in
-`packages/api/queries/delivery.ts` state that `in_transit -> returned` and
-`failed -> returned` each write a return `stock_movements` row, under universal rule 4
-(stock changes only through the immutable ledger). **The live database does not do this.**
+`packages/api/queries/delivery.ts` stated that `in_transit -> returned` and
+`failed -> returned` each write a return `stock_movements` row, under universal rule 4.
+**The live database does not do this**, confirmed 2026-08-21 by reading `pg_trigger` for
+`deliveries`: only `deliveries_guard_transition` and `deliveries_set_updated_at` exist,
+neither touching `stock_movements`.
 
-Read live from `pg_trigger` while building the P9.6 write path (2026-08-21): `deliveries`
-carries exactly two triggers, `deliveries_guard_transition` (the legal-hop graph) and
-`deliveries_set_updated_at`. Neither touches `stock_movements`, and
-`transition_delivery()` — the only path into `returned`, since `authenticated` has no
-`UPDATE` grant on `deliveries` — does nothing but write the new `status` and the
-already-supplied `driver_id`/`proof_url`/`recipient_name`/`failure_reason` columns.
+**Investigating the fix surfaced two facts that together close this differently than
+planned.** First, `stock_movements` had **zero `reason = 'sale'` rows, ever**, and no
+trigger on `tickets`/`ticket_items` writes one — selling something through a ticket did not
+deplete inventory at all, so "restoring" stock on a delivery return would have inflated it
+rather than corrected it. Second, walking the state machines shows the scenario BLOCKER-016
+describes **cannot occur under the current design**: a delivery only reaches `returned` via
+`in_transit -> returned` or `failed -> returned`; `guard_delivery_transition()` makes
+`delivered` terminal, so a delivery can never be both `delivered` and later `returned`. A
+ticket only reaches `completed` (where a sale would be recorded) after passing through
+`delivered`, which for `fulfilment_type = 'delivery'` tickets requires the linked delivery's
+own status to already be `delivered` (`guard_ticket_status_transition()`'s delivery gate).
+So a delivery that ends up `returned` was, by construction, never on a ticket whose stock
+had been deducted. There is nothing to restore, and the original "not a bug" behaviour was
+correct.
 
-So a `returned` delivery today just changes a status label. The goods physically came back
-to the branch, but no ledger row says so — inventory stays exactly as depleted as it was
-while the delivery was still out, and there is no record it ever came back.
+**The real defect, found in the same investigation: `complete_ticket()` already implements
+exactly the sale-side deduction this blocker assumed was missing, and has never once worked.**
+Read live: it inserts `stock_movements` with `reference_type = 'ticket'`, but
+`stock_movements_reference_type_check` only allows `'order'` — the same historical wart
+`CLAUDE.md` and `packages/types/inventory.ts` already document for this column. Every real
+call has therefore always raised `23514`, which is the actual reason zero `'sale'` rows
+existed. Fixed by migration `fix_complete_ticket_reference_type_and_guard_batch_rpc_only`
+(2026-08-22): the literal changed from `'ticket'` to `'order'`, with no other change to the
+function's logic (owner, `SECURITY DEFINER`, `search_path` all re-read from `pg_proc`
+unchanged afterward).
 
-**Why this is not patched from the client.** Appending a `stock_movements` row from
-`@bakeflow/api` after the RPC returns would be the exact split transaction universal rule 4
-exists to prevent: a client crash or dropped connection between the two calls leaves the
-delivery `returned` with the stock never restored, silently. The fix has to be inside
-`transition_delivery()` itself, in the same transaction as the status write, so either both
-happen or neither does. Deciding what that movement looks like — which warehouse receives
-it, whether by product variant or by the ticket's original line items, whether partial
-returns are in scope for MVP 1 — is a business-rule question, not one for an agent to guess.
+**Verified live end to end**, not assumed — a real signed-in owner call (JWT claims
+simulated via `request.jwt.claims`, the same technique BLOCKER-015's verification used),
+against a disposable product/variant given a 5.0000 opening balance:
+`draft -> submitted -> confirmed -> scheduled -> in_production -> ready -> delivered`
+(plain updates; no dedicated RPC exists for most of these hops, a separate known gap — see
+`STATE-MACHINES.md` §1), then `complete_ticket()`. Result: ticket `TKT-000041` reached
+`completed`; exactly one `stock_movements` row was written —
+`reason='sale', reference_type='order', quantity_delta=-2.0000`; the variant's
+`product_stock_levels.quantity_on_hand` read back as `3.0000` (5 − 2), confirming the
+trigger-maintained level tracks the new movement correctly.
 
-**Needed:** approval for the return-movement shape, then a migration adding that write to
-`transition_delivery()`'s `returned` branch, verified live the same way BLOCKER-015 was
-(execute the transition, re-read `stock_movements`, confirm the row and the resulting
-`quantity_on_hand`).
+**Not added:** a smoke-suite regression check for this exact flow. `authenticated` holds
+`INSERT, SELECT` only on `tickets` (no `UPDATE`), and there is no RPC for `draft ->
+submitted` or most of the hops after it (`STATE-MACHINES.md` §1 already documents this gap
+independently) — so the signed-in smoke client genuinely cannot drive a ticket to
+`delivered` today, and a check that could only ever run via simulated JWT claims would not
+be testing what a real client can do. This is the same reachability gap noted in
+`NOTIFICATIONS.md`'s prior entry for this blocker, now understood precisely rather than
+assumed.
 
 ---
 
 ## BLOCKER-017 · A raw UPDATE reaches `production_batches.completed` without the RPC, silently skipping stock movements
-**Status:** OPEN · **Affects:** B4 (inventory), B7/P9.5 (production) · **Type:** live defect, grant-layer
+**Status:** ✅ **RESOLVED 2026-08-22** — migration `fix_complete_ticket_reference_type_and_guard_batch_rpc_only` applied live · **Affects:** B4 (inventory), B7/P9.5 (production) · **Type:** live defect, grant-layer
 
 Unlike `deliveries` (no `UPDATE` grant on `authenticated` at all, which is what forces every
 delivery transition through an RPC), `production_batches` grants `authenticated` a blanket
@@ -653,19 +676,30 @@ PostgREST calls by hand — can move a batch to `completed` or `failed` while si
 skipping the ingredient consumption and product output the RPC pair exists to guarantee.
 The batch row looks correctly finished; the inventory ledger simply never heard about it.
 
-**Why this is not patched from the client.** `packages/api/mutations/production.ts` never
-takes this path — `completeProductionBatch()`/`failProductionBatch()` always call the RPCs
-— so nothing here blocks P9.5 from being correct as shipped. But a client-side convention
-cannot be the *only* thing standing between this table and a silent inventory
-mismatch, and closing it is a backend decision: options include narrowing
-`production_batches_update`'s grant/RLS the way `deliveries` already is (moving the two
-plain-update hops behind small RPCs too, for symmetry) or a trigger that refuses
-`status -> completed`/`failed` unless a session-local flag the RPCs set is present. Either
-is a real design choice, not a guess this agent should make unilaterally.
+**Resolution — trigger-side guard flag, applied live 2026-08-22.** Decision made: keep the
+`UPDATE` grant and the plain-update path for `scheduled`'s two exits (no client changes
+needed there), and close the gap specifically for `completed`/`failed`. Mechanism:
+`complete_production_batch()` and `fail_production_batch()` each call
+`perform set_config('bakeflow.production_batch_rpc', 'true', true)` immediately before
+their own final `UPDATE` — `true` (is_local) makes it transaction-scoped, so it cannot leak
+between requests (PostgREST gives each RPC call its own transaction). `guard_production_
+batch_transition()` now refuses `new.status IN ('completed', 'failed')` unless
+`current_setting('bakeflow.production_batch_rpc', true) = 'true'`. Migration
+`fix_complete_ticket_reference_type_and_guard_batch_rpc_only`; owner (`postgres`),
+`SECURITY DEFINER` and `search_path` re-read from `pg_proc` unchanged on all three
+functions afterward.
 
-**Needed:** a decision on how to close the gap (narrower grant/RLS vs. a trigger-side guard
-flag), then a migration, verified live the same way this finding was — attempt the same raw
-UPDATE, confirm it is now refused.
+**Verified live**, not assumed correct from the diff:
+- The exact bypass that proved this blocker (`status: 'completed', actual_quantity:
+  '1.0000', completed_at: <client-supplied>`) is now refused with `invalid_transition:
+  completed must be set through complete_production_batch() or fail_production_batch()`.
+- The legitimate RPC path was re-run against the same batch immediately after and
+  **succeeds** — confirming the guard does not also block the mechanism it exists to
+  protect, which would have been a worse regression than the one being fixed.
+- `scripts/smoke-signed-in.mjs`'s BLOCKER-017 section (previously a reproduction) is now a
+  **permanent regression guard**: it asserts the bypass is refused, that zero stock
+  movements exist for the refused attempt, and that the real RPC still works afterward.
+  103+ smoke checks pass, confirmed repeatable across 3 consecutive runs.
 
 ---
 

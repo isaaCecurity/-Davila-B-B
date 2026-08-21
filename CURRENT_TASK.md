@@ -1,5 +1,53 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-016 & BLOCKER-017 RESOLVED (2026-08-22)
+
+**BLOCKER-017** (a raw update could bypass `complete_production_batch()`/
+`fail_production_batch()` and silently skip stock movements): closed with a trigger-side
+guard, per the human decision to keep it minimal rather than restructure the grants. The
+two RPCs now set a transaction-local flag immediately before their own final `UPDATE`;
+`guard_production_batch_transition()` refuses `status -> completed`/`failed` without it.
+Verified live: the exact bypass that proved the blocker is now refused, and the legitimate
+RPC path was re-run right after to confirm the guard doesn't also block what it's meant to
+protect.
+
+**BLOCKER-016** (`returned` deliveries write no stock movement) **turned out not to be a
+bug**, and investigating it surfaced a real one instead:
+
+- Walking the live trigger graphs shows a delivery reaching `returned` can never have been
+  on a ticket whose stock was actually deducted — `delivered` is terminal (a delivery can
+  never become `returned` afterward), and ticket completion (where a sale would be
+  recorded) requires having passed through `delivered` first. There is nothing to restore
+  under the current design, so no restoration mechanism was built.
+- The actual defect: **`complete_ticket()` already implements sale-side deduction and has
+  never worked.** It wrote `stock_movements.reference_type = 'ticket'`; the live CHECK
+  constraint has only ever allowed `'order'` (the same historical wart documented
+  elsewhere in `CLAUDE.md`). Every real call has always failed `23514` — the reason
+  `stock_movements` had zero `reason = 'sale'` rows in the whole project's history. Fixed
+  by changing the one literal.
+- **Verified live end to end**: a real signed-in owner call (JWT claims simulated the same
+  way BLOCKER-015's verification worked) drove a disposable ticket through its full
+  lifecycle to `completed`. Result: one `sale` movement written correctly, the resulting
+  `product_stock_levels.quantity_on_hand` exactly right (5 → 3 for a 2-unit sale).
+- **Not smoke-automated**: `authenticated` has no `UPDATE` grant on `tickets`, and most of
+  the ticket lifecycle's intermediate hops have no RPC at all — a signed-in client cannot
+  currently drive a ticket to `delivered` on its own (`STATE-MACHINES.md` §1 already
+  documents this as a known, separate gap). A smoke check here could only run via
+  simulated credentials, which wouldn't be testing what a real client can do.
+
+Migration: `fix_complete_ticket_reference_type_and_guard_batch_rpc_only`. Full detail in
+`BLOCKERS.md` (both entries) and `NOTIFICATIONS.md`.
+
+**Verified:**
+- `node scripts/smoke-signed-in.mjs` — passes, confirmed repeatable across 3 consecutive
+  runs. BLOCKER-017's section rewritten from reproduction to permanent regression guard.
+- `npm run typecheck --workspace apps/mobile` -> exit 0
+- `npm run lint --workspace apps/mobile` -> exit 0
+- `npx eslint packages --max-warnings=0` -> exit 0
+- `.venv/Scripts/python.exe -m pytest -q` -> 12 passed
+
+---
+
 ## ✅ P9.4 DELIVERED — inventory adjust (write path) (2026-08-21)
 
 **The RPC (`adjust_stock`, P4.2b) and its client wrapper (`packages/api/mutations/

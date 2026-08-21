@@ -546,23 +546,20 @@ check('the disposable ingredient level dropped from 9 to 8 (9 - 1) — a failed 
   ingredientLevelAfterFailure.data?.quantity_on_hand === '8.0000',
   JSON.stringify(ingredientLevelAfterFailure.data));
 
-// BLOCKER-017, proven live rather than left as a read-code claim: authenticated holds a
-// blanket UPDATE on production_batches, so nothing at the grant layer stops a raw
-// PostgREST update from reaching 'completed' without ever calling the RPC — silently
-// skipping the stock_movements it exists to guarantee.
-//
-// The first attempt here supplied only status + actual_quantity and was refused —
-// production_batches_completed_fields also requires completed_at IS NOT NULL, and only
-// the RPCs stamp it; the trigger does not. That is a real (small) mitigation, not a
-// disproof: it costs a bypass exactly one more column to fabricate, and the second
-// attempt below — status + actual_quantity + a client-supplied completed_at — is what
-// actually proves the finding.
+// BLOCKER-017 — RESOLVED 2026-08-22, regression-guarded here rather than left to a code
+// read. authenticated holds a blanket UPDATE on production_batches (unlike deliveries), so
+// nothing at the grant layer alone stops a raw update from reaching 'completed' without
+// the RPC — but guard_production_batch_transition() now refuses new.status IN
+// ('completed','failed') unless a transaction-local flag the RPCs set immediately before
+// their own final UPDATE is present. Two independent refusals, for two different reasons:
 const batchForBypass = await supabase
   .from('production_batches')
   .insert({ tenant_id: ORG_A, branch_id: BRANCH_A, recipe_id: throwawayRecipe.data?.id, planned_quantity: '1.0000' })
   .select('id').single();
 await supabase.from('production_batches').update({ status: 'in_progress' }).eq('id', batchForBypass.data?.id);
 
+// Missing completed_at trips the standing CHECK production_batches_completed_fields —
+// unrelated to and unaffected by the BLOCKER-017 fix, but still a real first line of defence.
 const incompleteBypass = await supabase
   .from('production_batches')
   .update({ status: 'completed', actual_quantity: '1.0000' })
@@ -572,28 +569,42 @@ check('a raw UPDATE with no completed_at is refused by production_batches_comple
   incompleteBypass.error !== null,
   incompleteBypass.error ? incompleteBypass.error.message : 'NO ERROR (unexpected)');
 
+// Supplying completed_at too (what a determined bypass would actually do) used to succeed
+// — this is the exact call that proved BLOCKER-017 live. It is now refused by the trigger
+// guard itself, independent of the CHECK constraint above.
 const rawBypass = await supabase
   .from('production_batches')
   .update({ status: 'completed', actual_quantity: '1.0000', completed_at: new Date().toISOString() })
   .eq('id', batchForBypass.data?.id)
   .select('status,actual_quantity::text');
-check('BLOCKER-017 reproduced: a raw UPDATE supplying completed_at itself SUCCEEDS, bypassing the RPC',
-  rawBypass.error === null && rawBypass.data?.[0]?.status === 'completed',
+check('BLOCKER-017 regression guard: a raw UPDATE with completed_at is now REFUSED by the trigger',
+  rawBypass.error !== null,
   rawBypass.error ? rawBypass.error.message : JSON.stringify(rawBypass.data));
 
 const movementsForBypass = await supabase
   .from('stock_movements').select('id')
   .eq('reference_type', 'production_batch').eq('reference_id', batchForBypass.data?.id);
-check('BLOCKER-017 confirmed: the bypassed completion wrote ZERO stock movements',
+check('no stock movements exist for the refused bypass batch',
   (movementsForBypass.data ?? []).length === 0,
   `movements=${movementsForBypass.data?.length}`);
 
 const ingredientLevelAfterBypass = await supabase
   .from('ingredient_stock_levels').select('quantity_on_hand::text')
   .eq('warehouse_id', WAREHOUSE_A).eq('ingredient_id', throwawayIngredient.data?.id).maybeSingle();
-check('the disposable ingredient level is UNCHANGED by the bypass (still 8, not 7)',
+check('the disposable ingredient level is UNCHANGED by the refused bypass (still 8, not 7)',
   ingredientLevelAfterBypass.data?.quantity_on_hand === '8.0000',
   JSON.stringify(ingredientLevelAfterBypass.data));
+
+// The batch left behind by the refused bypass is still legitimately in_progress — complete
+// it for real, to prove the trigger guard does NOT also block the RPC path it exists to
+// protect (a flag bug here would silently break every future completion).
+const legitimateCompletion = await supabase.rpc('complete_production_batch', {
+  p_batch_id: batchForBypass.data?.id, p_actual_quantity: '1.0000',
+  p_ingredient_actuals: [], p_warehouse_id: null,
+});
+check('the RPC path still works after the BLOCKER-017 fix (the guard does not also block it)',
+  legitimateCompletion.error === null,
+  legitimateCompletion.error ? legitimateCompletion.error.message : '');
 
 // No teardown here: a client-side soft-delete UPDATE against these disposable rows
 // (setting only deleted_at) was tried and refused with 42501 "new row violates row-level
