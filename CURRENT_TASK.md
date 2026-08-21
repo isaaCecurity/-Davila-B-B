@@ -1,5 +1,40 @@
 # BakeFlow — Current Task
 
+## ✅ P9.4 DELIVERED — inventory adjust (write path) (2026-08-21)
+
+**The RPC (`adjust_stock`, P4.2b) and its client wrapper (`packages/api/mutations/
+inventory.ts`) already existed** from an earlier milestone; what was missing was the hook
+and the screen control. This slice is that wiring, not new backend surface:
+
+- `packages/hooks/index.ts`: `useAdjustStock()` — no-retry, invalidates the correct one of
+  `ingredient-stock-levels`/`product-stock-levels` by tenant+warehouse-scoped prefix
+  (chosen by `itemType`, since only one of the two lists could have changed).
+- `apps/mobile/components/AdjustStockAction.tsx` (new): the per-row control on
+  `apps/mobile/app/inventory/[warehouseId].tsx`. The field is pre-filled with the item's
+  *current* quantity and edited in place — `adjust_stock()`'s contract is an absolute
+  target, not a delta, and prefilling is what makes the form read that way rather than as
+  "add this many." Reason is a required choice among the three `adjust_stock` accepts
+  (`adjustment`/`waste`/`opening_balance`); role adequacy per reason is not re-checked
+  client-side and surfaces as `insufficient_role` if wrong.
+- Updated the warehouse screen's header/docstring, which previously stated (correctly, at
+  the time) that the screen was read-only by design.
+
+**No new live-verification needed for the RPC itself** — `adjust_stock()`'s contract
+(absolute-target semantics, the three accepted reasons) was already proven live this
+session as part of the P9.5 work, which called it for a real opening balance against a
+disposable fixture. This slice only adds a thin, correctly-keyed hook and form around an
+already-proven call, following the exact pattern `useTransitionDelivery`/
+`useCompleteProductionBatch` already established.
+
+**Verified:**
+- `npm run typecheck --workspace apps/mobile` -> exit 0
+- `npm run lint --workspace apps/mobile` -> exit 0
+- `npx eslint packages --max-warnings=0` -> exit 0
+- On-device / Expo Go run — **not performed**, consistent with prior milestones in this
+  file (no anon key available on a device in this environment).
+
+---
+
 ## ✅ P9.5 DELIVERED — production batch write path (transitions) (2026-08-21)
 
 **Two shapes of write, both live-verified against the deployed database:**

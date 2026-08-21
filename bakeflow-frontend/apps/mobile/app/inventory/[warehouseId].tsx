@@ -17,6 +17,7 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AdjustStockAction } from '../../components/AdjustStockAction';
 import {
   EmptyState,
   ErrorState,
@@ -26,15 +27,16 @@ import {
 import { useSessionStore } from '../../stores/session';
 
 /**
- * Stock on hand in one warehouse — the P9.4 read path.
+ * Stock on hand in one warehouse — P9.4, read and write.
  *
- * ## Read-only, and structurally so
+ * ## The row never edits its own number
  *
- * There is no adjust control here. Stock levels are trigger-maintained from the immutable
- * `stock_movements` ledger and are never written directly (`CLAUDE.md` rule 7), so an
- * "edit quantity" affordance would be a lie about how the system works. Adjusting stock
- * means inserting a movement with a reason, which is P9.4's write half and is not in this
- * milestone.
+ * Stock levels are trigger-maintained from the immutable `stock_movements` ledger and are
+ * never written directly (`CLAUDE.md` rule 7), so there is no inline "edit quantity" field
+ * here — that would be a lie about how the system works. `AdjustStockAction` is what a row
+ * actually offers: a form that calls `adjust_stock()`, which appends a movement with a
+ * reason and lets the trigger recompute the level. See its own header for why the field it
+ * shows is an absolute target, not a delta.
  *
  * ## Quantities are strings all the way to the screen
  *
@@ -118,7 +120,7 @@ export default function WarehouseStockScreen(): React.JSX.Element {
             <Text className="text-2xl font-bold text-neutral-900">
               {warehouseName ?? 'Stock on hand'}
             </Text>
-            <Text className="text-sm text-neutral-500">Read-only · from the movement ledger</Text>
+            <Text className="text-sm text-neutral-500">From the movement ledger</Text>
           </View>
           <Pressable
             accessibilityRole="button"
@@ -159,6 +161,10 @@ export default function WarehouseStockScreen(): React.JSX.Element {
                 detail={info === undefined ? null : info.unit}
                 quantity={item.quantity_on_hand}
                 reorderLevel={info?.reorder ?? null}
+                warehouseId={id ?? ''}
+                itemType="ingredient"
+                itemId={item.ingredient_id}
+                tenantId={activeTenantId}
               />
             );
           }}
@@ -176,6 +182,10 @@ export default function WarehouseStockScreen(): React.JSX.Element {
               detail={null}
               quantity={item.quantity_on_hand}
               reorderLevel={null}
+              warehouseId={id ?? ''}
+              itemType="product"
+              itemId={item.product_variant_id}
+              tenantId={activeTenantId}
             />
           )}
         />
@@ -224,11 +234,19 @@ function StockRow({
   detail,
   quantity,
   reorderLevel,
+  warehouseId,
+  itemType,
+  itemId,
+  tenantId,
 }: {
   name: string;
   detail: string | null;
   quantity: Quantity;
   reorderLevel: Quantity | null;
+  warehouseId: string;
+  itemType: 'ingredient' | 'product';
+  itemId: string;
+  tenantId: string | null;
 }): React.JSX.Element {
   const negative = isNegativeDecimalString(quantity);
   const low =
@@ -237,28 +255,40 @@ function StockRow({
     compareDecimalStrings(quantity, reorderLevel) <= 0;
 
   return (
-    <View className="flex-row items-center justify-between gap-3 rounded-xl border border-neutral-200 p-4">
-      <View className="flex-1 gap-1">
-        <Text className="text-base font-semibold text-neutral-900">{name}</Text>
-        {reorderLevel !== null && compareDecimalStrings(reorderLevel, '0') > 0 && (
-          <Text className="text-xs text-neutral-500">
-            Reorder at {formatQuantity(reorderLevel)}
+    <View className="gap-1 rounded-xl border border-neutral-200 p-4">
+      <View className="flex-row items-center justify-between gap-3">
+        <View className="flex-1 gap-1">
+          <Text className="text-base font-semibold text-neutral-900">{name}</Text>
+          {reorderLevel !== null && compareDecimalStrings(reorderLevel, '0') > 0 && (
+            <Text className="text-xs text-neutral-500">
+              Reorder at {formatQuantity(reorderLevel)}
+              {detail === null ? '' : ` ${detail}`}
+            </Text>
+          )}
+        </View>
+        <View className="items-end gap-1">
+          <Text
+            className={`text-lg font-semibold ${negative ? 'text-red-600' : 'text-neutral-900'}`}
+          >
+            {formatQuantity(quantity)}
             {detail === null ? '' : ` ${detail}`}
           </Text>
-        )}
+          {negative ? (
+            <Text className="text-xs font-medium uppercase text-red-600">Negative</Text>
+          ) : low ? (
+            <Text className="text-xs font-medium uppercase text-amber-600">Low</Text>
+          ) : null}
+        </View>
       </View>
-      <View className="items-end gap-1">
-        <Text
-          className={`text-lg font-semibold ${negative ? 'text-red-600' : 'text-neutral-900'}`}
-        >
-          {formatQuantity(quantity)}
-          {detail === null ? '' : ` ${detail}`}
-        </Text>
-        {negative ? (
-          <Text className="text-xs font-medium uppercase text-red-600">Negative</Text>
-        ) : low ? (
-          <Text className="text-xs font-medium uppercase text-amber-600">Low</Text>
-        ) : null}
+      <View className="flex-row justify-end">
+        <AdjustStockAction
+          warehouseId={warehouseId}
+          itemType={itemType}
+          itemId={itemId}
+          currentQuantity={quantity}
+          unit={detail}
+          tenantId={tenantId}
+        />
       </View>
     </View>
   );

@@ -1504,3 +1504,38 @@ npx eslint packages --max-warnings=0       -> exit 0
 npm run verify:cache                       -> all checks passed
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed
 ```
+
+---
+
+## 2026-08-21 · Inventory adjust — hook and screen control (P9.4 write half)
+
+**Scope:** the write half of P9.4. The RPC (`adjust_stock`) and its API-layer wrapper
+(`packages/api/mutations/inventory.ts`) already existed from P4.2b; this was the missing
+hook and UI control on the warehouse stock screen.
+
+**Deliverables:**
+1. `bakeflow-frontend/packages/hooks/index.ts` — `useAdjustStock()`, invalidating whichever
+   of the two stock-level lists (`ingredient-stock-levels` / `product-stock-levels`) the
+   adjusted item belongs to, by tenant+warehouse-scoped key prefix.
+2. `bakeflow-frontend/apps/mobile/components/AdjustStockAction.tsx` (new) — the per-row
+   form: quantity field pre-filled with the current level (absolute target, not a delta),
+   a required reason among the three `adjust_stock` accepts, an optional note.
+3. `bakeflow-frontend/apps/mobile/app/inventory/[warehouseId].tsx` — `StockRow` now takes
+   `warehouseId`/`itemType`/`itemId`/`tenantId` and renders the action; the module
+   docstring and header subtitle, which previously described the screen as read-only by
+   design, were corrected.
+
+**Verification:** no new live-verification of the RPC was needed — `adjust_stock()`'s
+contract (absolute target, three reasons, role-per-reason) was already proven live earlier
+this session as part of the P9.5 work (a real `opening_balance` call against a disposable
+fixture, in `scripts/smoke-signed-in.mjs`). This slice is a thin, correctly-keyed hook and
+form around that already-proven call.
+
+**Executed evidence (from `bakeflow-frontend`):**
+```
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+npx eslint packages --max-warnings=0       -> exit 0
+```
+On-device / Expo Go run not performed — no anon key available on a device in this
+environment, consistent with every prior milestone in this log.

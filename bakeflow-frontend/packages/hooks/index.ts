@@ -35,6 +35,7 @@
  */
 
 import {
+  adjustStock,
   cancelProductionBatch,
   completeProductionBatch,
   failProductionBatch,
@@ -58,6 +59,8 @@ import {
   startProductionBatch,
   transitionDelivery,
   updateDeliveryDetails,
+  type AdjustStockInput,
+  type AdjustStockResult,
   type BakeflowClient,
   type CompleteProductionBatchInput,
   type DeliveryFilters,
@@ -701,6 +704,54 @@ export function useFailProductionBatch(
     },
     onSuccess: ({ batch }) => {
       invalidateProductionBatch(queryClient, requireTenant(tenantId), batch.id);
+    },
+  });
+}
+
+/**
+ * Refresh the stock-level cache a completed adjustment invalidates.
+ *
+ * Keyed on `itemType`, not on the caller's guess of which list is mounted: `adjustStock`
+ * takes either an ingredient or a product variant, and only the matching level list
+ * (`ingredient-stock-levels` or `product-stock-levels`) for that warehouse could possibly
+ * have changed. Invalidated by prefix — same reasoning as `invalidateDelivery` — so every
+ * paged/filtered variant of that list currently cached is covered.
+ */
+function invalidateStockLevels(
+  queryClient: QueryClient,
+  tenantId: string,
+  warehouseId: string,
+  itemType: 'ingredient' | 'product',
+): void {
+  const listName = itemType === 'ingredient' ? 'ingredient-stock-levels' : 'product-stock-levels';
+  void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, listName, warehouseId) });
+}
+
+/**
+ * Set an item's stock in one warehouse to an absolute target — the P9.4 write path.
+ *
+ * No retry: `adjust_stock`'s absolute-target semantics make a *replay* safe (it would
+ * either repeat a no-op or set the same target twice), but this still follows the same
+ * no-retry convention as every other mutation here, so a transient failure surfaces to the
+ * user rather than silently reapplying behind their back.
+ */
+export function useAdjustStock(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<AdjustStockResult, Error, AdjustStockInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: AdjustStockInput) => {
+      requireTenant(tenantId);
+      return adjustStock(client, input);
+    },
+    onSuccess: (_result, variables) => {
+      invalidateStockLevels(
+        queryClient,
+        requireTenant(tenantId),
+        variables.warehouseId,
+        variables.itemType,
+      );
     },
   });
 }
