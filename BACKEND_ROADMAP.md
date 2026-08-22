@@ -326,7 +326,7 @@ Each milestone below carries the same shape: **schema → business rules → ser
 → authorization → validation → tests → sync support → audit → completion gate.**
 "Sync support" means registering the entity with P3.7 and therefore inherits its block.
 
-## P4.1 · Catalog — READ PATH IN_PROGRESS / WRITE PATH BLOCKED ◄ current
+## P4.1 · Catalog — READ PATH COMPLETE / WRITE PATH BLOCKED
 **Objective:** Products, variants, categories, ingredients, recipes.
 **Dependencies:** P2 (complete). **Does not depend on P3.7** — the reverse is true.
 **Schema:** `product_categories`, `products`, `product_variants`, `ingredients`, `recipes`, `recipe_ingredients` — all exist. All six are **tenant-scoped only**.
@@ -348,9 +348,12 @@ Screen → Feature Hook → Feature Service → `packages/api`. No catalog RPCs.
 **Sync support:** needs P3.7, which is blocked. Catalog is read-mostly offline, so the read path does not wait on it.
 **Audit:** `audit_log` entries on write — deferred with the write path.
 
-### P4.1a · Catalog read path — IN_PROGRESS
+### P4.1a · Catalog read path — COMPLETE
 **Scope:** types, Zod schemas, typed read service (list/get + relation reads), executed RLS suite.
-**Completion gate:** RLS suite proves no cross-organization read and no soft-deleted row is visible; typecheck and lint clean.
+**Completion gate:** met — `tests/sql/catalog_read_rls.sql` **22/22 assertions passed** live
+(`BEGIN…ROLLBACK`, zero rows left behind), typecheck exit 0. This roadmap entry had gone
+stale after the suite actually ran (see `CURRENT_TASK.md`'s P4.1a section) — corrected
+here rather than re-verified, since the evidence already exists.
 **Blockers:** none.
 
 ### P4.1b · Catalog write path — BLOCKED
@@ -364,7 +367,7 @@ permanently consumed — fixing it is a migration and needs approval;
 (c) confirmation that PostgREST + RLS, not an RPC, is the write mechanism.
 **Parallelizable:** P4.1a with P6.1, P6.3.
 
-## P4.2 · Inventory — READ PATH IMPLEMENTED (P4.2a) / write path NOT_STARTED (P4.2b)
+## P4.2 · Inventory — COMPLETE (P4.2a read, P4.2b write)
 **Objective:** Warehouses and the immutable stock ledger.
 **Dependencies:** P4.1.
 **Schema:** `warehouses`, `stock_movements`, `ingredient_stock_levels`, `product_stock_levels`.
@@ -379,9 +382,12 @@ permanently consumed — fixing it is a migration and needs approval;
 consumer. Executed: `tests/sql/inventory_read_rls.sql` **15/15**, typecheck exit 0,
 packages lint exit 0.
 
-**P4.2b WRITE PATH — PARTIAL (2026-08-11).** `packages/api/mutations/inventory.ts`
-implements `adjustStock()`. Typecheck and lint pass; **`tests/sql/inventory_write_rls.sql`
-is written but NOT executed** (connection lost), so the milestone is not COMPLETE.
+**P4.2b WRITE PATH — COMPLETE.** `packages/api/mutations/inventory.ts` implements
+`adjustStock()`. `tests/sql/inventory_write_rls.sql` A0–A12 executed live once the
+connection was restored (BLOCKER-011): **17/17** (14/17 on the first pass; A11 was a test
+defect — it read `audit_log` as `branch_manager`, a role `audit_log_select` doesn't grant
+read to, not a missing audit row — fixed in the suite, not the product). This roadmap
+entry had gone stale after that run — corrected here rather than re-verified.
 
 The mechanism is **not** a direct insert, contrary to this milestone's original wording.
 Verified live: `authenticated` holds **SELECT only** on `stock_movements`, and GRANTs are
