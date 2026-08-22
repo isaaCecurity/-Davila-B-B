@@ -1736,3 +1736,73 @@ npm run typecheck --workspace apps/mobile  -> exit 0
 npm run lint --workspace apps/mobile       -> exit 0
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
 ```
+
+---
+
+## 2026-08-22 — BLOCKER-001 reopened: full investigation of the send-invite-email deployment gap
+
+Investigation only, per explicit instruction — no deploy, no production config change, no
+unrelated code touched. Goal was to determine why `send-invite-email` (P6.2) was marked
+COMPLETE on 2026-08-20 yet was found undeployed while verifying P6.5 later, and whether
+invitation delivery has ever worked at all.
+
+**Repository review:**
+- `supabase/functions/send-invite-email/index.ts`, `_shared/auth.ts`,
+  `_shared/email/{factory,resend,mock}.ts` read in full — the implementation is complete
+  and matches its own spec: caller auth, tenant/role check via `user_roles`, SHA-256 token
+  verification, expiry check, deep-link construction, HTML/text templates, Resend dispatch
+  with a mock-provider fallback when `RESEND_API_KEY` is absent.
+- `bakeflow-frontend/packages/api/mutations/invitations.ts` confirmed as the only caller —
+  `createOrganizationInvite` (RPC) and `sendInviteEmail` (Edge Function invoke), composed
+  by `createAndSendInvite`. No other code path reaches the function.
+- `.github/workflows/ci.yml` read in full: deliberately lint/typecheck/pytest only (its own
+  header comment explains why — no live database in CI, per BLOCKER-002). No Edge Function
+  deploy step exists or was ever intended to exist here. Deployment has only ever been a
+  manual, human-run `supabase functions deploy`.
+- `.env.example` still lists the Resend variables under "RESERVED — no consumer yet",
+  which is itself slightly stale (the consumer, `factory.ts`, exists since `b6d125e1`) but
+  not corrected — the file's own convention is a placeholder contract, not a status record,
+  and correcting comment staleness there was judged out of scope for this investigation.
+- `git log --follow` on the function file: exactly one commit, `b6d125e1` ("feat: implement
+  invitation management and email delivery system", 2026-08-20) plus this session's later
+  structured-logging change. No separate deploy commit or script exists anywhere in history.
+
+**Live verification (read-only; `execute_sql`, `list_edge_functions`, `query_logs`):**
+- `list_edge_functions` → `[]`. Conclusive: zero Edge Functions deployed, and
+  `send-invite-email` is the only one the repo defines.
+- `select count(*) from organization_invites` → **0**, unconditionally. Not filtered by
+  status — no invite row has ever existed. Combined with the RPC's existence, this means
+  the DB half of the pipeline is present but has literally never been called either —
+  invitation delivery has never been operational in any form, deployed or not.
+- `select proname, pronargs from pg_proc where proname = 'create_organization_invite'` →
+  exists, 4 args. Its correctness was not tested here (out of scope: the question was the
+  deployment gap, not re-verifying the RPC).
+- `query_logs` against `function_edge_logs` for the default 24h window → 0 rows, consistent
+  with (not independent proof of) never having been invoked.
+
+**Root cause, found in `NOTIFICATIONS.md`:** two BLOCKER-001 entries coexisted the entire
+time without being reconciled — one marked RESOLVED on 2026-08-20 covering code delivery,
+and a separate, older "ACTION REQUIRED: BLOCKER-001" further down the same file asking
+verbatim *"may the first Edge Function be deployed?"*, never answered and never removed.
+The RESOLVED status was accurate for the code and silently wrong for deployment.
+
+**Documentation corrected in the same pass (per `CLAUDE.md`'s contradiction rule):**
+- `docs/API-CONTRACT.md` §7 said `supabase/functions/` "is not present in the repo" —
+  true when written, false since `b6d125e1`. Corrected to state the current fact: built,
+  committed, not deployed.
+- `BACKEND_ROADMAP.md` P6.2 downgraded COMPLETE → PARTIAL with the full evidence trail.
+- `BLOCKERS.md` §BLOCKER-001 reopened in place (history kept, not deleted), with the live
+  evidence table and the recommended next action.
+- `NOTIFICATIONS.md` gained a new top entry summarizing the reopening for the human queue,
+  and both pre-existing BLOCKER-001 entries were annotated to point at it rather than left
+  silently contradicting each other.
+- `CURRENT_TASK.md` gained a new top entry.
+
+**Conclusion:** the code is real and appears correct on manual review, but has never been
+deployed and never invoked — not by CI, not manually. Separately and more surprisingly, the
+database side (`create_organization_invite`) has also never been called by anyone, so this
+is not "email delivery is the missing last mile" — it is "no one has ever completed an
+invitation through this system, at all, ever." Deploying is judged safe pre-approval in the
+sense that the mock-provider fallback prevents any real email from being sent even if
+deployed with no Resend key configured — but the deploy action itself was not taken, per
+the user's explicit instruction not to deploy in this task.

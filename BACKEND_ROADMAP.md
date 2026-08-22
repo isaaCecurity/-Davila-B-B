@@ -475,10 +475,57 @@ refund and finalisation rules are **not specified**. None may be invented.
 **Security checks:** service-role key never reaches the client; tenant scoping enforced in application logic (`API-CONTRACT.md` §165).
 **Status:** COMPLETE.
 
-## P6.2 · Email & invitation delivery — COMPLETE (2026-08-20)
+## P6.2 · Email & invitation delivery — PARTIAL (reopened 2026-08-22)
 **Dependencies:** P6.1, P2.7.
 **Deliverables:** `send-invite-email` Edge Function with Resend provider adapter, deep link generation, and HTML/text templates. `@bakeflow/api` invitation mutation client.
-**Status:** COMPLETE (BLOCKER-001 RESOLVED).
+**Status:** code complete, **never deployed, never invoked, never exercised in production**
+(BLOCKER-001 REOPENED). Was marked COMPLETE on 2026-08-20 on typecheck/lint/pytest/a
+standalone invariant script alone, none of which touch a live endpoint — that evidence bar
+is what let this go unnoticed for two days. Full investigation in `BLOCKERS.md` §BLOCKER-001.
+
+**Verified live 2026-08-22, not assumed:**
+- `mcp__supabase__list_edge_functions` → `[]`. Zero Edge Functions of any kind exist in the
+  project — `send-invite-email` is the only one the repo defines, so this single call is
+  conclusive: it has never been deployed.
+- `organization_invites` → **0 rows, total, ever** (`select count(*) from
+  organization_invites`). This is stronger than "the email step is missing": nobody has
+  invited anyone through this system at all, by any path, deployed or not. Invitation
+  delivery has never been operational, in any partial form.
+- `create_organization_invite()` exists live (`pronargs=4`, found in `pg_proc`) — the DB
+  half of the pipeline is present and was never itself tested here; only its total absence
+  of usage was confirmed.
+- No deploy step exists anywhere in the repository to have done this automatically:
+  `.github/workflows/ci.yml` deliberately runs only lint/typecheck/pytest (see its own
+  header comment) and was never intended to touch Supabase. Edge Function deployment has
+  only ever been a manual, human-run `supabase functions deploy` command, and it was never
+  run.
+- `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` — whether these are set in
+  Supabase Secrets is **unverifiable from here**: no available tool lists live Edge
+  Function secrets, and setting or checking them requires the dashboard or CLI. Even in
+  their total absence, `getEmailProvider()` falls back to `MockEmailProvider` rather than
+  failing, so deployment alone (no real key) would make the endpoint reachable and provably
+  exercise the full RPC + function code path — just not send a real email.
+
+**Root cause of the false COMPLETE:** `NOTIFICATIONS.md` independently carries two
+contradictory entries for BLOCKER-001 — one marked RESOLVED on 2026-08-20 (code delivered),
+and a separate, older "ACTION REQUIRED: BLOCKER-001" further down asking *"may the first
+Edge Function be deployed?"* that was never answered or removed. The RESOLVED entry papered
+over a question that was, in fact, still open the entire time.
+
+**Stale doc found and fixed in the same pass:** `docs/API-CONTRACT.md` §7 stated
+*"`supabase/functions/` is not present in the repo and zero functions are deployed"* —
+true when written, false since `b6d125e1` (2026-08-20) added the directory, still
+half-true today (deployed count is still zero). Corrected to state the current, more
+precise fact.
+
+**Recommended next action (human decision, not to be guessed):** approve deploying
+`send-invite-email` via `mcp__supabase__deploy_edge_function` — safe to do even without a
+real `RESEND_API_KEY` yet, since the mock provider fallback means deployment alone cannot
+send a real email to a real address — then invoke it once (e.g. through a disposable invite
+fixture) and confirm success via `mcp__supabase__query_logs`. Separately, and only when
+ready to send real mail, supply a real `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/
+`EMAIL_FROM_NAME` via Supabase Secrets. A prior attempt to deploy live in this session was
+stopped at the user's explicit direction and was not retried.
 
 
 ## P6.3 · Notifications — DEFERRED

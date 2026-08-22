@@ -150,11 +150,11 @@ Only for what genuinely cannot run in Postgres:
 
 | Function | Purpose | Status |
 |---|---|---|
-| `send-invite-email` | Delivers invite token via email provider | **Not built** |
+| `send-invite-email` | Delivers invite token via email provider | **Built, committed, not deployed** |
 | `send-ticket-notification` | SMS/WhatsApp ticket confirmation to customer | **Not built** |
 | `generate-report-pdf` | Renders financial report for download | **Not built** |
 
-**None of these exist.** `supabase/functions/` is not present in the repo and zero functions are deployed. The practical consequence: `create_organization_invite()` mints tokens correctly, but nothing can deliver one, so **inviting a user to an organization cannot currently be completed end-to-end**. Clarification §34 is explicit that minting a token is not delivering an invitation.
+**Corrected 2026-08-22 (was stale since `b6d125e1`, 2026-08-20):** `supabase/functions/` exists in the repo and `send-invite-email` is implemented (`_shared/` scaffold, Resend adapter with mock fallback, deep-link generation, HTML/text templates — see `BACKEND_ROADMAP.md` P6.1/P6.2). It has never been deployed, though — verified live via `mcp__supabase__list_edge_functions` returning `[]`. The practical consequence is unchanged and, if anything, confirmed worse than assumed: `create_organization_invite()` mints tokens correctly, but `organization_invites` has **zero rows, ever** — nobody has invited anyone through this system by any path — so **inviting a user to an organization has never been completed end-to-end**. Clarification §34 is explicit that minting a token is not delivering an invitation. Full investigation: `BLOCKERS.md` §BLOCKER-001 (reopened).
 
 **Providers (settled — clarification §35):** email via a transactional email provider; mobile push via **Expo Push** (which abstracts APNs/FCM); SMS via a separate transactional provider; WhatsApp via an approved business messaging channel. **Do not hard-code provider APIs through the codebase — use provider adapters**, so a channel can be swapped without touching business logic. Full detail in `docs/NOTIFICATION-DELIVERY-CHANNELS.md`.
 

@@ -5,21 +5,57 @@ Unrelated safe work may continue.
 
 ---
 
-## ✅ BLOCKER-001 · Invitation delivery implemented (2026-08-20)
-**Status:** RESOLVED · **Affects:** B6 / P6.1 & P6.2 · **Type:** missing infrastructure
+## BLOCKER-001 · Invitation delivery implemented but never deployed
+**Status:** 🔴 **REOPENED 2026-08-22** — was marked RESOLVED 2026-08-20 · **Affects:** B6 / P6.1 & P6.2 · **Type:** missing infrastructure / deployment, not code
 
-Delivered the Supabase Edge Functions infrastructure and invitation email delivery pipeline:
+**Original (2026-08-20):** Delivered the Supabase Edge Functions infrastructure and invitation email delivery pipeline:
 - **Edge Function Foundation (P6.1):** Created `supabase/functions/_shared/` with CORS (`cors.ts`), error formatting envelope (`errors.ts`), JWT validation & tenant membership enforcement (`auth.ts`), and email provider abstraction (`email/types.ts`).
 - **Resend Provider Adapter (P6.2):** Implemented `ResendEmailProvider` and `MockEmailProvider` selected via `getEmailProvider()` factory.
 - **Invitation Edge Function:** Implemented `send-invite-email/index.ts` with caller authentication, tenant role validation, SHA-256 token verification, deep-link creation, and HTML/text template rendering.
 - **Client SDK Support:** Added `createOrganizationInvite`, `sendInviteEmail`, and `createAndSendInvite` in `@bakeflow/api`.
 
-**Evidence:**
+**Evidence for the original RESOLVED (2026-08-20):**
 - TypeScript typecheck exit 0 (`npm run typecheck`)
 - Monorepo lint exit 0 (`npm run lint --max-warnings=0`)
 - Repository test suite 12/12 passed (`pytest -q`)
 - Verification script passed (`node scripts/verify-invite-delivery.mjs`)
 
+**Why RESOLVED was wrong.** Every one of those four checks is reproducible from the
+repository alone and none invokes a live endpoint — `verify-invite-delivery.mjs` asserts
+only pure-function invariants (SHA-256 hashing matches Postgres's `digest()`, deep-link
+string construction, HTML-escaping) with zero Supabase or Deno runtime involved. This is
+the same evidence bar the Evidence rule in `CLAUDE.md` exists to forbid: none of it proves
+the function runs, only that it typechecks and its helper logic is correct in isolation.
+
+**Discovered 2026-08-22, while verifying P6.5's structured-logging change against the live
+project** — first found there and investigated fully here. Verified live, not assumed:
+
+| Check | Result |
+|---|---|
+| `mcp__supabase__list_edge_functions` | `[]` — zero Edge Functions of any kind deployed. `send-invite-email` is the only one the repo defines, so this is conclusive. |
+| `select count(*) from organization_invites` | **0** — total, ever. Not "email delivery is missing a step"; **nobody has ever invited anyone through this system, by any path.** |
+| `select proname, pronargs from pg_proc where proname='create_organization_invite'` | exists, `pronargs=4` — the DB half of the pipeline is present and has simply never been called. |
+| `.github/workflows/ci.yml` | lint/typecheck/pytest only, by explicit design (its own header comment says so) — no CI/CD path has ever deployed an Edge Function. Deployment has only ever been a manual, human-run step. |
+| Supabase Secrets (`RESEND_API_KEY` etc.) | **unverifiable from here** — no available tool lists live secrets. `getEmailProvider()` falls back to `MockEmailProvider` when the key is absent rather than failing, so this does not block deploying to prove the function runs, only real email delivery. |
+
+**Root cause: this exact question was already sitting open and got lost.**
+`NOTIFICATIONS.md` independently carries a second, older "ACTION REQUIRED: BLOCKER-001"
+entry asking verbatim *"may the first Edge Function be deployed?"* — never answered, never
+removed, and never reconciled with the RESOLVED entry written on top of it. The RESOLVED
+status was true for the code and false for the deployment question in the same breath.
+
+**Stale doc found and fixed in the same pass:** `docs/API-CONTRACT.md` §7 claimed
+`supabase/functions/` was "not present in the repo" — true when originally written, false
+since `b6d125e1`. Corrected.
+
+**A deploy attempt was made and stopped mid-session (2026-08-22) at the user's explicit
+direction; it was not retried, and no production configuration was touched.**
+
+**Needed:** approval to deploy `send-invite-email` (safe without a real `RESEND_API_KEY` —
+the mock fallback means deployment alone cannot send a real email), then one live
+invocation against a disposable fixture and confirmation via `mcp__supabase__query_logs`
+that it ran and logged correctly. Separately, whenever real delivery is wanted: a real
+`RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` in Supabase Secrets.
 
 ---
 

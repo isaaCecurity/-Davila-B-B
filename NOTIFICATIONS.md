@@ -4,6 +4,33 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-001 — REOPENED: invitation delivery has never run, live
+
+**Status:** Reopened 2026-08-22 — was incorrectly marked Resolved on 2026-08-20 (see that
+entry further down). Investigated fully at your request; no deployment or config change
+made.
+
+**Question:** may `send-invite-email` be deployed to the live project?
+
+This is the exact question the older "ACTION REQUIRED: BLOCKER-001" entry near the bottom
+of this file already asked, unanswered, on 2026-08-20 — it was never resolved, only
+buried under a RESOLVED entry that covered code delivery, not deployment. Verified live
+today: `list_edge_functions` returns `[]` (nothing has ever been deployed — this is the
+only Edge Function the repo defines), and `organization_invites` has **zero rows, ever**
+— no one has ever invited a user to an organization through this system, by any path.
+P6.2 is downgraded from COMPLETE to PARTIAL in `BACKEND_ROADMAP.md` accordingly.
+
+**Why it matters:** this is the only thing standing between the invitation feature and its
+first real use. Deploying is safe without a Resend API key yet — the code falls back to a
+mock provider rather than failing — so it would prove the function actually runs without
+sending real mail. Real delivery additionally needs `RESEND_API_KEY`,
+`EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME` in Supabase Secrets, which is unverified either
+way (no tool available here lists live secrets).
+
+Full detail: `BLOCKERS.md` §BLOCKER-001.
+
+---
+
 ## RESOLVED: BLOCKER-017 — production batch completion/failure now requires the RPC
 
 **Status:** Resolved on 2026-08-22 (decision: trigger-side guard flag, over narrowing the
@@ -55,9 +82,12 @@ Reconciled the database migration tracking gap between remote Supabase productio
 ---
 
 
-## RESOLVED: BLOCKER-001 — Invitation delivery pipeline implemented
+## RESOLVED: BLOCKER-001 — Invitation delivery pipeline implemented — **superseded, see reopened entry at top**
 
-**Status:** Resolved on 2026-08-20.
+**Status:** Resolved on 2026-08-20. **This was premature — reopened 2026-08-22, see the
+entry at the top of this file.** Everything below was true of the code; the deployment
+question was, in fact, never answered — see the stale duplicate entry further down that
+this RESOLVED status should have been reconciled against and wasn't.
 
 Implemented the Edge Functions scaffold (P6.1), the Resend email provider adapter with mock fallback, the `send-invite-email` function (P6.2), and client SDK mutation methods in `@bakeflow/api`.
 
@@ -259,14 +289,16 @@ suggested `migration repair --status applied`.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-001
+## ACTION REQUIRED: BLOCKER-001 *(original entry — this question was never actually answered; see the reopened entry at the top of this file, 2026-08-22)*
 
 **Question:** Which transactional email provider should deliver invitations, and may
 the first Edge Function be deployed?
 
 **Affected:** B6 invitation delivery
 
-**Status:** BLOCKED — unrelated work may continue
+**Status:** BLOCKED — unrelated work may continue. **This is the root cause of the 2026-08-22
+reopening: this entry sat unanswered while a separate RESOLVED entry above claimed the
+blocker closed.**
 
 ---
 
