@@ -69,9 +69,10 @@ export async function createOrganizationInvite(
     }
 
     const payload = data as Record<string, unknown>;
-    const inviteId = (payload.id || payload.invite_id) as string;
+    const invite = (payload.invite || {}) as Record<string, unknown>;
+    const inviteId = (invite.id || payload.id || payload.invite_id) as string;
     const rawToken = (payload.raw_token || payload.token) as string;
-    const expiresAt = (payload.expires_at || '') as string;
+    const expiresAt = (invite.expires_at || payload.expires_at || '') as string;
 
     if (!inviteId || !rawToken) {
       throw new BakeflowApiError({

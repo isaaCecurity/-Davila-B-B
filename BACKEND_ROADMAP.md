@@ -475,57 +475,44 @@ refund and finalisation rules are **not specified**. None may be invented.
 **Security checks:** service-role key never reaches the client; tenant scoping enforced in application logic (`API-CONTRACT.md` §165).
 **Status:** COMPLETE.
 
-## P6.2 · Email & invitation delivery — PARTIAL (reopened 2026-08-22)
+## P6.2 · Email & invitation delivery — COMPLETE (verified live 2026-08-22)
 **Dependencies:** P6.1, P2.7.
 **Deliverables:** `send-invite-email` Edge Function with Resend provider adapter, deep link generation, and HTML/text templates. `@bakeflow/api` invitation mutation client.
-**Status:** code complete, **never deployed, never invoked, never exercised in production**
-(BLOCKER-001 REOPENED). Was marked COMPLETE on 2026-08-20 on typecheck/lint/pytest/a
-standalone invariant script alone, none of which touch a live endpoint — that evidence bar
-is what let this go unnoticed for two days. Full investigation in `BLOCKERS.md` §BLOCKER-001.
+**Status:** deployed (`ACTIVE`, version 1) and proven end-to-end with a real signed-in call
+(BLOCKER-001 RESOLVED, for real this time). Was marked COMPLETE on 2026-08-20 on
+typecheck/lint/pytest/a standalone invariant script alone, none of which touch a live
+endpoint — that evidence bar is what let a fully undeployed function go unnoticed for two
+days. Full investigation and resolution in `BLOCKERS.md` §BLOCKER-001.
 
-**Verified live 2026-08-22, not assumed:**
-- `mcp__supabase__list_edge_functions` → `[]`. Zero Edge Functions of any kind exist in the
-  project — `send-invite-email` is the only one the repo defines, so this single call is
-  conclusive: it has never been deployed.
-- `organization_invites` → **0 rows, total, ever** (`select count(*) from
-  organization_invites`). This is stronger than "the email step is missing": nobody has
-  invited anyone through this system at all, by any path, deployed or not. Invitation
-  delivery has never been operational, in any partial form.
-- `create_organization_invite()` exists live (`pronargs=4`, found in `pg_proc`) — the DB
-  half of the pipeline is present and was never itself tested here; only its total absence
-  of usage was confirmed.
-- No deploy step exists anywhere in the repository to have done this automatically:
-  `.github/workflows/ci.yml` deliberately runs only lint/typecheck/pytest (see its own
-  header comment) and was never intended to touch Supabase. Edge Function deployment has
-  only ever been a manual, human-run `supabase functions deploy` command, and it was never
-  run.
-- `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` — whether these are set in
-  Supabase Secrets is **unverifiable from here**: no available tool lists live Edge
-  Function secrets, and setting or checking them requires the dashboard or CLI. Even in
-  their total absence, `getEmailProvider()` falls back to `MockEmailProvider` rather than
-  failing, so deployment alone (no real key) would make the endpoint reachable and provably
-  exercise the full RPC + function code path — just not send a real email.
+**Deployed and verified live 2026-08-22**, with the user's explicit approval: signed in as
+the real smoke owner, called `create_organization_invite` for real over PostgREST, POSTed
+the result to the live function URL with that same session token — **200, `success: true`**,
+mock provider fired (no Resend key configured yet), and the P6.5 structured NDJSON logs
+appeared correctly in `function_logs` (`function_invoked` → `invite_email_dispatched`,
+correct fields, no PII). Disposable invite row deleted afterward. **First successful
+invitation dispatch in this project's history.**
 
-**Root cause of the false COMPLETE:** `NOTIFICATIONS.md` independently carries two
-contradictory entries for BLOCKER-001 — one marked RESOLVED on 2026-08-20 (code delivered),
-and a separate, older "ACTION REQUIRED: BLOCKER-001" further down asking *"may the first
-Edge Function be deployed?"* that was never answered or removed. The RESOLVED entry papered
-over a question that was, in fact, still open the entire time.
+**A second, independent live defect was found and fixed in the same pass**, without which
+deployment alone would still not have been enough: `create_organization_invite()` actually
+returns `{invite: {id, expires_at, ...}, raw_token}`, but
+`bakeflow-frontend/packages/api/mutations/invitations.ts`'s `createOrganizationInvite()`
+read `id`/`expires_at` off the top level of that response — which don't exist there — so
+every real call threw `response_shape_invalid` unconditionally, before ever reaching the
+email step. Fixed to read the nested `invite.id`/`invite.expires_at`; verified against the
+real captured RPC payload, `typecheck`/`lint --workspace apps/mobile` both exit 0.
 
-**Stale doc found and fixed in the same pass:** `docs/API-CONTRACT.md` §7 stated
-*"`supabase/functions/` is not present in the repo and zero functions are deployed"* —
-true when written, false since `b6d125e1` (2026-08-20) added the directory, still
-half-true today (deployed count is still zero). Corrected to state the current, more
-precise fact.
+**State found before deployment (for the record):** `list_edge_functions` returned `[]`;
+`organization_invites` had 0 rows total, ever — invitation delivery had never been
+operational, in any partial form, by any path. Root cause: `NOTIFICATIONS.md` carried two
+contradictory BLOCKER-001 entries the whole time — one RESOLVED (code delivered,
+2026-08-20), one still ACTION REQUIRED ("may it be deployed?", never answered) — never
+reconciled. Stale doc fixed in the same pass: `docs/API-CONTRACT.md` §7 said
+`supabase/functions/` didn't exist in the repo; it has since `b6d125e1`.
 
-**Recommended next action (human decision, not to be guessed):** approve deploying
-`send-invite-email` via `mcp__supabase__deploy_edge_function` — safe to do even without a
-real `RESEND_API_KEY` yet, since the mock provider fallback means deployment alone cannot
-send a real email to a real address — then invoke it once (e.g. through a disposable invite
-fixture) and confirm success via `mcp__supabase__query_logs`. Separately, and only when
-ready to send real mail, supply a real `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/
-`EMAIL_FROM_NAME` via Supabase Secrets. A prior attempt to deploy live in this session was
-stopped at the user's explicit direction and was not retried.
+**Remaining, separate from this milestone:** real email delivery (vs. the mock provider
+that fired in the live test above) needs `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/
+`EMAIL_FROM_NAME` set in Supabase Secrets — unverified either way, no tool available here
+lists live secrets — but this is no longer required to prove the pipeline itself works.
 
 
 ## P6.3 · Notifications — DEFERRED
@@ -567,7 +554,7 @@ a real `archive_ticket()` call, correct `sync_changes` row, correct `audit_log` 
 discarded by the rollback. The smoke suite still asserts what an owner actually can prove:
 the refusal.
 
-## P6.5 · Error handling & observability — PARTIAL (2026-08-22)
+## P6.5 · Error handling & observability — COMPLETE (2026-08-22)
 **Dependencies:** P6.1.
 **Deliverables:** normalized error codes per `API-CONTRACT.md`; structured logs.
 
@@ -611,17 +598,15 @@ future Edge Function cannot skip it. Wired into `send-invite-email/index.ts`: a
 (deliberately omitting the recipient's email — PII the `invite_id` already correlates
 back to), and the error path.
 
-**Not deployed.** Discovered while trying to verify this live: `send-invite-email` has
-never actually been deployed to the Supabase project — `list_edge_functions` returns
-`[]`. BLOCKER-001/P6.2's "COMPLETE" evidence was typecheck/lint/pytest/the standalone
-`verify-invite-delivery.mjs` invariant script, none of which invoke a live endpoint, so
-this was true before this change too and is not a regression it introduced. Deploying
-was attempted and stopped at the user's direction; the code is verified only by manual
-review (matching the bar P6.2 itself was accepted at) and by the same three non-live
-checks P6.2 used. **Actually invoking the deployed function — confirming the structured
-log lines appear in `query_logs`, and that invitation delivery works at all — remains
-undone**, and is now the more load-bearing gap: it blocks confirming *any* version of
-this function has ever run, not just this change.
+**Structured logs — now live-verified.** Deploying `send-invite-email` was discovered to
+be an entirely separate, pre-existing gap (see `BLOCKERS.md` §BLOCKER-001), stopped
+mid-session on 2026-08-22, then approved and completed later the same day. Invoked with a
+real signed-in call, `mcp__supabase__query_logs` against `function_logs` (the correct
+source name — `function_edge_logs` returns nothing; discovered via `select distinct source
+from logs`) shows the exact NDJSON lines this deliverable added, in order:
+`function_invoked` → `invite_email_dispatched` with correct `tenant_id`/`invite_id`/
+`provider`/`delivery_id` fields and no recipient email. Both halves of P6.5 are now proven
+live, not just reviewed.
 
 ## P6.6 · Rate limiting & production configuration — NOT_STARTED
 **Dependencies:** P6.1. Feeds P12.

@@ -1,35 +1,35 @@
 # BakeFlow — Current Task
 
-## 🔴 BLOCKER-001 REOPENED — invitation delivery investigated fully, never deployed, never used (2026-08-22)
+## ✅ BLOCKER-001 RESOLVED — send-invite-email deployed, invoked, and verified live (2026-08-22)
 
-Investigation only, no deploy, no config change, per explicit instruction. Findings, all
-verified live:
+Investigated why P6.2 was marked COMPLETE while undeployed (see prior findings below,
+still accurate as history), then deployed with the user's explicit approval and proved it
+end-to-end:
 
-- `mcp__supabase__list_edge_functions` → `[]`. Zero Edge Functions deployed, ever —
-  `send-invite-email` is the only one the repo defines.
-- `organization_invites` → **0 rows, total, ever**. Stronger than "email delivery is
-  missing": no one has ever invited a user to an organization through this system, by any
-  path, deployed or not.
-- `create_organization_invite()` exists live (`pronargs=4`); its total lack of use was
-  confirmed, not its correctness — that was out of scope here.
-- `.github/workflows/ci.yml` never deploys Edge Functions (deliberately, by its own header
-  comment) — deployment has only ever been a manual human step, never taken.
-- Resend secrets (`RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME`) are
-  **unverifiable from here** — no tool available lists live Supabase secrets. Irrelevant
-  to proving the function *runs*, since `getEmailProvider()` falls back to a mock provider
-  in their absence.
-- Root cause: `NOTIFICATIONS.md` carried two contradictory BLOCKER-001 entries the whole
-  time — one RESOLVED (code delivered, 2026-08-20), one still ACTION REQUIRED (may it be
-  deployed?, never answered) — never reconciled.
-- Stale doc fixed in the same pass: `docs/API-CONTRACT.md` §7 said `supabase/functions/`
-  doesn't exist in the repo; it has since `b6d125e1`.
+- `mcp__supabase__deploy_edge_function` → `send-invite-email` v1, `ACTIVE`. Confirmed via
+  `list_edge_functions` afterward rather than trusting the deploy call alone.
+- Real signed-in test, not a health check: signed in as `smoke.owner@bakeflow.test`,
+  called `create_organization_invite` for real over PostgREST, POSTed the result to the
+  live function URL with that session's token — **200, `success: true`**, mock provider
+  fired (no Resend key set), disposable invite row deleted afterward.
+- `mcp__supabase__query_logs` against `function_logs` (not `function_edge_logs` — found the
+  correct source name via `select distinct source from logs`) shows the exact P6.5
+  structured NDJSON lines in order: `function_invoked` → `invite_email_dispatched` with
+  correct fields, no PII. **First successful invitation dispatch in this project's
+  history.**
+- **A second, independent bug found and fixed in the same pass:**
+  `create_organization_invite()` returns `{invite: {id, expires_at, ...}, raw_token}`, but
+  `bakeflow-frontend/packages/api/mutations/invitations.ts` read `id`/`expires_at` off the
+  top level — undefined every time, throwing `response_shape_invalid` on every real call
+  regardless of deployment status. Fixed; verified against the real captured RPC payload;
+  `typecheck`/`lint --workspace apps/mobile` exit 0.
 
-P6.2 downgraded COMPLETE → PARTIAL in `BACKEND_ROADMAP.md`. Full writeup:
-`BLOCKERS.md` §BLOCKER-001 (reopened), `NOTIFICATIONS.md` (new top entry).
+P6.2 and P6.5 both back to COMPLETE in `BACKEND_ROADMAP.md`. Full writeup:
+`BLOCKERS.md` §BLOCKER-001, `NOTIFICATIONS.md` (top entry).
 
-**Needed from the user:** approval to deploy `send-invite-email` (safe pre-Resend-key,
-mock fallback prevents any real email from firing), then one live invocation + a
-`query_logs` check to confirm it actually runs.
+**Still open, separately:** real email delivery needs `RESEND_API_KEY`/
+`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` in Supabase Secrets — unverified either way, no tool
+here lists live secrets — but no longer required to prove the pipeline works.
 
 ---
 

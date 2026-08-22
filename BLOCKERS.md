@@ -5,8 +5,8 @@ Unrelated safe work may continue.
 
 ---
 
-## BLOCKER-001 · Invitation delivery implemented but never deployed
-**Status:** 🔴 **REOPENED 2026-08-22** — was marked RESOLVED 2026-08-20 · **Affects:** B6 / P6.1 & P6.2 · **Type:** missing infrastructure / deployment, not code
+## ✅ BLOCKER-001 · Invitation delivery — deployed and verified live (2026-08-22)
+**Status:** RESOLVED (for real this time) · **Affects:** B6 / P6.1 & P6.2 · **Type:** missing infrastructure / deployment, not code
 
 **Original (2026-08-20):** Delivered the Supabase Edge Functions infrastructure and invitation email delivery pipeline:
 - **Edge Function Foundation (P6.1):** Created `supabase/functions/_shared/` with CORS (`cors.ts`), error formatting envelope (`errors.ts`), JWT validation & tenant membership enforcement (`auth.ts`), and email provider abstraction (`email/types.ts`).
@@ -48,14 +48,70 @@ status was true for the code and false for the deployment question in the same b
 `supabase/functions/` was "not present in the repo" — true when originally written, false
 since `b6d125e1`. Corrected.
 
-**A deploy attempt was made and stopped mid-session (2026-08-22) at the user's explicit
-direction; it was not retried, and no production configuration was touched.**
+**A deploy attempt was made and stopped mid-session earlier on 2026-08-22 at the user's
+explicit direction; it was not retried then. The user subsequently gave explicit approval
+to deploy, and that approval was acted on the same day — below.**
 
-**Needed:** approval to deploy `send-invite-email` (safe without a real `RESEND_API_KEY` —
-the mock fallback means deployment alone cannot send a real email), then one live
-invocation against a disposable fixture and confirmation via `mcp__supabase__query_logs`
-that it ran and logged correctly. Separately, whenever real delivery is wanted: a real
-`RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` in Supabase Secrets.
+### Deployed and verified live, 2026-08-22
+
+`mcp__supabase__deploy_edge_function` — `send-invite-email`, version 1, `status: ACTIVE`.
+Confirmed afterward with `list_edge_functions` (returns the one function, ACTIVE) rather
+than trusting the deploy call's own response.
+
+**Full end-to-end proof, not a bare health check** — signed in as the real smoke owner
+user, called the real RPC and the real deployed function over HTTP, exactly as the app
+would:
+
+1. Signed in as `smoke.owner@bakeflow.test` via `/auth/v1/token`.
+2. Called `create_organization_invite` via PostgREST RPC (real JWT, real `auth.uid()`,
+   real RLS/role check) — created a disposable invite, `role_key='cashier'`,
+   `p_valid_days=1`.
+3. POSTed `{invite_id, raw_token}` to `https://tvfyxpafbpnkneujcnvr.supabase.co/functions/v1/send-invite-email`
+   with the same session's bearer token — **200, `success: true`**, `delivery: {provider:
+   "mock", status: "simulated"}` (expected: no `RESEND_API_KEY` is set, confirming the mock
+   fallback works exactly as designed rather than failing closed).
+4. `mcp__supabase__query_logs` against `function_logs` (not `function_edge_logs` — the
+   correct source name, discovered by querying `select distinct source from logs`) shows
+   the exact structured NDJSON lines P6.5 added, in order: `function_invoked` →
+   `invite_email_dispatched` with correct `tenant_id`/`invite_id`/`provider`/`delivery_id`
+   fields, no recipient email logged (PII, by design) — P6.5's structured-logging
+   deliverable is now proven live, not just reviewed.
+5. Disposable invite row deleted afterward (`delete from organization_invites where
+   id = ...`); its `log_audit_event()` audit-log row was left in place rather than
+   scrubbed, per `CLAUDE.md`'s immutable-audit rule — it is a true record of a real,
+   if disposable, action, the same category of residue prior disposable-fixture
+   verifications in this project have left behind.
+
+**This is the first successful invitation dispatch, in any form, in this project's
+history** — `organization_invites` had zero rows before step 2, ever.
+
+### A second, more severe defect found and fixed during this same verification
+
+Step 3 above was deliberately done via raw HTTP, bypassing `@bakeflow/api`'s
+`createOrganizationInvite()` wrapper, because reading `create_organization_invite()`'s
+actual PL/pgSQL body first (`prosrc` from `pg_proc`) showed it returns
+`jsonb_build_object('invite', to_jsonb(v_invite)-'token_hash', 'raw_token', v_raw)` — the
+invite's `id` and `expires_at` are nested under `invite`, not top-level. But
+`bakeflow-frontend/packages/api/mutations/invitations.ts`'s `createOrganizationInvite()`
+read `payload.id`/`payload.invite_id`/`payload.expires_at` off the **top level** of the RPC
+response. `inviteId` would therefore always resolve to `undefined`, and the function throws
+`response_shape_invalid` unconditionally — **on every real call, before ever reaching
+`sendInviteEmail()`.** This is a second, independent reason the pipeline had zero real
+usage, on top of the function never being deployed: even with the function live the whole
+time, the client could never have gotten far enough to call it.
+
+Fixed in the same file: read `invite.id`/`invite.expires_at` from the nested object first,
+falling back to the flat keys for forward compatibility. Verified against the actual live
+RPC response payload captured in step 2 above (not a guessed shape) — the corrected logic
+extracts the real `inviteId`/`rawToken`/`expiresAt` correctly. `npm run typecheck` and
+`npm run lint --workspace apps/mobile` both exit 0 afterward.
+
+**Consequence:** invitation delivery is now provably operational end-to-end, for the first
+time — RPC mint → Edge Function dispatch → structured logs, all confirmed live. Real email
+delivery (as opposed to the mock provider) still needs `RESEND_API_KEY`/
+`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` set in Supabase Secrets — unverified either way, no
+tool available here lists live secrets — but is no longer required to prove the pipeline
+itself works.
 
 ---
 

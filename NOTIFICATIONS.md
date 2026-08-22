@@ -4,28 +4,33 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-001 — REOPENED: invitation delivery has never run, live
+## RESOLVED: BLOCKER-001 — deployed, invoked, and verified live; a second real bug found and fixed
 
-**Status:** Reopened 2026-08-22 — was incorrectly marked Resolved on 2026-08-20 (see that
-entry further down). Investigated fully at your request; no deployment or config change
-made.
+**Status:** Resolved on 2026-08-22, with your explicit approval to deploy.
 
-**Question:** may `send-invite-email` be deployed to the live project?
+Deployed `send-invite-email` (now `ACTIVE`, version 1). Verified with a full real
+end-to-end call, not a smoke ping: signed in as the real smoke owner, called
+`create_organization_invite` for real over PostgREST, then POSTed the result to the live
+Edge Function URL with that session's token — **200, `success: true`**, mock provider
+fired (no Resend key set yet), and the structured NDJSON logs added in P6.5 showed up
+correctly in `function_logs` (the correct log source — discovered it's `function_logs`,
+not `function_edge_logs`). Disposable invite row deleted afterward. **This is the first
+successful invitation dispatch in this project's history** — `organization_invites` had
+zero rows before this.
 
-This is the exact question the older "ACTION REQUIRED: BLOCKER-001" entry near the bottom
-of this file already asked, unanswered, on 2026-08-20 — it was never resolved, only
-buried under a RESOLVED entry that covered code delivery, not deployment. Verified live
-today: `list_edge_functions` returns `[]` (nothing has ever been deployed — this is the
-only Edge Function the repo defines), and `organization_invites` has **zero rows, ever**
-— no one has ever invited a user to an organization through this system, by any path.
-P6.2 is downgraded from COMPLETE to PARTIAL in `BACKEND_ROADMAP.md` accordingly.
+**A second, independent bug was found and fixed in the same pass.** While preparing that
+test, reading `create_organization_invite()`'s actual body showed it returns
+`{invite: {...}, raw_token}` — but the client wrapper
+(`packages/api/mutations/invitations.ts`) was reading the invite's `id`/`expires_at` off
+the *top level* of that response, which don't exist there. Every real call would have
+thrown `response_shape_invalid` before ever reaching the email step — regardless of
+whether the function was deployed. Fixed to read the nested `invite.id`/`invite.expires_at`
+first; verified against the real captured RPC response, `typecheck`/`lint` both exit 0.
 
-**Why it matters:** this is the only thing standing between the invitation feature and its
-first real use. Deploying is safe without a Resend API key yet — the code falls back to a
-mock provider rather than failing — so it would prove the function actually runs without
-sending real mail. Real delivery additionally needs `RESEND_API_KEY`,
-`EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME` in Supabase Secrets, which is unverified either
-way (no tool available here lists live secrets).
+**Still open, separately:** real email delivery (vs. the mock provider) needs
+`RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_FROM_NAME` in Supabase Secrets — unverified
+either way, no tool here lists live secrets — but this is no longer required to prove the
+pipeline works, only to make it send real mail.
 
 Full detail: `BLOCKERS.md` §BLOCKER-001.
 
