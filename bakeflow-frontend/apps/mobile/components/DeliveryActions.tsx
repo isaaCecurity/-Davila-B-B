@@ -1,9 +1,11 @@
 import { getSupabaseClient } from '@bakeflow/auth';
 import { BakeflowApiError, type DeliveryTransition } from '@bakeflow/api';
 import { useTransitionDelivery } from '@bakeflow/hooks';
-import type { Delivery, DeliveryStatus } from '@bakeflow/types';
+import type { Delivery, DeliveryStatus, Uuid } from '@bakeflow/types';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
+
+import { DriverPicker } from './DriverPicker';
 
 /**
  * The transition controls on a delivery — P9.6 write path.
@@ -27,13 +29,12 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-nativ
  * until the field is non-blank. The database still enforces it; this only avoids a round
  * trip that could only ever come back `23514`.
  *
- * ## Why there is no "assign driver" button yet
+ * ## `pending -> assigned` — the one hop with a picker instead of a button
  *
- * `pending -> assigned` requires a `p_driver_id` holding the `driver` role in this tenant,
- * so it needs a picker listing the organization's drivers — a member read path that does
- * not exist yet and whose RLS on `user_roles`/`profiles` must be verified live before it is
- * written. Offering a disabled control with an honest reason is better than either
- * inventing that query or leaving the state unexplained.
+ * Every other hop in `NEXT_ACTIONS` needs at most a text field; this one needs a driver.
+ * `DriverPicker` owns fetching `listDrivers()` and rendering the choice; this component
+ * only turns a tap into `{ to: 'assigned', driverId }`. See `DriverPicker`'s header for why
+ * the list it offers is tenant-wide rather than filtered to this delivery's branch.
  */
 
 interface ActionSpec {
@@ -137,14 +138,26 @@ export function DeliveryActions({
     transition.mutate({ deliveryId: delivery.id, transition: requested }, { onSuccess: reset });
   }
 
+  function assign(driverId: Uuid): void {
+    transition.mutate(
+      { deliveryId: delivery.id, transition: { to: 'assigned', driverId } },
+      { onSuccess: reset },
+    );
+  }
+
   if (delivery.status === 'pending') {
     return (
       <View className="gap-2 rounded-xl border border-neutral-200 p-4">
         <Text className="text-lg font-semibold text-neutral-900">Not assigned yet</Text>
         <Text className="text-sm text-neutral-500">
-          A delivery has to go to a driver before it can leave. Choosing one needs a driver
-          list this app does not have yet, so assign it from the back office for now.
+          A delivery has to go to a driver before it can leave.
         </Text>
+        <DriverPicker tenantId={tenantId} busy={busy} onAssign={assign} />
+        {transition.isError && (
+          <View className="gap-1 rounded-lg bg-red-50 p-3">
+            <Text className="text-sm text-red-900">{describe(transition.error)}</Text>
+          </View>
+        )}
       </View>
     );
   }

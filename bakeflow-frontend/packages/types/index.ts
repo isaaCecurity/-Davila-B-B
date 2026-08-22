@@ -113,3 +113,5 @@ export {
 } from './delivery';
 
 export type { OrganizationMembership, OrganizationRole } from './organization';
+
+export type { Driver } from './staff';

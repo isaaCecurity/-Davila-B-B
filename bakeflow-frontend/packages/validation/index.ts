@@ -39,3 +39,5 @@ export { customerSchema, ticketItemSchema, ticketSchema } from './sales';
 export { deliverySchema } from './delivery';
 
 export { organizationMembershipSchema, organizationRoleSchema } from './organization';
+
+export { driverSchema } from './staff';

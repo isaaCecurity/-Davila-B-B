@@ -43,6 +43,7 @@ import {
   getProductById,
   getProductionBatchWithIngredients,
   listDeliveries,
+  listDrivers,
   listIngredientStockLevels,
   listIngredients,
   listMyOrganizationRoles,
@@ -74,6 +75,7 @@ import {
 } from '@bakeflow/api';
 import type {
   Delivery,
+  Driver,
   Ingredient,
   IngredientStockLevel,
   OrganizationMembership,
@@ -172,6 +174,8 @@ export const queryKeys = {
   /** Sorted id set, for the reason given on `recipesByIds`. */
   ticketsByIds: (tenantId: string, ticketIds: readonly string[]): unknown[] =>
     orgScoped(tenantId, 'tickets-by-id', [...new Set(ticketIds)].sort().join(',')),
+  /** Not paged and not filtered by anything but role — see `queries/staff.ts`. */
+  drivers: (tenantId: string): unknown[] => orgScoped(tenantId, 'drivers'),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -483,6 +487,27 @@ export function useDelivery(
     queryKey: queryKeys.delivery(tenantId ?? 'none', deliveryId ?? 'none'),
     queryFn: () => getDeliveryById(client, deliveryId ?? ''),
     enabled: tenantId !== null && deliveryId !== null,
+  });
+}
+
+/**
+ * Every tenant member holding the `driver` role — the picker list for the `pending ->
+ * assigned` transition. See `@bakeflow/types` `staff.ts` for why this is tenant-wide
+ * rather than branch-filtered: `transition_delivery()` itself checks nothing narrower.
+ *
+ * `enabled` follows the same null-tenant rule as every other organization-scoped hook, not
+ * a role check — a caller who cannot actually assign a driver will still resolve this query
+ * successfully and simply have nothing to do with the result, since `useTransitionDelivery`
+ * (and the RPC behind it) is the real authorization boundary.
+ */
+export function useDrivers(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseQueryResult<Driver[], Error> {
+  return useQuery({
+    queryKey: queryKeys.drivers(tenantId ?? 'none'),
+    queryFn: () => listDrivers(client),
+    enabled: tenantId !== null,
   });
 }
 

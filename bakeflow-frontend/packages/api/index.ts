@@ -137,6 +137,11 @@ export {
   type UpdateDeliveryDetailsInput,
 } from './mutations/delivery';
 
+// P9.6 — driver picker read path. `listDrivers` answers "who in this tenant holds the
+// `driver` role", which `transition_delivery`'s `assigned` hop has always needed and never
+// had. See `queries/staff.ts` for the RLS/RPC provenance.
+export { listDrivers } from './queries/staff';
+
 // P8.1 — organization membership reads. The one read path that works with a null tenant
 // claim, because `organizations_select` keys off auth.uid() rather than
 // current_tenant_id(). Switching the active organization lives in @bakeflow/auth: it is
