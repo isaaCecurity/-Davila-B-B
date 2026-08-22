@@ -434,6 +434,29 @@ check('adjust_stock gives the disposable ingredient a 10kg opening balance',
   openingBalance.error === null,
   openingBalance.error ? openingBalance.error.message : '');
 
+// P6.5 — adjust_stock() previously raised all 8 of its error conditions with no DETAIL
+// code at all; the client carried a message-text regex fallback for exactly this reason
+// (packages/api/errors/index.ts, classifyP0001()). Now that the RPC embeds `code` in
+// DETAIL directly, `error.details` should parse to it regardless of message wording.
+const adjustBadItemType = await supabase.rpc('adjust_stock', {
+  p_warehouse_id: WAREHOUSE_A, p_item_type: 'bogus', p_item_id: throwawayIngredient.data?.id,
+  p_new_quantity: '5.0000', p_reason: 'adjustment', p_note: null,
+});
+check('adjust_stock(invalid item_type) DETAIL carries code=invalid_request',
+  adjustBadItemType.error !== null && JSON.parse(adjustBadItemType.error.details ?? '{}').code === 'invalid_request',
+  adjustBadItemType.error ? adjustBadItemType.error.details : 'NO ERROR (unexpected)');
+
+// Deliberately coded as insufficient_role, not a not-found code: a caller must not be able
+// to distinguish "no such warehouse" from "that warehouse belongs to a branch you can't
+// reach" — either would let them probe cross-branch ids by elimination.
+const adjustFakeWarehouse = await supabase.rpc('adjust_stock', {
+  p_warehouse_id: '00000000-0000-4000-8000-000000000000', p_item_type: 'ingredient',
+  p_item_id: throwawayIngredient.data?.id, p_new_quantity: '5.0000', p_reason: 'adjustment', p_note: null,
+});
+check('adjust_stock(nonexistent warehouse) DETAIL carries code=insufficient_role, not a not-found code',
+  adjustFakeWarehouse.error !== null && JSON.parse(adjustFakeWarehouse.error.details ?? '{}').code === 'insufficient_role',
+  adjustFakeWarehouse.error ? adjustFakeWarehouse.error.details : 'NO ERROR (unexpected)');
+
 // Two batches against the same disposable recipe: one completed, one failed. Each starts
 // scheduled (the INSERT default) with no explicit status.
 const batchToComplete = await supabase
@@ -950,6 +973,24 @@ const archiveAsOwner = await supabase.rpc('archive_ticket', {
 check('archive_ticket() as an OWNER is refused — only admin/branch_manager may archive',
   archiveAsOwner.error !== null,
   archiveAsOwner.error ? archiveAsOwner.error.message : 'NO ERROR (unexpected)');
+
+// P6.5 — that refusal previously carried no DETAIL code (bare `USING errcode='42501'`
+// with no `code` key), so it reached a real client as unexpected_error. It happened to
+// come back insufficient_role anyway via the client's classify42501() fallback — 42501
+// with a message that isn't a GRANT-layer "permission denied for table/relation/schema"
+// defaults there — but that was a coincidence of message wording, not a guarantee.
+check('the refusal DETAIL now explicitly carries code=insufficient_role',
+  JSON.parse(archiveAsOwner.error?.details ?? '{}').code === 'insufficient_role',
+  archiveAsOwner.error?.details);
+
+const updateDetailsNotFound = await supabase.rpc('update_delivery_details', {
+  p_delivery_id: '00000000-0000-4000-8000-000000000000',
+  p_address_line: 'x', p_contact_phone: null, p_scheduled_at: null,
+});
+check('update_delivery_details(nonexistent delivery) DETAIL carries code=invalid_transition',
+  updateDetailsNotFound.error !== null &&
+    JSON.parse(updateDetailsNotFound.error.details ?? '{}').code === 'invalid_transition',
+  updateDetailsNotFound.error ? updateDetailsNotFound.error.details : 'NO ERROR (unexpected)');
 
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });

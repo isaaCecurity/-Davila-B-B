@@ -520,9 +520,61 @@ a real `archive_ticket()` call, correct `sync_changes` row, correct `audit_log` 
 discarded by the rollback. The smoke suite still asserts what an owner actually can prove:
 the refusal.
 
-## P6.5 · Error handling & observability — NOT_STARTED
+## P6.5 · Error handling & observability — PARTIAL (2026-08-22)
 **Dependencies:** P6.1.
 **Deliverables:** normalized error codes per `API-CONTRACT.md`; structured logs.
+
+**Normalized error codes — done for the unblocked (P4) domain.** Read every
+`RAISE EXCEPTION` in `pg_proc` live and counted which ones carry the `DETAIL` envelope
+`packages/api/errors/index.ts` (`codeFromDetail()`) depends on. Four functions raised
+18 distinct conditions total with **zero** `DETAIL` coverage: `adjust_stock` (8),
+`guard_order_actor_and_assignment` (4), `archive_ticket` (4), `update_delivery_details`
+(2). All four now carry an explicit `code`. Deliberately **not** touched:
+`record_payment`, `record_refund`, `guard_payment_relationships`,
+`guard_daily_financial_audit_mutation`, `guard_expense_cash_session`,
+`update_invoice_due_at`, `update_ticket` — all P5/financial-domain surface, gated behind
+BLOCKER-003.
+
+`adjust_stock`'s fix matters even though the client already inferred the right code in
+every case: `classifyP0001()` — the client's message-text regex fallback, whose own
+comment says *"the durable fix is for those functions to carry a DETAIL code, which is a
+database change"* — did the guessing until now. The chosen codes match what that fallback
+already inferred, including the deliberate choice to code "warehouse not found or branch
+access denied" as `insufficient_role` rather than a not-found code, so a caller cannot
+distinguish a missing warehouse from a denied one and probe cross-branch ids. `archive_
+ticket`/`update_delivery_details`'s "not found" conditions are coded `invalid_transition`,
+matching the precedent `transition_delivery()`/`complete_production_batch()` already set
+for the same shape of condition on the same tables — domain consistency over matching an
+unrelated function's fallback heuristic.
+
+**Verified live**, not assumed: each new code confirmed in a rolled-back transaction
+(simulated JWT claims, `GET STACKED DIAGNOSTICS ... = PG_EXCEPTION_DETAIL`), plus four new
+permanent smoke-suite assertions reading `error.details` directly. Full suite green
+throughout (`node scripts/smoke-signed-in.mjs`), `npm run typecheck`/`lint --workspace
+apps/mobile` exit 0, `pytest -q` 12 passed.
+
+**Structured logs — code written, not live-verified.** Added `logStructured()` and a
+`FunctionLogContext` to `supabase/functions/_shared/errors.ts` (NDJSON, one line per
+event, `level`/`event`/`function`/`request_id`/`timestamp` plus event-specific fields —
+the format Supabase's own log drain and most log platforms expect for structured
+filtering, versus the prior ad hoc `console.log`/`console.error` string-prefix calls).
+`handleFunctionError()`'s `context` parameter is now required rather than optional, so a
+future Edge Function cannot skip it. Wired into `send-invite-email/index.ts`: a
+`request_id` generated per invocation, an `invite_email_dispatched` success line
+(deliberately omitting the recipient's email — PII the `invite_id` already correlates
+back to), and the error path.
+
+**Not deployed.** Discovered while trying to verify this live: `send-invite-email` has
+never actually been deployed to the Supabase project — `list_edge_functions` returns
+`[]`. BLOCKER-001/P6.2's "COMPLETE" evidence was typecheck/lint/pytest/the standalone
+`verify-invite-delivery.mjs` invariant script, none of which invoke a live endpoint, so
+this was true before this change too and is not a regression it introduced. Deploying
+was attempted and stopped at the user's direction; the code is verified only by manual
+review (matching the bar P6.2 itself was accepted at) and by the same three non-live
+checks P6.2 used. **Actually invoking the deployed function — confirming the structured
+log lines appear in `query_logs`, and that invitation delivery works at all — remains
+undone**, and is now the more load-bearing gap: it blocks confirming *any* version of
+this function has ever run, not just this change.
 
 ## P6.6 · Rate limiting & production configuration — NOT_STARTED
 **Dependencies:** P6.1. Feeds P12.

@@ -1670,3 +1670,69 @@ npm run typecheck --workspace apps/mobile  -> exit 0
 npm run lint --workspace apps/mobile       -> exit 0
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
 ```
+
+---
+
+### P6.5 — normalized error codes (complete for P4); structured logs (written, unverified live) (2026-08-22)
+
+- Read every `RAISE EXCEPTION` across `pg_proc` and counted `DETAIL` coverage against
+  `packages/api/errors/index.ts`'s `codeFromDetail()`/`classifyP0001()`/`classify42501()`.
+  Four functions raised 18 distinct conditions with zero coverage: `adjust_stock` (8),
+  `guard_order_actor_and_assignment` (4), `archive_ticket` (4), `update_delivery_details`
+  (2). All four now embed an explicit `code` in `DETAIL`.
+- Codes chosen to match existing precedent rather than invented fresh:
+  `adjust_stock`'s match exactly what `classifyP0001()`'s documented regex fallback
+  already inferred (including "warehouse not found or branch access denied" ->
+  `insufficient_role`, a deliberate conflation so a caller cannot distinguish a missing
+  warehouse from a denied one and probe cross-branch ids by elimination); `archive_ticket`
+  / `update_delivery_details`'s "not found" conditions -> `invalid_transition`, matching
+  `transition_delivery()`/`complete_production_batch()`'s existing choice for the same
+  shape of condition on the same tables.
+- Deliberately excluded: `record_payment`, `record_refund`,
+  `guard_payment_relationships`, `guard_daily_financial_audit_mutation`,
+  `guard_expense_cash_session`, `update_invoice_due_at`, `update_ticket` — all P5/
+  financial-domain or blocked-write-path surface (BLOCKER-003).
+- Verified live: each new code confirmed in a rolled-back transaction (simulated JWT
+  claims, `GET STACKED DIAGNOSTICS ... = PG_EXCEPTION_DETAIL`) before any smoke-suite
+  change; four new permanent smoke assertions added reading `error.details` directly.
+  Full suite green across three separate runs (one after a transient network blip, one
+  after an unrelated ESLint native-process crash under concurrent-session load — both
+  passed clean on retry with no code changes).
+- Migrations applied via the Supabase MCP server:
+  `p6_5_normalize_error_codes_adjust_stock_and_ticket_guards`,
+  `p6_5_normalize_error_codes_archive_ticket_and_delivery_details`.
+
+**Structured logs.** Added `logStructured()` and `FunctionLogContext` to
+`supabase/functions/_shared/errors.ts`: one NDJSON line per event
+(`level`/`event`/`function`/`request_id`/`timestamp` plus event-specific fields), replacing
+the prior ad hoc `console.log`/`console.error` string-prefix calls. `handleFunctionError()`
+now requires a `context` argument rather than accepting none, so a future function cannot
+skip it silently. Wired into `send-invite-email/index.ts`: a `request_id` generated per
+invocation via `crypto.randomUUID()`, a `function_invoked` line at entry, an
+`invite_email_dispatched` line on success (recipient email deliberately omitted — PII the
+`invite_id` already correlates back to), and the error path via `handleFunctionError`.
+
+**Not deployed, and this is a real, pre-existing gap, not one this change introduced.**
+Attempting to verify the above live surfaced that `send-invite-email` has never been
+deployed to the Supabase project at all — `list_edge_functions` returns `[]`. BLOCKER-001
+and P6.2 were marked COMPLETE on typecheck, lint, pytest, and
+`scripts/verify-invite-delivery.mjs` (a standalone invariant script — token hashing, deep
+link construction, HTML escaping — that calls no live endpoint), none of which would have
+caught this. No Deno CLI is available in this environment to typecheck the Edge Function
+code directly, so this change's own correctness rests on manual review, at the same
+verification bar P6.2 was originally accepted at, not a stronger one.
+
+Deploying the function to actually test it — and, as a side effect, to find out whether
+invitation delivery has ever worked in this project at all — was attempted and stopped at
+the user's explicit direction. This is now flagged as the standing, more consequential gap
+in `BACKEND_ROADMAP.md` (P6.2 and P6.5) rather than acted on further this session.
+
+**Executed evidence (from `bakeflow-frontend` unless noted):**
+```
+node scripts/smoke-signed-in.mjs           -> pass (3 runs; 2 unrelated transient failures
+                                               on retry — network blip, ESLint crash under
+                                               concurrent-session load — both clean on retry)
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+.venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
+```

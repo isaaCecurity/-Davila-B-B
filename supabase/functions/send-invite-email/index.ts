@@ -1,8 +1,16 @@
 import { handleCors } from '../_shared/cors.ts';
 import { authenticateCaller, assertCallerTenantMembership } from '../_shared/auth.ts';
-import { handleFunctionError, HttpError, jsonResponse } from '../_shared/errors.ts';
+import {
+  handleFunctionError,
+  HttpError,
+  jsonResponse,
+  logStructured,
+  type FunctionLogContext,
+} from '../_shared/errors.ts';
 import { getEmailProvider } from '../_shared/email/factory.ts';
 import { renderInviteEmailHtml, renderInviteEmailText } from '../_shared/templates/invite.ts';
+
+const FUNCTION_NAME = 'send-invite-email';
 
 interface SendInviteRequestBody {
   invite_id: string;
@@ -25,6 +33,12 @@ Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405 });
   }
+
+  const logContext: FunctionLogContext = {
+    function: FUNCTION_NAME,
+    requestId: crypto.randomUUID(),
+  };
+  logStructured('info', 'function_invoked', logContext);
 
   try {
     // 1. Authenticate caller
@@ -160,7 +174,14 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    console.log(`[send-invite-email] Successfully dispatched invite email to ${invite.email} (provider=${result.provider}, delivery_id=${result.id})`);
+    // Recipient email is deliberately omitted from the log line — it's PII and the
+    // invite_id already correlates this event back to the row that has it.
+    logStructured('info', 'invite_email_dispatched', logContext, {
+      tenant_id: invite.tenant_id,
+      invite_id: invite.id,
+      provider: result.provider,
+      delivery_id: result.id,
+    });
 
     return jsonResponse({
       success: true,
@@ -169,6 +190,6 @@ Deno.serve(async (req: Request) => {
       delivery: result,
     });
   } catch (err: unknown) {
-    return handleFunctionError(err);
+    return handleFunctionError(err, logContext);
   }
 });

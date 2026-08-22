@@ -1,5 +1,31 @@
 # BakeFlow — Current Task
 
+## 🟡 P6.5 PARTIAL — normalized error codes done, structured logs unverified live (2026-08-22)
+
+**Normalized error codes — complete for the unblocked P4 domain.** Swept every
+`RAISE EXCEPTION` in `pg_proc` for `DETAIL` coverage. Four functions raised 18 conditions
+total with zero coverage — `adjust_stock` (8), `guard_order_actor_and_assignment` (4),
+`archive_ticket` (4), `update_delivery_details` (2) — all now carry an explicit `code`
+matching `packages/api/errors/index.ts`'s `BakeflowErrorCode` union. P5/financial-domain
+functions deliberately untouched (BLOCKER-003). Verified live in rolled-back transactions
+plus four new smoke-suite assertions; full suite green, typecheck/lint exit 0, pytest 12
+passed.
+
+**Structured logs — written, not live-verified.** Added `logStructured()` +
+`FunctionLogContext` to `supabase/functions/_shared/errors.ts` (NDJSON), wired into
+`send-invite-email/index.ts`. Discovered while trying to verify live: **that function has
+never been deployed** — `list_edge_functions` returns `[]`, despite BLOCKER-001/P6.2
+being marked COMPLETE on typecheck/lint/pytest/an invariant-only script alone. Deploying
+was attempted and stopped at the user's direction. The code is reviewed but its actual
+behavior in the Deno runtime — and whether invitation delivery has ever worked at all —
+remains unconfirmed. This is the standing gap, more load-bearing than this task's own
+scope: see `BACKEND_ROADMAP.md` P6.5 and P6.2.
+
+Migrations: `p6_5_normalize_error_codes_adjust_stock_and_ticket_guards`,
+`p6_5_normalize_error_codes_archive_ticket_and_delivery_details`.
+
+---
+
 ## ✅ P6.4 DELIVERED — audit logging coverage (2026-08-22)
 
 Swept every P4-domain write for `log_audit_event()` coverage. Status-transition guards
