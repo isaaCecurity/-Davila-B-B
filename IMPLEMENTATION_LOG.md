@@ -1889,3 +1889,60 @@ npm run typecheck --workspace apps/mobile   -> exit 0
 npm run lint --workspace apps/mobile        -> exit 0
 .venv/Scripts/python.exe -m pytest -q       -> 12 passed
 ```
+
+---
+
+## 2026-08-22 — BLOCKER-009 resolved: tickets do reach a real terminal state after cancellation
+
+While looking for the next unblocked backend milestone, audited P4.4's write-path status
+against the live database (the same instinct that caught P4.1/P4.2 and BLOCKER-001's
+staleness earlier this session) and found BLOCKER-009 was still marked OPEN despite both
+of its named root causes having already been fixed by other, unrelated work.
+
+**Live reads, this pass:**
+- `select tgname from pg_trigger where tgrelid='tickets'::regclass and not tgisinternal` →
+  `tickets_assign_number`, `tickets_guard_status_transition`, `tickets_set_updated_at`,
+  `trg_guard_driver_created_ticket_assignment`, `trg_guard_ticket_actor_assignment`. No
+  `prevent_submitted_ticket_update` — confirms BLOCKER-005's 2026-08-14 drop is still in
+  effect, no regression.
+- `guard_ticket_status_transition()`'s current `prosrc`: the allowed-transitions CASE
+  includes `WHEN 'cancelled' THEN ARRAY['archived']`, role-gated to
+  `owner/admin/branch_manager`. This transition simply did not exist in BLOCKER-009's
+  original 2026-08-11 write-up; it must have been added as part of BLOCKER-005's rewrite
+  of this function without anyone connecting the two.
+- `select grantee, privilege_type from information_schema.role_table_grants where
+  table_name='tickets' and grantee='authenticated'` → `INSERT, SELECT` only, confirming no
+  client can ever reach that status transition directly.
+- `select proname from pg_proc where prosrc ilike '%''archived''%'` → only
+  `guard_ticket_status_transition` itself references the literal. No RPC performs
+  `status = 'archived'`. This transition is legal but dead — logged as TD-016.
+- `archive_ticket()`'s current `prosrc`: guard is `deleted_at IS NULL AND archived_at IS
+  NULL` — no `status` check at all — and it inserts `sync_changes` with
+  `operation_type='UPDATE'` (previously `'ARCHIVE'`, fixed in P6.4 earlier the same day).
+  Re-confirmed independently rather than trusting the P6.4 write-up's own claim.
+- `pg_get_constraintdef` on `sync_changes_operation_type_check` and `tickets_status_check`
+  — both read live, matching what the two functions above assume.
+
+**Conclusion:** the metadata-only archive path (`archive_ticket()`) is unconditional on
+ticket status, already proven live end-to-end in P6.4 (correct `sync_changes` row, correct
+`audit_log` row, via a rolled-back transaction with simulated admin JWT claims). That is
+BLOCKER-009's real "terminal disposition" concern, answered — a cancelled ticket can and
+does reach a genuine, audited, permission-gated end state today. No new live test was run
+in this pass; P6.4's existing proof covers it, since `archive_ticket()` never distinguishes
+`cancelled` from any other non-archived status.
+
+**Documentation corrected:** `BLOCKERS.md` §BLOCKER-009 marked RESOLVED with the full
+re-derivation (not just a citation of P6.4). `TECHNICAL_DEBT.md` gained TD-016 for the dead
+status-transition nuance. `BACKEND_ROADMAP.md` P4.4's write-path paragraph rewritten (was
+citing BLOCKER-009 as one of four blocking grounds; now two remain, unrelated). Two more
+stale facts fixed in the same neighborhood while updating cross-references: P3.7's
+"Blockers" list still named BLOCKER-005 as open eight days after its resolution, and a
+planning table under P8.0 still listed BLOCKER-009 against P4.4b/P3.7. `NOTIFICATIONS.md`
+and `CURRENT_TASK.md` updated to match.
+
+**Executed evidence:**
+```
+mcp__supabase__execute_sql (pg_trigger, pg_proc, information_schema, pg_constraint)
+                                             -> all read live, quoted above
+.venv/Scripts/python.exe -m pytest -q        -> 12 passed
+```

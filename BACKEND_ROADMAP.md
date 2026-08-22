@@ -300,8 +300,11 @@ resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
 **Tests:** none executed.
 **Completion criteria:** every in-scope entity has a contract, an applier, and passing idempotency + authorization + conflict tests.
 **Blockers:**
-- **BLOCKER-005** — ticket lifecycle unreachable past `submitted`, and a submitted ticket's money is not frozen (both verified live). Remediation deferred by owner decision 2026-08-10.
-- **BLOCKER-006** — no per-entity conflict strategy; `sync_conflicts` referenced by the spec does not exist; operation-type/payload contract undefined.
+- ~~**BLOCKER-005**~~ — **RESOLVED 2026-08-14.** `prevent_submitted_ticket_update()` was
+  dropped; every ticket status is now reachable and `subtotal_amount` is frozen once a
+  ticket leaves `draft`. This line was still listing it as an open blocker eight days after
+  resolution — corrected here while auditing BLOCKER-009 in the same neighborhood.
+- **BLOCKER-006** — no per-entity conflict strategy; `sync_conflicts` referenced by the spec does not exist; operation-type/payload contract undefined. **The sole remaining blocker for P3.7.**
 **Parallelizable:** P4.1, P4.2, P6 can all proceed while this is blocked.
 
 ## P3.8 · Pending-sync behaviour — BLOCKED
@@ -419,7 +422,17 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 
 **Status is IMPLEMENTED, not COMPLETE.** `tests/sql/sales_read_rls.sql` (S1–S18) is written and committed but **NOT EXECUTED** — see **BLOCKER-011**, the authorized Supabase account cannot reach project `tvfyxpafbpnkneujcnvr`.
 
-**Write path stays BLOCKED**, on four independent grounds: the lifecycle RPC signatures have not been read from the live database; `draft → submitted` has no RPC at all (`API-CONTRACT.md` §2); `discount_amount`/`tax_amount` have no approved rules (**BLOCKER-003**); and **BLOCKER-009** leaves `cancelled → archived` unreachable.
+**Write path stays BLOCKED**, on two remaining grounds — down from four as of 2026-08-22.
+**BLOCKER-009 is now RESOLVED**: re-verified live while auditing this milestone for
+staleness, `cancelled → archived` turned out to already be a live-permitted transition
+(`guard_ticket_status_transition()`, read from `pg_proc`) as a side effect of BLOCKER-005's
+2026-08-14 fix, and the real working terminal-disposition path — `archive_ticket()`'s
+metadata fields, independent of `status` entirely — was already proven live during P6.4.
+See `BLOCKERS.md` §BLOCKER-009 and `TECHNICAL_DEBT.md` TD-016 for the (harmless, dead-code)
+nuance this surfaced. What remains open: the lifecycle RPC signatures for `draft →
+submitted` and the other hops still need a dedicated RPC — no RPC exists for them at all
+(`API-CONTRACT.md` §2, `STATE-MACHINES.md` §1) — and `discount_amount`/`tax_amount` have no
+approved rules (**BLOCKER-003**).
 **Tests:** S1–S18 cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary.
 
 ## P4.5 · Delivery — READ PATH IMPLEMENTED / write path BLOCKED
@@ -674,14 +687,14 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P4.2b inventory write | ✅ **COMPLETE** — 17/17 executed live 2026-08-15 |
 | P4.3 production | types/schemas **live-verified**; the `complete_production_batch()` and `fail_production_batch()` signatures were **read live 2026-08-16** and the completion path executed once under ROLLBACK, so the write path is now startable — no decision outstanding |
 | P4.4a customers | ✅ **COMPLETE** — 6/6 RLS + 12/12 structural executed live |
-| P4.4b ticket read/write | creation **unblocked 2026-08-16** (012 + 015 resolved; `TKT-000001` created live). Pricing is catalog-authoritative, set by `guard_order_item_price()` — so BLOCKER-003 now bites only on discount/tax/rounding, and BLOCKER-009 on the confirm/complete transitions |
+| P4.4b ticket read/write | creation **unblocked 2026-08-16** (012 + 015 resolved; `TKT-000001` created live). Pricing is catalog-authoritative, set by `guard_order_item_price()`. BLOCKER-009 (archive dead end) **resolved 2026-08-22** — see `BLOCKERS.md`. Remaining: BLOCKER-003 on discount/tax/rounding, and no RPC yet for `draft → submitted`/the other lifecycle hops |
 | P4.5 delivery | schema live-verified; **unblocked 2026-08-16** — a ticket to hang a delivery from can now be created. All six lifecycle RPC signatures were read live |
 | P5 (all financial) | BLOCKER-003 |
 | P6.1 Edge Function scaffold | writable, but its only approved consumer P6.2 is blocked on BLOCKER-001 |
 | P6.2 invitations | BLOCKER-001 |
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
-| P3.7 per-entity sync | BLOCKER-006, BLOCKER-009 |
+| P3.7 per-entity sync | BLOCKER-006 (BLOCKER-009 resolved 2026-08-22) |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
 **Frontend work (P8.1) is therefore the next thing to build**, exactly as this phase was

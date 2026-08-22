@@ -164,15 +164,30 @@ affected reads fail outright with `42703`.
 
 ---
 
-## ACTION REQUIRED: BLOCKER-009
+## RESOLVED: BLOCKER-009 — tickets do reach a real terminal state, no decision needed
 
-**Question:** Should `ARCHIVE` be added to the `operation_type` CHECK (or
-`archive_ticket()` changed to emit an allowed value), and should `cancelled` be removed
-from the guarded status list so `cancelled → archived` becomes reachable?
+**Status:** Resolved on 2026-08-22. Superseded — see `BLOCKERS.md` §BLOCKER-009 for full
+detail. This entry's original question (below) turned out not to need a decision: both
+things it worried about had already been fixed as side effects of other work, just never
+verified or closed out.
 
-**Affected:** P4.4 tickets, P3.7 ticket entity, and the accuracy of BLOCKER-005
+`prevent_submitted_ticket_update()` — the trigger that put `cancelled` on a guarded list —
+was dropped entirely back on 2026-08-14 (BLOCKER-005), and the CHECK-constraint bug in
+`archive_ticket()` was fixed during P6.4 (2026-08-22, earlier the same day this was
+closed). The real, working way a cancelled ticket reaches an audited terminal state is
+`archive_ticket()`'s metadata fields (`archived_at`/`archived_by`/`archive_reason`), which
+never touch `status` at all and were proven live in P6.4. One harmless nuance logged as
+TD-016, not a blocker: the trigger *does* now permit a `cancelled → archived` status
+transition, but nothing ever calls it — dead code, not a functional gap.
 
-**Status:** BLOCKED — decide together with BLOCKER-005
+**Original question (answered above, no longer needs a decision):** Should `ARCHIVE` be
+added to the `operation_type` CHECK (or `archive_ticket()` changed to emit an allowed
+value), and should `cancelled` be removed from the guarded status list so `cancelled →
+archived` becomes reachable?
+
+**Was affecting:** P4.4 tickets, P3.7 ticket entity, and the accuracy of BLOCKER-005
+
+**Status:** ~~BLOCKED — decide together with BLOCKER-005~~ RESOLVED, no decision needed
 
 **Why it matters:** verified live 2026-08-11, tickets have **no reachable terminal state
 at all**. `cancelled → archived` is blocked because `cancelled` sits in the guarded status

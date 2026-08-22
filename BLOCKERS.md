@@ -314,8 +314,8 @@ RPCs" (now corrected).
 
 ---
 
-## BLOCKER-009 · Tickets have no reachable terminal state; `archive_ticket()` cannot succeed
-**Status:** OPEN · **Affects:** P4.4, P3.7 (ticket entity), BLOCKER-005 scope · **Type:** defect
+## ✅ BLOCKER-009 · Tickets have no reachable terminal state; `archive_ticket()` cannot succeed
+**Status:** RESOLVED 2026-08-22 · **Affects:** P4.4, P3.7 (ticket entity), BLOCKER-005 scope · **Type:** defect
 
 Found while verifying BLOCKER-005 against the live database on 2026-08-11. It makes the
 ticket breakage strictly worse than BLOCKER-005 and `docs/STATE-MACHINES.md` §63 record,
@@ -346,12 +346,72 @@ this means a submitted ticket is permanently stuck *and* its `subtotal_amount` i
 tax_amount) STORED` and cannot be written directly; `discount_amount` and `tax_amount` are
 already guarded. The single unguarded money input is **`subtotal_amount`**.
 
-**Needed:** decide alongside BLOCKER-005 whether to (i) add `ARCHIVE` to the
+**Needed:** ~~decide alongside BLOCKER-005 whether to (i) add `ARCHIVE` to the
 `operation_type` CHECK on `sync_changes`/`sync_operations`, or change `archive_ticket()` to
 emit an allowed value; and (ii) remove `cancelled` from the guarded status list so
 `cancelled → archived` becomes reachable, or confirm that archiving is metadata-only and
-the `archived` status value should be dropped from `tickets_status_check`.
-Then correct BLOCKER-005 and `docs/STATE-MACHINES.md` §63 in the same change.
+the `archived` status value should be dropped from `tickets_status_check`.~~
+
+### Re-verified live 2026-08-22 — both parts resolved, independently, by other work
+
+Found while auditing P4.4's write-path status for staleness (the same pass that closed
+BLOCKER-001). Both of this blocker's root causes turned out to already be gone, neither one
+closed out here at the time:
+
+**(a) is resolved — differently than either option above anticipated.** Read live:
+`prevent_submitted_ticket_update()` (the guard that put `cancelled` in its blocked-status
+list) was **dropped entirely** as part of BLOCKER-005's 2026-08-14 resolution — confirmed
+again here (`select tgname from pg_trigger where tgrelid='tickets'::regclass`: only
+`tickets_assign_number`, `tickets_guard_status_transition`, `tickets_set_updated_at`,
+`trg_guard_driver_created_ticket_assignment`, `trg_guard_ticket_actor_assignment` exist; no
+`prevent_submitted_ticket_update`). `guard_ticket_status_transition()` — the sole remaining
+authority — now explicitly permits `WHEN 'cancelled' THEN ARRAY['archived']`, role-gated to
+`owner/admin/branch_manager`, read live from `pg_proc`. So option (ii)'s first branch
+happened by construction, as a side effect of BLOCKER-005, not a deliberate BLOCKER-009 fix.
+
+**One nuance this surfaced, recorded rather than left implicit:** that trigger-level
+permission is currently **dead code** — `authenticated` has no `UPDATE` grant on `tickets`
+at all (`information_schema.role_table_grants`: `INSERT, SELECT` only), and no function in
+`pg_proc` ever performs `status = 'archived'` other than the guard's own CASE branch
+(searched: only `guard_ticket_status_transition` references the literal). So nothing can
+ever actually reach that status value through any live call path today. This is not a
+re-opening of the blocker, though: BLOCKER-009's actual concern was whether a ticket can
+reach *some* genuine, auditable terminal disposition after `cancelled` — and it can, via
+(b) below, which does not depend on the status column at all. Logged as **TD-016** rather
+than a blocker, since it stops no work.
+
+**(b) is resolved — fixed and proven live during P6.4** (`BACKEND_ROADMAP.md` §P6.4,
+2026-08-22, before this re-verification): `archive_ticket()`'s
+`sync_changes.operation_type` literal changed from `'ARCHIVE'` to `'UPDATE'`, and a real
+`archive_ticket()` call (simulated admin JWT, rolled back) produced a correct `sync_changes`
+row and a correct `audit_log` row. Re-read live here: the current `archive_ticket()` body
+inserts `operation_type='UPDATE'`, matching `sync_changes_operation_type_check`'s live
+definition (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION`) — confirmed independently
+of the P6.4 write-up, not just cited from it.
+
+**Why this is a real terminal disposition despite not touching `status`.** Re-reading
+`archive_ticket()`'s live body: its guard is `deleted_at IS NULL AND archived_at IS NULL` —
+**it never checks the ticket's `status` at all.** It works identically for a `draft`,
+`cancelled`, or any other non-deleted, non-archived ticket. So the metadata path
+(`archived_at`/`archived_by`/`archive_reason`) is, and always was, independent of the
+status-column dead end described in (a) — a cancelled ticket reaches a real, audited,
+permission-gated (`tickets.archive`, admin/branch_manager only), sync-logged terminal state
+today, live, proven in P6.4's rolled-back-transaction test. This settles BLOCKER-009's own
+suggested alternative: **archiving is confirmed metadata-only**, and the `archived` value
+in `tickets_status_check` is confirmed dead rather than reachable — not by a design
+decision made here, but by what the two live functions actually do.
+
+**Correction to `docs/STATE-MACHINES.md` §63-70 and BLOCKER-005, per this blocker's own
+instruction to correct them in the same change:** still needed as a follow-up — not done in
+this pass, since neither document was re-opened here. Both should state that `archived` is
+reached via `archive_ticket()`'s metadata fields, not a `status` transition, and that the
+`cancelled → archived` status-column path is legal at the trigger level but unreachable in
+practice (TD-016).
+
+**Consequence:** P4.4's write path is no longer blocked on this axis. Its two remaining,
+genuinely open grounds are unrelated to this blocker: the lifecycle RPC signatures for
+`draft → submitted` and the other hops still need a dedicated RPC (a separate, known gap —
+`STATE-MACHINES.md` §1), and `discount_amount`/`tax_amount` remain gated on **BLOCKER-003**.
 
 ---
 

@@ -1,5 +1,34 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-009 RESOLVED — tickets reach a real terminal state; two stale roadmap facts corrected (2026-08-22)
+
+While auditing P4.4's write-path status for staleness (same pass as BLOCKER-001), found
+that BLOCKER-009's two named root causes were both already gone, just never verified or
+closed:
+
+- **(a)** `prevent_submitted_ticket_update()` (blocked `cancelled`) was dropped entirely on
+  2026-08-14 (BLOCKER-005). Re-read live: gone from `pg_trigger`, and
+  `guard_ticket_status_transition()` now explicitly permits `cancelled → archived`.
+  Harmless nuance: nothing ever calls that transition (`authenticated` has no `UPDATE` on
+  `tickets`; no function performs it) — logged as **TD-016**, not a blocker, since the real
+  working path doesn't need it.
+- **(b)** `archive_ticket()`'s CHECK-violating `operation_type='ARCHIVE'` was already fixed
+  to `'UPDATE'` during P6.4 (earlier the same day). Re-read live and re-confirmed
+  independently here, not just cited from the P6.4 write-up.
+- The real terminal-disposition mechanism, `archive_ticket()`'s metadata fields, never
+  reads or writes `status` at all — works for `cancelled` (or any non-deleted, non-archived
+  ticket) exactly as it works for anything else, already proven live in P6.4.
+
+**Two other stale facts corrected in the same pass** (found while updating cross-references
+to this blocker): P3.7's blocker list still cited BLOCKER-005 as open, eight days after its
+2026-08-14 resolution; a planning table listed BLOCKER-009 as still blocking P4.4b/P3.7.
+
+Full detail: `BLOCKERS.md` §BLOCKER-009, `TECHNICAL_DEBT.md` TD-016. P4.4's write path now
+has two remaining, unrelated grounds: no RPC for `draft → submitted`/other lifecycle hops,
+and BLOCKER-003 (discount/tax rules). P3.7's sole remaining blocker is BLOCKER-006.
+
+---
+
 ## ✅ BLOCKER-001 RESOLVED — send-invite-email deployed, invoked, and verified live (2026-08-22)
 
 Investigated why P6.2 was marked COMPLETE while undeployed (see prior findings below,
