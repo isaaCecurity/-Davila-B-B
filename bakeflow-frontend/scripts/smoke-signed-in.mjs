@@ -895,6 +895,22 @@ check('the address/phone correction is visible through the delivery read path',
     detailsReadBack.data?.contact_phone === '+2348099999999',
   JSON.stringify({ address: detailsReadBack.data?.address_line, phone: detailsReadBack.data?.contact_phone }));
 
+// P6.4 — update_delivery_details() now calls log_audit_event() when it actually changes
+// something. Caught during that work, before either shipped: log_audit_event()'s own
+// action='update' is required by audit_log_action_check (only insert/update/delete/
+// status_change are legal — a custom string like 'details_updated' is refused), the same
+// class of live-CHECK mismatch as complete_ticket()'s reference_type bug.
+const detailsAuditRow = await supabase
+  .from('audit_log').select('action,before,after')
+  .eq('entity_type', 'delivery').eq('entity_id', delivery?.id);
+check('the address/phone correction wrote exactly one audit_log row',
+  (detailsAuditRow.data ?? []).length === 1 && detailsAuditRow.data?.[0]?.action === 'update',
+  JSON.stringify(detailsAuditRow.data));
+check('the audit row records the ACTUAL before value, not the current one',
+  detailsAuditRow.data?.[0]?.before?.address_line === '12 Adeola Odeku Street, Victoria Island, Lagos' &&
+    detailsAuditRow.data?.[0]?.after?.address_line === '45 Broad Street, Lagos Island, Lagos',
+  JSON.stringify(detailsAuditRow.data?.[0]));
+
 // COALESCE means a call that supplies none of the three fields rewrites the row to its
 // current values rather than erroring — the client wrapper refuses this case locally
 // (mutations/delivery.ts), but the database itself has no such guard, so the RPC still
@@ -908,6 +924,32 @@ const detailsNoop = await supabase.rpc('update_delivery_details', {
 check('update_delivery_details() with all-null args is a DB-level no-op, not an error',
   detailsNoop.error === null && detailsNoop.data?.delivery?.address_line === '45 Broad Street, Lagos Island, Lagos',
   detailsNoop.error ? detailsNoop.error.message : JSON.stringify(detailsNoop.data?.delivery?.address_line));
+
+// The no-op must not write a second audit row — update_delivery_details() diffs before vs
+// after and only calls log_audit_event() when something actually changed.
+const detailsAuditRowAfterNoop = await supabase
+  .from('audit_log').select('id')
+  .eq('entity_type', 'delivery').eq('entity_id', delivery?.id);
+check('the DB-level no-op wrote NO additional audit_log row (still exactly 1)',
+  (detailsAuditRowAfterNoop.data ?? []).length === 1,
+  `rows=${detailsAuditRowAfterNoop.data?.length}`);
+
+// archive_ticket() — P6.4 also added a log_audit_event() call here, and fixed a
+// pre-existing, unrelated live defect found while verifying it: the function wrote
+// sync_changes.operation_type = 'ARCHIVE', which sync_changes_operation_type_check has
+// never allowed (only CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION) — so every real
+// call has always failed with 23514, before ever reaching the audit line. Fixed to
+// 'UPDATE'. Not smoke-tested for success here: `tickets.archive` is granted only to
+// admin/branch_manager (read live from role_permissions), and the signed-in smoke user is
+// an owner — the same reachability gap noted for complete_ticket()'s full lifecycle walk.
+// The refusal path below is what an owner can actually prove.
+const archiveAsOwner = await supabase.rpc('archive_ticket', {
+  p_ticket_id: ticket?.id,
+  p_reason: 'smoke test — owner should not be able to do this',
+});
+check('archive_ticket() as an OWNER is refused — only admin/branch_manager may archive',
+  archiveAsOwner.error !== null,
+  archiveAsOwner.error ? archiveAsOwner.error.message : 'NO ERROR (unexpected)');
 
 // ------------------------------------------------------- switch to org B --
 await supabase.rpc('set_active_organization', { p_tenant_id: ORG_B });

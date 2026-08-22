@@ -1,5 +1,39 @@
 # BakeFlow — Current Task
 
+## ✅ P6.4 DELIVERED — audit logging coverage (2026-08-22)
+
+Swept every P4-domain write for `log_audit_event()` coverage. Status-transition guards
+(`guard_ticket_status_transition`, `guard_delivery_transition`,
+`guard_production_batch_transition`) already logged unconditionally; direct-write RPCs
+(`adjust_stock`, `record_payment`, `record_refund`, the org/invite RPCs) already did too.
+Two gaps: `archive_ticket()` and `update_delivery_details()` each write significant field
+changes without touching a `status` column, so neither trigger nor prior convention
+caught them. Both now call `log_audit_event()`; the delivery one only when a value
+actually changed.
+
+**Two pre-existing live defects found and fixed along the way** (not introduced by this
+work — same class as `complete_ticket()`'s `reference_type` bug from the BLOCKER-016
+investigation): `archive_ticket()` wrote `sync_changes.operation_type = 'ARCHIVE'` against
+a CHECK that has never allowed it (every real call has always failed `23514`); and the
+first draft of both new `log_audit_event()` calls used action strings
+`audit_log_action_check` doesn't permit. Caught in verification before either shipped.
+
+**Verified live:**
+- `update_delivery_details()`: end-to-end through the real signed-in smoke client — one
+  audit row on an actual change, zero on the DB-level no-op.
+- `archive_ticket()`: the smoke user (owner) lacks `tickets.archive` (admin/branch_manager
+  only), so success was proven in a rolled-back transaction with simulated admin JWT
+  claims instead — real call, correct `sync_changes` row, correct `audit_log` row, all
+  discarded. Smoke suite asserts the refusal path an owner can actually exercise.
+- `node scripts/smoke-signed-in.mjs` — full pass, including the new checks.
+
+Migrations: `p6_4_audit_coverage_archive_ticket_and_delivery_details`,
+`fix_archive_ticket_sync_changes_operation_type`, `fix_p6_4_audit_action_values`.
+
+Full detail in `BACKEND_ROADMAP.md` (P6.4).
+
+---
+
 ## ✅ BLOCKER-016 & BLOCKER-017 RESOLVED (2026-08-22)
 
 **BLOCKER-017** (a raw update could bypass `complete_production_batch()`/

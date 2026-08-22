@@ -1622,3 +1622,51 @@ npm run lint --workspace apps/mobile       -> exit 0
 npx eslint packages --max-warnings=0       -> exit 0
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
 ```
+
+---
+
+### P6.4 — audit logging coverage (2026-08-22)
+
+- Read every `log_audit_event()` caller and every `guard_*_transition` trigger live from
+  `pg_proc`. Status-transition triggers on tickets, deliveries and production batches
+  already log unconditionally on every legal hop; direct-write RPCs (`adjust_stock`,
+  `record_payment`, `record_refund`, the organization/invite RPCs) already call it
+  directly. Two significant writes touch no guarded `status` column and had no coverage:
+  `archive_ticket()` and `update_delivery_details()`.
+- Added a `log_audit_event()` call to both. `update_delivery_details()`'s only fires when
+  `address_line`/`contact_phone`/`scheduled_at` actually differ from before, matching
+  `adjust_stock`'s convention of writing nothing for a genuine no-op.
+- Found two pre-existing, unrelated live defects while verifying — not introduced by this
+  change:
+  - `archive_ticket()` wrote `sync_changes.operation_type = 'ARCHIVE'`.
+    `sync_changes_operation_type_check` has only ever allowed
+    `CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION` — every real call has always
+    raised `23514` before reaching a `RETURN`. Fixed to `'UPDATE'`. Same class of defect as
+    `complete_ticket()`'s `reference_type` typo found earlier the same day (b3cce752).
+  - The first draft of both new `log_audit_event()` calls used custom `action` values
+    (`'archived'`, `'details_updated'`). `audit_log_action_check` only permits
+    `insert/update/delete/status_change`. Caught in verification before either shipped;
+    both changed to `'update'`.
+- Verified live:
+  - `update_delivery_details()` end to end through the real signed-in smoke client: one
+    `audit_log` row with the correct before/after on an actual address change, zero rows
+    added by the immediately-following DB-level no-op call.
+  - `archive_ticket()` could not be smoke-tested for success: `tickets.archive` is granted
+    only to admin/branch_manager (`role_permissions`, read live), and the smoke fixture
+    user is an owner — the same reachability gap already noted for `complete_ticket()`'s
+    full lifecycle walk. Proven instead in a rolled-back transaction with simulated admin
+    JWT claims (`request.jwt.claims` + `SET LOCAL ROLE authenticated`, the technique
+    BLOCKER-015/016 established): a real call succeeded, wrote the corrected
+    `sync_changes` row and a correct `audit_log` row, all discarded by the rollback. The
+    smoke suite asserts the one thing an owner can actually prove — the refusal.
+- Migrations applied via the Supabase MCP server: `p6_4_audit_coverage_archive_ticket_and_
+  delivery_details`, `fix_archive_ticket_sync_changes_operation_type`, `fix_p6_4_audit_
+  action_values`.
+
+**Executed evidence (from `bakeflow-frontend` unless noted):**
+```
+node scripts/smoke-signed-in.mjs           -> pass (2 runs, one after a transient DNS blip)
+npm run typecheck --workspace apps/mobile  -> exit 0
+npm run lint --workspace apps/mobile       -> exit 0
+.venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
+```

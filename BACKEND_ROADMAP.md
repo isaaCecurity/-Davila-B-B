@@ -478,9 +478,41 @@ refund and finalisation rules are **not specified**. None may be invented.
 ## P6.3 · Notifications — DEFERRED
 **Blockers:** no notification tables, no push-token column on `sync_devices`, no `pg_cron`/`pg_net`; two overlapping specs with no precedence rule (TD-008).
 
-## P6.4 · Audit logging coverage — NOT_STARTED
+## P6.4 · Audit logging coverage — COMPLETE (2026-08-22)
 **Dependencies:** P4.
 **Objective:** Every significant business event auditable — who, what, when.
+
+Swept every P4-domain write RPC and status-guard trigger against `log_audit_event()`
+calls, read live from `pg_proc`. Coverage was already systematic everywhere a `status`
+column changes — `guard_ticket_status_transition()`, `guard_delivery_transition()` and
+`guard_production_batch_transition()` all log unconditionally on every legal transition —
+and everywhere a direct-write RPC exists (`adjust_stock`, `record_payment`,
+`record_refund`, the three organization/invite RPCs). Two writes fell through because
+neither touches a guarded `status` column: `archive_ticket()` (sets `archived_at` directly)
+and `update_delivery_details()` (corrects address/phone/schedule). Both now call
+`log_audit_event()` — the latter only when a value actually changed, matching
+`adjust_stock`'s no-op convention.
+
+**Two pre-existing, unrelated live defects surfaced and fixed while verifying this, not
+introduced by it** — same class as `complete_ticket()`'s `reference_type` typo (b3cce752):
+- `archive_ticket()` wrote `sync_changes.operation_type = 'ARCHIVE'`, which
+  `sync_changes_operation_type_check` has never allowed (only
+  `CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION`) — every real call has always
+  raised `23514` before reaching a return. Fixed to `'UPDATE'`.
+- The initial `log_audit_event()` calls used custom `action` strings (`'archived'`,
+  `'details_updated'`); `audit_log_action_check` only allows
+  `insert/update/delete/status_change`. Both changed to `'update'`.
+
+**Verified live**, not assumed: `update_delivery_details()`'s path end-to-end through the
+signed-in smoke suite (one audit row on a real change, none on the DB-level no-op).
+`archive_ticket()`'s success path could not be smoke-tested the same way —
+`tickets.archive` is granted only to admin/branch_manager (read from `role_permissions`),
+and the smoke user is an owner, the same reachability gap already noted for
+`complete_ticket()`'s full lifecycle walk — so it was proven instead in a rolled-back
+transaction with simulated admin JWT claims (the technique BLOCKER-015/016 established):
+a real `archive_ticket()` call, correct `sync_changes` row, correct `audit_log` row, all
+discarded by the rollback. The smoke suite still asserts what an owner actually can prove:
+the refusal.
 
 ## P6.5 · Error handling & observability — NOT_STARTED
 **Dependencies:** P6.1.
