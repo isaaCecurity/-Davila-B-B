@@ -2,9 +2,18 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/sales_read_rls.sql
 --
--- EXECUTED 2026-08-15 against project tvfyxpafbpnkneujcnvr (BLOCKER-011 resolved).
--- See IMPLEMENTATION_LOG.md for the run and for the four schema corrections S2/S3/S12
--- forced on the read layer.
+-- The 2026-08-15 header here previously claimed "EXECUTED... BLOCKER-011 resolved", but
+-- that run (see IMPLEMENTATION_LOG.md) only covered a partial, differently-labeled subset
+-- (S1/S3/S4/S4b/S5/S6/S8/S12/S19 structural, plus S13c/S13d/S16b/S16c/S18c/S20 customer-only
+-- RLS) against an earlier version of this file. The S1-S18 suite as committed here — in
+-- particular every ticket/ticket_items RLS assertion (S13-S18) and the S9-S11 lifecycle
+-- checks — had never actually run.
+--
+-- EXECUTED (this form) 2026-08-23 against project tvfyxpafbpnkneujcnvr: 27/27 passed, after
+-- fixing a genuine fixture bug (the org-B ticket's creator, profile ...0002, had no
+-- user_roles row in org B — guard_order_actor_and_assignment() correctly rejected the
+-- INSERT) and after S10 surfaced and drove the fix of a real product defect: see
+-- IMPLEMENTATION_LOG.md 2026-08-23 for both.
 --
 -- Same conventions as tests/sql/catalog_read_rls.sql and inventory_read_rls.sql: no psql
 -- meta-commands, every assertion records into a temp table rather than raising, verdict
@@ -55,9 +64,15 @@ ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
   tenant_id=EXCLUDED.tenant_id, active_tenant_id=EXCLUDED.active_tenant_id;
 
 -- branch_manager = ...0003, owner = ...0001 (live roles table).
+-- The org-B row for ...0002 exists because the org-B ticket fixture below sets that
+-- profile as created_by with tenant_id = org B: guard_order_actor_and_assignment()
+-- requires the creator to hold a user_roles row in the ticket's own tenant (the
+-- system supports multi-org membership by design), and rejects the INSERT outright
+-- otherwise. Found live 2026-08-23 running this suite for the first time end-to-end.
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
   ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003','ea000000-0000-4000-8000-0000000000a1'),
-  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
+  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL),
+  ('e0000000-0000-4000-8000-0000000000b1','e1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
 ON CONFLICT DO NOTHING;
 
 -- THE fixture that makes S13 meaningful: assigned to A1, NOT to A2.

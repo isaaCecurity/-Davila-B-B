@@ -1,5 +1,26 @@
 # BakeFlow — Current Task
 
+## ✅ P4.4 sales read-path suite executed for the first time — real defect found and fixed (2026-08-23)
+
+`tests/sql/sales_read_rls.sql` (S1–S18) had never actually run despite its own header
+claiming otherwise (that claim traced to a differently-labeled partial run of an earlier
+file version — corrected). Running it live surfaced a genuine, if not currently
+exploitable, financial-integrity gap: `tickets_guard_status_transition` was defined
+`BEFORE UPDATE OF status` only, so an UPDATE touching `subtotal_amount` without also
+touching `status` silently bypassed the money-freeze logic the trigger's own body already
+implemented. Not reachable via any current authenticated/anon path (no UPDATE grant on
+`tickets`; `update_ticket()`, the only writer, always includes `status`), but fixed
+regardless — migration `widen_tickets_guard_status_transition_to_cover_subtotal_amount`
+widens the trigger to `UPDATE OF status, subtotal_amount`. Re-verified live: the freeze
+now correctly fires, and a negative control confirms the trigger isn't over-firing on
+unrelated columns. Also fixed a fixture bug (unrelated to the defect) blocking the first
+run: the org-B ticket's creator profile had no `user_roles` row in org B.
+
+Suite now passes 27/27. **P4.4a/b is COMPLETE**, not just IMPLEMENTED. Full trace:
+`IMPLEMENTATION_LOG.md` 2026-08-23, `BACKEND_ROADMAP.md` P4.4.
+
+---
+
 ## ✅ Security review of P6.6 + two follow-ups resolved (2026-08-23)
 
 A security review of P6.6's changes found no exploitable vulnerability (rate limiter and

@@ -2209,3 +2209,96 @@ npm run typecheck --workspace apps/mobile              -> exit 0
 npm run lint --workspace apps/mobile                   -> exit 0
 .venv/Scripts/python.exe -m pytest -q                  -> 12 passed
 ```
+
+---
+
+## 2026-08-23 · `tests/sql/sales_read_rls.sql` executed for the first time — real defect found and fixed
+
+**Scope:** the standing Goal Mode directive's next unblocked, well-scoped item. `BACKEND_ROADMAP.md`'s
+own Current State said this suite "has never been executed... a small remaining task, not a
+blocker." The suite's own file header contradicted that, claiming "EXECUTED 2026-08-15... See
+IMPLEMENTATION_LOG.md for the run." Checked which was true before doing anything else: the
+2026-08-15 entry above (§"Live verification pass") ran only 12 structural assertions
+(S1/S3/S4/S4b/S5/S6/S8/S12a-d/S19) and 6 customers-only RLS assertions (S13c/S13d/S16b/S16c/
+S18c/S20) — test IDs that don't even match the committed S1-S18 file, meaning that was a
+different, earlier version of the suite. The file as actually committed — all of S9-S18, i.e.
+every ticket/ticket_items RLS assertion and the lifecycle-freeze checks — had never run. The
+roadmap was right; the file's own header was wrong.
+
+### First run: blocked by a fixture bug, not a product defect
+
+`INSERT INTO tickets` for the org-B fixture ticket failed live: `P0001 invalid order creator
+{"code":"insufficient_role"}` from `guard_order_actor_and_assignment()`. Read the trigger body
+live (`pg_get_functiondef`): it requires the ticket's `created_by` to hold a `user_roles` row
+scoped to the ticket's own `tenant_id`. The fixture's org-B ticket used profile `...0002` (the
+org-A owner test user) as creator but never gave that profile a `user_roles` row in org B. Fixed
+by adding one — the system supports multi-org profile membership by design (P3), so this isn't a
+workaround, it's the fixture doing what a real multi-org user's data would look like.
+
+### Second run: 26/27 passed. S10 failed — a real product defect
+
+S10 ("`subtotal_amount` is frozen once a ticket leaves `draft`") failed: a direct
+`UPDATE tickets SET subtotal_amount = 1.0000` on a `confirmed` ticket raised no exception.
+Investigated live rather than assuming the test was stale, since this is a financial-integrity
+invariant:
+- `pg_trigger` showed `tickets_guard_status_transition` defined as
+  `BEFORE UPDATE OF status ON tickets` — meaning it **only fires when an UPDATE's SET list
+  includes the `status` column**, regardless of whether the value actually changes.
+- `pg_get_functiondef(guard_ticket_status_transition)` confirmed the freeze logic is real,
+  correct, and already documented in the function's own comment ("Once a ticket leaves draft,
+  subtotal_amount is the authoritative financial input and must not change") — it was added by
+  the `drop_prevent_submitted_ticket_update_and_harden_guard` migration on 2026-08-14 per this
+  log's own earlier entry. The bug is purely mechanical: an UPDATE that touches only
+  `subtotal_amount` never invokes the trigger that guards it.
+- Checked exploitability before treating this as urgent: `information_schema.role_table_grants`
+  confirms `authenticated` holds `INSERT, SELECT` only on `tickets` — no `UPDATE` at all. The
+  only writer is `update_ticket()` (`pg_get_functiondef`), which always includes
+  `status = COALESCE(p_status, status)` in its SET clause on every call and has no
+  `subtotal_amount` parameter at all. So the gap is **not reachable through any current
+  authenticated/anon path** — it's a latent hardening gap against a future or service-role write
+  path, not a live exploit. Still a genuine defect against the trigger's own documented intent,
+  and a one-line mechanical fix, not a business-rule invention — fixed rather than logged as
+  debt.
+
+**Fix:** migration `widen_tickets_guard_status_transition_to_cover_subtotal_amount` — dropped and
+recreated the trigger as `BEFORE UPDATE OF status, subtotal_amount`. Re-verified live in a
+rolled-back transaction: a direct `subtotal_amount`-only UPDATE on a non-draft ticket is now
+correctly refused (`subtotal_amount is frozen once a ticket leaves draft`), and a negative
+control (an UPDATE touching only `fulfilment_type`) confirms the trigger isn't now over-firing.
+
+### Third run: 27/27 passed
+
+Full suite green. **P4.4a/b (sales read path) is now COMPLETE**, not just IMPLEMENTED.
+
+### Documentation corrected in the same pass
+
+- `tests/sql/sales_read_rls.sql`: header no longer claims a false 2026-08-15 execution;
+  documents the real 2026-08-23 run, the fixture bug, and the product defect. Fixture itself
+  fixed (the added `user_roles` row for `...0002` in org B).
+- `BACKEND_ROADMAP.md`: Current State summary and the P4.4 section rewritten from
+  IMPLEMENTED/NOT-EXECUTED to COMPLETE, with the defect writeup; legacy crosswalk row for B8
+  updated.
+
+**Executed evidence:**
+```
+mcp__supabase__execute_sql (full S1-S18 fixture + assertions, rolled back)
+                                            -> ERROR P0001 invalid order creator (fixture bug)
+mcp__supabase__execute_sql (pg_get_functiondef guard_order_actor_and_assignment)
+                                            -> confirmed: requires user_roles row in ticket's tenant
+mcp__supabase__execute_sql (fixture fixed, full suite re-run, rolled back)
+                                            -> 26/27 passed; S10 failed (no exception raised)
+mcp__supabase__execute_sql (pg_trigger for tickets)
+                                            -> tickets_guard_status_transition: BEFORE UPDATE OF status (only)
+mcp__supabase__execute_sql (pg_get_functiondef guard_ticket_status_transition)
+                                            -> freeze logic present and correctly written, just unreachable
+mcp__supabase__execute_sql (role_table_grants for tickets, authenticated)
+                                            -> INSERT, SELECT only -- no live exploit path
+mcp__supabase__execute_sql (pg_get_functiondef update_ticket)
+                                            -> status always in SET clause; no subtotal_amount param
+mcp__supabase__apply_migration widen_tickets_guard_status_transition_to_cover_subtotal_amount
+                                            -> success
+mcp__supabase__execute_sql (fix + negative control, rolled back)
+                                            -> both passed: freeze now enforced; unrelated column UPDATE unaffected
+mcp__supabase__execute_sql (full S1-S18 suite, corrected fixture, rolled back)
+                                            -> 27/27 passed
+```

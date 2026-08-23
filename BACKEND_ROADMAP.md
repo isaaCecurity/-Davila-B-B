@@ -27,8 +27,10 @@ P3.1–P3.6, P3.10.
 
 **Read paths, per domain:** P4.1a catalog COMPLETE; P4.2a inventory COMPLETE; P4.3
 production and P4.5 delivery IMPLEMENTED and live-verified (2026-08-16, 2026-08-17); P4.4a/b
-sales IMPLEMENTED, but its RLS suite (`tests/sql/sales_read_rls.sql`, S1–S18) has never
-been executed — a small remaining task, not a blocker.
+sales **COMPLETE** — its RLS suite (`tests/sql/sales_read_rls.sql`, S1–S18) ran live
+2026-08-23, 27/27 passed after fixing a fixture bug and one real product defect it
+surfaced (the `subtotal_amount` freeze trigger only fired on `UPDATE OF status`, silently
+skippable by any update that didn't touch `status` — see the P4.4 section below).
 
 **Write paths are no longer uniformly blocked** — this line originally said "every write
 path is BLOCKED"; that stopped being true over the following week without this section
@@ -93,7 +95,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B5 Per-entity apply | P3.7 | BLOCKED (BLOCKER-006; downstream of P4.1/P4.4) |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
-| B8 Tickets / sales | P4.4 | READ PATH IMPLEMENTED / WRITE PATH RPCs COMPLETE |
+| B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
 | B9 Payments & cash | P5 | BLOCKED (BLOCKER-003) |
 | B10 Financial reporting | P5.7 | BLOCKED (BLOCKER-003) |
 
@@ -437,14 +439,17 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 **Tests:** state-machine transitions; ingredient consumption correctness.
 **Completion gate:** batch completion moves stock atomically.
 
-## P4.4 · Sales / Tickets — READ PATH IMPLEMENTED (P4.4a + P4.4b) / write path RPCs COMPLETE, no test suite
+## P4.4 · Sales / Tickets — COMPLETE (read path) / write path RPCs COMPLETE, no write-path test suite
 **Dependencies:** P4.1.
 **Schema:** `customers`, `tickets`, `ticket_items`.
 **Business rules:** 10-state lifecycle; ticket money frozen once it leaves `draft`; corrections via `correction_of_ticket_id`, never edits.
 
 **Unblocked 2026-08-14.** BLOCKER-005 is **RESOLVED** — `prevent_submitted_ticket_update()` was dropped, every status is reachable, and `guard_ticket_status_transition()` now freezes `subtotal_amount`. The read path's premise is therefore sound and P4.4a/P4.4b were implemented in one milestone: `packages/types/sales.ts`, `packages/validation/sales.ts`, `packages/api/queries/sales.ts`, nine read functions, zero migrations.
 
-**Status is IMPLEMENTED, not COMPLETE.** `tests/sql/sales_read_rls.sql` (S1–S18) is written and committed but **NOT EXECUTED**. (BLOCKER-011, the account-access issue this was originally attributed to, was resolved 2026-08-15 for other suites — this specific one has just never been run since; re-running it is a small remaining task, not a blocker.)
+**`tests/sql/sales_read_rls.sql` (S1–S18) executed live 2026-08-23 — 27/27 passed. P4.4a/b is COMPLETE.** Its own header previously claimed "EXECUTED 2026-08-15", which was wrong: that date's run (`IMPLEMENTATION_LOG.md`) covered only a partial, differently-labeled subset of an earlier version of this file (structural + customers-only RLS), never the S13–S18 ticket/ticket_items assertions or the S9–S11 lifecycle checks. Running the suite as actually committed surfaced two things, both fixed the same pass:
+
+- **A fixture bug**, not a product defect: the org-B ticket's `created_by` (profile `...0002`) had no `user_roles` row scoped to org B, and `guard_order_actor_and_assignment()` correctly rejected the INSERT. Fixed by adding that membership row — the system supports multi-org profiles by design.
+- **A real product defect, S10 caught it**: `tickets_guard_status_transition` was defined `BEFORE UPDATE OF status` only, so an UPDATE touching `subtotal_amount` without also including `status` in its SET list never invoked the trigger at all — silently bypassing the money-freeze logic the trigger's own body already implemented and documented ("Once a ticket leaves draft, subtotal_amount... must not change"). Not currently reachable by any authenticated/anon path — `authenticated` holds no UPDATE grant on `tickets`, and `update_ticket()`, the only writer, always includes `status` in its SET clause — but a latent gap against any future or service-role write path. Fixed live via migration `widen_tickets_guard_status_transition_to_cover_subtotal_amount` (2026-08-23): trigger now fires on `UPDATE OF status, subtotal_amount`. Re-verified: a direct `subtotal_amount`-only UPDATE is now correctly refused, and a negative control (an unrelated column UPDATE) confirms the trigger isn't over-firing.
 
 **Write path — all nine lifecycle RPCs now exist, are role-correct, and are proven live, as of 2026-08-22.** Re-verified live while auditing this milestone for staleness (the same pass that closed BLOCKER-001 and BLOCKER-009), finding the roadmap badly out of date on this axis — not just BLOCKER-009, but the RPC inventory itself:
 
@@ -455,7 +460,7 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 
 **What's genuinely still open**, down from four grounds to one: `discount_amount`/`tax_amount` have no approved computation rules (**BLOCKER-003**) — this blocks only *setting* those two fields with confidence, not ticket lifecycle progression itself, since no transition requires them. There is still no write-path SQL test suite analogous to `catalog_read_rls.sql`/`inventory_write_rls.sql` — the RPCs are proven correct by the rolled-back-transaction technique and manual review, not by a committed, repeatable suite. Writing one is real remaining work, not a blocker.
 
-**Tests:** S1–S18 (read path, not yet executed — see above) cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary. No equivalent write-path suite exists yet.
+**Tests:** S1–S18 (read path, executed 2026-08-23 — see above) cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary. No equivalent write-path suite exists yet.
 
 **Note on this roadmap's own staleness:** the "Current State" summary at the top of this file (dated 2026-08-14, "Every write path is BLOCKED") predates and now contradicts this section, P4.2b, P6.x, and the P9.x mobile milestones. Not rewritten in this pass — flagged here rather than silently left to mislead a top-to-bottom reader.
 
