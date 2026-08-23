@@ -19,37 +19,61 @@ tracked separately and must never be conflated:
 
 ---
 
-## Current State — updated 2026-08-14
+## Current State — updated 2026-08-22
 
-**Completed phases:** P0 (partial — see P0.5), P1, P2, P3.1–P3.6
-**Read paths IMPLEMENTED across all five core domains:** P4.1a catalog, P4.2a inventory,
-P4.3a production, P4.4a/b sales, P4.5 delivery
-**Every write path is BLOCKED**, and every remaining backend milestone with it — see the
-table under P8.0 for which blocker stops each one.
+**Completed phases:** P0 (partial — P0.7's frontend testing infrastructure is
+NOT_STARTED; P0.5, the piece this line used to point at, is itself now COMPLETE), P1, P2,
+P3.1–P3.6, P3.10.
 
-**🚦 P8.0 IS OPEN. The current recommended next task is P8.1 — the first frontend vertical
-slice** ("sign in → pick organization → see catalog"). Its full prerequisite set is
-**P2 + P4.1 (read path)**, and both are met. No further backend milestone can start without
-a human decision or restored database access, so backend expansion pauses here by design
-rather than by exhaustion of ideas.
+**Read paths, per domain:** P4.1a catalog COMPLETE; P4.2a inventory COMPLETE; P4.3
+production and P4.5 delivery IMPLEMENTED and live-verified (2026-08-16, 2026-08-17); P4.4a/b
+sales IMPLEMENTED, but its RLS suite (`tests/sql/sales_read_rls.sql`, S1–S18) has never
+been executed — a small remaining task, not a blocker.
 
-**BLOCKER-011 RESOLVED 2026-08-15.** The suites ran. P4.2b and P4.4a are now COMPLETE, and
-six schema-drift defects in already-committed code were found and fixed against the live
-contract.
+**Write paths are no longer uniformly blocked** — this line originally said "every write
+path is BLOCKED"; that stopped being true over the following week without this section
+being updated. As of this pass:
+- P4.1b catalog write: **BLOCKED** — BLOCKER-010(b, c), folding into BLOCKER-003.
+- P4.2b inventory write: **COMPLETE** (2026-08-15).
+- P4.3 production write: this milestone's own section still reads NOT_STARTED, but the
+  P9.5 mobile slice independently reports `complete_production_batch()`/
+  `fail_production_batch()` live-verified and shipped (2026-08-21). **Not reconciled in
+  this pass** — flagged, not resolved, since re-auditing P4.3 was out of this task's scope.
+- P4.4 ticket write: **RPCs COMPLETE**, live-verified 2026-08-22 — all ten lifecycle
+  transitions are reachable (`confirm_ticket`/`cancel_ticket`/`complete_ticket`/
+  `archive_ticket`/`update_ticket`). Only `discount_amount`/`tax_amount` remain gated on
+  BLOCKER-003; there is no dedicated write-path SQL test suite yet.
+- P4.5 delivery write: this milestone's own section still reads BLOCKED, but the P9.6
+  mobile slice independently reports `transition_delivery()`/`update_delivery_details()`
+  live-verified and shipped (2026-08-21). **Not reconciled in this pass**, same caveat as
+  P4.3 above.
+- P5 (all financial milestones): **BLOCKED** — BLOCKER-003, unchanged.
+- P6 platform services: P6.1, P6.2, P6.4, P6.5 **COMPLETE**, all live-verified
+  2026-08-20–22. P6.3, P6.7 DEFERRED. P6.6 NOT_STARTED.
 
-**✅ BLOCKER-012 and BLOCKER-015 both RESOLVED 2026-08-16 — ticket creation now works.**
-Two defects sat in series: `document_sequences_doc_type_check` allowed `'order'` while the
-functions emitted `'ticket'` (012), and behind it `guard_order_actor_and_assignment()`
-resolved the actor's membership through `profiles.tenant_id`, the user's *home* organization,
-rather than through `user_roles` (015). Both are fixed live and proven by a real signed-in
-INSERT: the smoke suite is **66/66** and mints tickets in **both** organizations the smoke
-user belongs to. The sales, delivery and ticket-sync paths are open on this axis.
+**Open blockers requiring a human decision, as of 2026-08-22:** BLOCKER-003 (financial
+rules — unspecified tax/discount/rounding/refund logic; the largest open item, gating all
+of P5 and the last piece of P4.1b/P4.4), BLOCKER-004 (EAS project ID is a placeholder),
+BLOCKER-006 (no per-entity sync conflict strategy, gating P3.7), BLOCKER-007
+(documentation-conflict housekeeping), BLOCKER-010(b, c) (folds into BLOCKER-003),
+BLOCKER-013 (an `ARCHITECTURE_DECISIONS.md` amendment; the implementation itself is
+already done). Every other blocker previously summarized on this page — BLOCKER-001, 002,
+005, 008, 009, 011, 012, 014, 015, 016, 017 — is **RESOLVED**; see `BLOCKERS.md` for the
+evidence behind each.
+
+**🚦 P8.0 remains open** — its stated prerequisite set (**P2 + P4.1 read path**) is met, so
+**P8.1**, the first frontend vertical slice, was and is available to start. In practice,
+backend work continued well past this line rather than pausing here: P6.x and the P9.x
+mobile slices (P9.4–P9.6) are substantially built and live-verified. This line's original
+"no further backend milestone can start" framing is superseded by everything above it in
+this update and by the milestone sections later in this file.
 
 > **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
 > gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
 > own dependency line and created a cycle in which neither milestone could start.
 > **P4.1 is P3.7's prerequisite, not its dependent.** P4.1 may proceed while P3.7 stays
-> blocked on BLOCKER-005/006/009.
+> blocked on BLOCKER-006 (BLOCKER-005 and BLOCKER-009, the other two originally cited
+> here, are both RESOLVED — see above).
 
 > **Financial scoping (corrected 2026-08-11).** P4.1's **read** path touches no
 > unresolved financial rule. Its **write** path does: `product_variants.unit_price` is
@@ -66,12 +90,12 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | BLOCKED (downstream of P4.1/P4.4) |
-| B6 Invitation delivery | P6.2 | BLOCKED |
-| B7 Core domain services | P4 | P4.1a IN_PROGRESS / P4.1b BLOCKED |
-| B8 Tickets / sales | P4.4 | NOT_STARTED |
-| B9 Payments & cash | P5 | BLOCKED |
-| B10 Financial reporting | P5.7 | BLOCKED |
+| B5 Per-entity apply | P3.7 | BLOCKED (BLOCKER-006; downstream of P4.1/P4.4) |
+| B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
+| B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
+| B8 Tickets / sales | P4.4 | READ PATH IMPLEMENTED / WRITE PATH RPCs COMPLETE |
+| B9 Payments & cash | P5 | BLOCKED (BLOCKER-003) |
+| B10 Financial reporting | P5.7 | BLOCKED (BLOCKER-003) |
 
 ---
 
