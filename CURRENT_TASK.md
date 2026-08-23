@@ -1,5 +1,61 @@
 # BakeFlow — Current Task
 
+## ✅ P4.4 write path — all lifecycle RPCs proven live; a real authorization defect fixed (2026-08-22)
+
+Continuing the staleness audit that closed BLOCKER-001 and BLOCKER-009, checked
+whether "the lifecycle RPC signatures have not been read from the live database" (the
+roadmap's stated reason P4.4's write path stayed BLOCKED) was itself still true. It
+wasn't: `pg_proc` already has `cancel_ticket`, `complete_ticket`, `confirm_ticket`,
+`archive_ticket`, and `update_ticket` — the last of which, called with `p_status`, is the
+existing path for the five hops with no dedicated RPC (`draft→submitted`,
+`confirmed→scheduled`, `scheduled→in_production`, `in_production→ready`,
+`ready→delivered`). Both `API-CONTRACT.md` and `STATE-MACHINES.md` already suspected this
+("worth resolving explicitly") but nobody had confirmed it live.
+
+**Confirming it surfaced a real, load-bearing authorization defect.** `update_ticket()`
+carried its own role gate — only owner/admin/branch_manager or cashier could call it, and
+cashiers were blocked from touching `p_status` at all. That silently contradicted
+`guard_ticket_status_transition()`'s actual per-status actor list (read live from
+`pg_proc`), which is supposed to be the single source of truth here — exactly as it
+already is for `cancel_ticket`/`confirm_ticket`/`complete_ticket`, none of which
+re-implement a role check of their own. In practice: **cashiers could never advance a
+ticket past `draft`, and bakers could never call this RPC at all**, for five of the ten
+transitions in the state machine.
+
+**Fixed:** migration `fix_update_ticket_status_role_gate_matches_guard_trigger` —
+`update_ticket()` no longer gates `p_status` itself; it defers to the trigger, matching
+its siblings. Pricing/assignment/cancellation stay manager-only inside the RPC; bakers
+calling it are restricted to status-only edits (never customer/fulfilment/scheduling
+fields).
+
+**Verified live**, not assumed: a rolled-back transaction with simulated cashier/baker/
+owner JWTs — 12 checks, all passing after two test-assertion corrections (not real
+defects — a fixture with zero subtotal tripped a discount CHECK constraint, and one
+refusal was correctly caught by an earlier check than expected). Cashier now advances
+`draft→submitted→confirmed→scheduled`; baker now advances
+`scheduled→in_production→ready`; cross-role refusals (cashier into production, baker
+editing other fields, baker cancelling) all still correctly blocked; owner/manager
+behavior unchanged, including setting `discount_amount` alongside a status change. Full
+signed-in smoke suite and `pytest -q` both green afterward.
+
+**Documentation corrected:** `docs/STATE-MACHINES.md` §1 (new "defect 3" note, plus the
+transition table itself), `docs/API-CONTRACT.md` (five stale ⚠️ notes on
+`confirm_ticket`/`cancel_ticket`/`complete_ticket`/`update_ticket` describing defects
+already resolved 2026-08-14, and the "no submit_ticket RPC... worth resolving explicitly"
+note), `BACKEND_ROADMAP.md` P4.4 (write path reframed: down to one real remaining ground,
+BLOCKER-003, from four). Also caught and fixed two more stale lines in
+`docs/API-CONTRACT.md` while in the file: `create_organization_invite`'s row and §7's
+function-status table both still said invitation delivery wasn't deployed, contradicting
+this session's own earlier BLOCKER-001 resolution.
+
+**Not done in this pass, flagged rather than silently left:** the roadmap's own "Current
+State" summary (dated 2026-08-14) still says "every write path is BLOCKED," which this
+section, P4.2b, P6.x and P9.x all now contradict — a larger rewrite than this task's
+scope. There is still no write-path SQL test suite for tickets (unlike catalog/inventory);
+`tests/sql/sales_read_rls.sql` (S1–S18, read path) also remains unexecuted.
+
+---
+
 ## ✅ BLOCKER-009 RESOLVED — tickets reach a real terminal state; two stale roadmap facts corrected (2026-08-22)
 
 While auditing P4.4's write-path status for staleness (same pass as BLOCKER-001), found

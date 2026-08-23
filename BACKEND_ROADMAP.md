@@ -413,27 +413,27 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 **Tests:** state-machine transitions; ingredient consumption correctness.
 **Completion gate:** batch completion moves stock atomically.
 
-## P4.4 · Sales / Tickets — READ PATH IMPLEMENTED (P4.4a + P4.4b) / write path BLOCKED
+## P4.4 · Sales / Tickets — READ PATH IMPLEMENTED (P4.4a + P4.4b) / write path RPCs COMPLETE, no test suite
 **Dependencies:** P4.1.
 **Schema:** `customers`, `tickets`, `ticket_items`.
 **Business rules:** 10-state lifecycle; ticket money frozen once it leaves `draft`; corrections via `correction_of_ticket_id`, never edits.
 
 **Unblocked 2026-08-14.** BLOCKER-005 is **RESOLVED** — `prevent_submitted_ticket_update()` was dropped, every status is reachable, and `guard_ticket_status_transition()` now freezes `subtotal_amount`. The read path's premise is therefore sound and P4.4a/P4.4b were implemented in one milestone: `packages/types/sales.ts`, `packages/validation/sales.ts`, `packages/api/queries/sales.ts`, nine read functions, zero migrations.
 
-**Status is IMPLEMENTED, not COMPLETE.** `tests/sql/sales_read_rls.sql` (S1–S18) is written and committed but **NOT EXECUTED** — see **BLOCKER-011**, the authorized Supabase account cannot reach project `tvfyxpafbpnkneujcnvr`.
+**Status is IMPLEMENTED, not COMPLETE.** `tests/sql/sales_read_rls.sql` (S1–S18) is written and committed but **NOT EXECUTED**. (BLOCKER-011, the account-access issue this was originally attributed to, was resolved 2026-08-15 for other suites — this specific one has just never been run since; re-running it is a small remaining task, not a blocker.)
 
-**Write path stays BLOCKED**, on two remaining grounds — down from four as of 2026-08-22.
-**BLOCKER-009 is now RESOLVED**: re-verified live while auditing this milestone for
-staleness, `cancelled → archived` turned out to already be a live-permitted transition
-(`guard_ticket_status_transition()`, read from `pg_proc`) as a side effect of BLOCKER-005's
-2026-08-14 fix, and the real working terminal-disposition path — `archive_ticket()`'s
-metadata fields, independent of `status` entirely — was already proven live during P6.4.
-See `BLOCKERS.md` §BLOCKER-009 and `TECHNICAL_DEBT.md` TD-016 for the (harmless, dead-code)
-nuance this surfaced. What remains open: the lifecycle RPC signatures for `draft →
-submitted` and the other hops still need a dedicated RPC — no RPC exists for them at all
-(`API-CONTRACT.md` §2, `STATE-MACHINES.md` §1) — and `discount_amount`/`tax_amount` have no
-approved rules (**BLOCKER-003**).
-**Tests:** S1–S18 cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary.
+**Write path — all nine lifecycle RPCs now exist, are role-correct, and are proven live, as of 2026-08-22.** Re-verified live while auditing this milestone for staleness (the same pass that closed BLOCKER-001 and BLOCKER-009), finding the roadmap badly out of date on this axis — not just BLOCKER-009, but the RPC inventory itself:
+
+- **BLOCKER-009 resolved**: `cancelled → archived` is a live-permitted transition (`guard_ticket_status_transition()`, read from `pg_proc`) as a side effect of BLOCKER-005's 2026-08-14 fix, and the real working terminal-disposition path — `archive_ticket()`'s metadata fields, independent of `status` entirely — was already proven live during P6.4. See `BLOCKERS.md` §BLOCKER-009 and `TECHNICAL_DEBT.md` TD-016 for the (harmless, dead-code) nuance this surfaced.
+- **"No RPC exists for `draft → submitted` and the other hops" was itself stale.** `pg_proc` shows `cancel_ticket`, `complete_ticket`, `confirm_ticket`, `archive_ticket`, and `update_ticket` all already live. `update_ticket(p_status := ...)` is the confirmed, working path for the five hops with no dedicated RPC (`draft→submitted`, `confirmed→scheduled`, `scheduled→in_production`, `in_production→ready`, `ready→delivered`) — `API-CONTRACT.md` and `STATE-MACHINES.md` both already suspected this ("the de facto path... worth resolving explicitly") but it was never confirmed live or corrected.
+- **A real defect found and fixed doing that confirmation**: `update_ticket()` carried its own role gate — only `owner/admin/branch_manager`/`cashier` could call it, and cashiers were blocked from touching `p_status` at all — that silently contradicted `guard_ticket_status_transition()`'s actual per-status actor list (the trigger, not the RPC, is meant to be the single source of truth here, exactly as it already is for `cancel_ticket`/`confirm_ticket`/`complete_ticket`). In practice: **cashiers could never advance a ticket past `draft`, and bakers could never call this RPC at all** — for five of the ten transitions. Migration `fix_update_ticket_status_role_gate_matches_guard_trigger` (2026-08-22) removes the RPC's own status-role duplication and defers to the trigger, while keeping pricing/assignment/cancellation manager-only and bakers scoped to status-only edits. Full detail: `docs/STATE-MACHINES.md` §1, defect 3.
+- **Verified live**, not assumed: a rolled-back transaction with simulated cashier/baker/owner JWTs — cashier now advances `draft→submitted→confirmed→scheduled`; baker now advances `scheduled→in_production→ready`; cashier attempting `scheduled→in_production` is still correctly refused; baker attempting to also edit `customer_id` or to cancel is still correctly refused; owner/manager behavior (including setting `discount_amount` alongside a status change) is unchanged. Full signed-in smoke suite (`node scripts/smoke-signed-in.mjs`) and `pytest -q` both green afterward — no regression.
+
+**What's genuinely still open**, down from four grounds to one: `discount_amount`/`tax_amount` have no approved computation rules (**BLOCKER-003**) — this blocks only *setting* those two fields with confidence, not ticket lifecycle progression itself, since no transition requires them. There is still no write-path SQL test suite analogous to `catalog_read_rls.sql`/`inventory_write_rls.sql` — the RPCs are proven correct by the rolled-back-transaction technique and manual review, not by a committed, repeatable suite. Writing one is real remaining work, not a blocker.
+
+**Tests:** S1–S18 (read path, not yet executed — see above) cover RLS force, branch isolation on `tickets`, child-through-parent isolation on `ticket_items`, soft-delete invisibility, money transport, lifecycle reachability, the `subtotal_amount` freeze, and the `ready` item-lock boundary. No equivalent write-path suite exists yet.
+
+**Note on this roadmap's own staleness:** the "Current State" summary at the top of this file (dated 2026-08-14, "Every write path is BLOCKED") predates and now contradicts this section, P4.2b, P6.x, and the P9.x mobile milestones. Not rewritten in this pass — flagged here rather than silently left to mislead a top-to-bottom reader.
 
 ## P4.5 · Delivery — READ PATH IMPLEMENTED / write path BLOCKED
 **Dependencies:** P4.4 (read path implemented 2026-08-14).

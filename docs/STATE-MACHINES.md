@@ -26,12 +26,12 @@ draft ──► submitted ──► confirmed ──► scheduled ──► in_p
 | From | To | Who | Preconditions | Side effects |
 |---|---|---|---|---|
 | — | draft | owner, admin, branch_manager, cashier | — | `ticket_number` assigned by `assign_order_number()` |
-| draft | submitted | owner, admin, branch_manager, cashier | — | No dedicated RPC exists for this hop — see `API-CONTRACT.md` §2 |
+| draft | submitted | owner, admin, branch_manager, cashier | — | No dedicated `submit_ticket` RPC — reached via `update_ticket(p_status := 'submitted')`, verified live 2026-08-22 (see note below) |
 | submitted | confirmed | owner, admin, branch_manager, cashier | ≥1 ticket item; totals computed | Invoice issued. **Items do not freeze here** — see Immutability below |
-| confirmed | scheduled | owner, admin, branch_manager, cashier | — | — |
-| scheduled | in_production | owner, admin, branch_manager, baker | A production batch exists for the ticket | — |
-| in_production | ready | owner, admin, branch_manager, baker | All linked batches completed or failed | Finished stock available |
-| ready | delivered | owner, admin, branch_manager, cashier | `fulfilment_type = 'pickup'`, **or** the linked `deliveries` row for this ticket has `status = 'delivered'` | — |
+| confirmed | scheduled | owner, admin, branch_manager, cashier | — | Via `update_ticket(p_status := 'scheduled')` |
+| scheduled | in_production | owner, admin, branch_manager, baker | A production batch exists for the ticket | Via `update_ticket(p_status := 'in_production')` |
+| in_production | ready | owner, admin, branch_manager, baker | All linked batches completed or failed | Via `update_ticket(p_status := 'ready')`. Finished stock available |
+| ready | delivered | owner, admin, branch_manager, cashier | `fulfilment_type = 'pickup'`, **or** the linked `deliveries` row for this ticket has `status = 'delivered'` | Via `update_ticket(p_status := 'delivered')` |
 | delivered | completed | owner, admin, branch_manager, cashier | — | Sale stock movement written |
 | any non-terminal | cancelled | owner, admin, branch_manager | `cancelled_reason` provided; if `amount_paid > 0`, a matching `refunds` total must already exist | Unpaid invoice voided. ("Reserved stock released" was in earlier drafts — **there is no reservation mechanism in the schema**; no table, column, or `stock_movements.reason` implements it. Treat reservations as unspecified, not as an existing behaviour.) |
 | cancelled | archived | owner, admin, branch_manager | — | — |
@@ -64,6 +64,36 @@ So the money and the identity of a submitted ticket are immutable; its operation
 > **Defect 2 — RESOLVED.** `guard_ticket_status_transition()` now freezes `subtotal_amount` the moment a ticket leaves `draft`. Any attempt to change `subtotal_amount` on a non-draft ticket raises `42501` with code `immutable_field`. `total_amount` is `GENERATED ALWAYS AS ((subtotal_amount - discount_amount) + tax_amount) STORED` and cannot be written directly — no separate guard is needed.
 >
 > *Migration applied:* `drop_prevent_submitted_ticket_update_and_harden_guard` — 2026-08-14. Zero rows affected (live DB holds zero tickets).
+
+> ### ✅ Defect 3 resolved — 2026-08-22: `update_ticket()`'s own role gate contradicted this table
+>
+> Defect 1's resolution (above) made every hop in this state machine legal at the trigger
+> level, but `update_ticket()` — the only RPC that reaches five of these hops (`draft →
+> submitted`, `confirmed → scheduled`, `scheduled → in_production`, `in_production →
+> ready`, `ready → delivered`), since none of them has its own dedicated RPC — carried a
+> **coarser, contradicting role gate of its own**: only `owner/admin/branch_manager` or
+> `cashier` could call it at all, and cashiers were blocked from touching `p_status`
+> outright. In practice this meant **cashiers could never advance a ticket past `draft`
+> through this RPC, and bakers could never call it at all** — silently contradicting this
+> table's `cashier` and `baker` columns above, for every non-terminal hop except
+> `submitted → confirmed` (which has its own RPC, `confirm_ticket()`, and was unaffected).
+>
+> Fixed: `update_ticket()` no longer re-implements a per-status role check. It now defers
+> entirely to `guard_ticket_status_transition()` — the single source of truth for the
+> table above — for whether a given (status, role) combination is legal, exactly as
+> `confirm_ticket()`, `cancel_ticket()` and `complete_ticket()` already did. Pricing,
+> assignment, and cancellation fields remain manager-only inside the RPC itself, and a
+> baker calling this RPC may only change `status`, never the other editable fields.
+>
+> Verified live in a rolled-back transaction (simulated cashier and baker JWTs): a cashier
+> now advances `draft → submitted → confirmed → scheduled`; a baker now advances
+> `scheduled → in_production → ready`; a cashier attempting `scheduled → in_production` is
+> still correctly refused (`insufficient_role`, baker/manager only); a baker attempting to
+> also edit `customer_id` or to cancel is still correctly refused; manager behavior,
+> including setting `discount_amount` together with a status change, is unchanged.
+>
+> *Migration applied:* `fix_update_ticket_status_role_gate_matches_guard_trigger` —
+> 2026-08-22.
 
 `guard_ticket_item_mutation()` raises the `order_locked` error code.
 

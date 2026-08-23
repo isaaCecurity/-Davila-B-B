@@ -1946,3 +1946,102 @@ mcp__supabase__execute_sql (pg_trigger, pg_proc, information_schema, pg_constrai
                                              -> all read live, quoted above
 .venv/Scripts/python.exe -m pytest -q        -> 12 passed
 ```
+
+---
+
+## 2026-08-22 — P4.4 write path: all lifecycle RPCs confirmed live; update_ticket() authorization defect found and fixed
+
+Continuing the same staleness audit that closed BLOCKER-001 and BLOCKER-009 earlier today,
+checked the roadmap's remaining stated reason P4.4's write path was BLOCKED: "the
+lifecycle RPC signatures have not been read from the live database."
+
+**Live read:** `select proname, pronargs from pg_proc where proname ilike '%ticket%'` →
+`apply_payment_to_ticket`, `archive_ticket`, `cancel_ticket`, `complete_ticket`,
+`confirm_ticket`, `guard_ticket_item_mutation`, `guard_ticket_status_transition`,
+`recalculate_ticket_totals`, `update_ticket`. Five of the ten state-machine transitions
+have no dedicated RPC (`draft→submitted`, `confirmed→scheduled`, `scheduled→in_production`,
+`in_production→ready`, `ready→delivered`) — but `docs/API-CONTRACT.md` §51-53 and
+`docs/STATE-MACHINES.md` §29 already independently suspected `update_ticket(p_status :=
+...)` was the de facto path for these, unconfirmed. Read `update_ticket()`'s full body via
+`pg_get_functiondef` to check.
+
+**Found:** `update_ticket()`'s live body gated `p_status` changes behind
+`NOT v_manager AND NOT v_cashier` at the top (blocking bakers from calling the function at
+all) and explicitly listed `p_status IS NOT NULL` among the fields cashiers are forbidden
+to touch. This directly contradicts `guard_ticket_status_transition()`'s own live actor
+list (also read via `pg_get_functiondef`), which allows cashier on
+submitted/confirmed/scheduled/delivered/completed and baker on in_production/ready. Since
+`authenticated` has no direct `UPDATE` grant on `tickets` (confirmed via
+`information_schema.role_table_grants`), `update_ticket()` is the *only* way a cashier or
+baker can ever reach these five hops — and this gate silently blocked both, for the entire
+time BLOCKER-005 has been resolved (2026-08-14 onward), unnoticed.
+
+**Read the three sibling RPCs for comparison** (`cancel_ticket`, `confirm_ticket`,
+`complete_ticket`, all via `pg_get_functiondef`): none of them re-implement a role check
+for the status change itself — all three let `guard_ticket_status_transition()` be the
+sole authority. `update_ticket()` was the outlier.
+
+**Fixed** via `mcp__supabase__apply_migration` (`fix_update_ticket_status_role_gate_matches_guard_trigger`):
+removed `p_status` from the cashier-forbidden-fields check; widened the top-level caller
+gate to include baker; added a new check restricting baker calls to status-only edits
+(never customer/fulfilment/due_at); changed the final `UPDATE`'s `status` assignment from
+`CASE WHEN v_manager THEN ... ELSE status END` to an unconditional `COALESCE(p_status,
+status)`, trusting the trigger. Pricing/assignment/cancellation-reason fields remain
+manager-gated exactly as before — untouched.
+
+**Verified live in one rolled-back transaction** (`BEGIN ... ROLLBACK`, never committed):
+created a disposable `branch_assignments` row for the smoke owner's real `auth.uid()` (so
+`has_branch_access()` — which checks that table for non-owner/admin roles — would resolve),
+then simulated cashier/baker/owner JWTs in turn via `set_config('request.jwt.claims', ...)`
+under `SET LOCAL ROLE authenticated`, capturing 12 outcomes in a temp table:
+
+```
+1  cashier draft->submitted                      PASS
+2  cashier submitted->confirmed                   PASS
+3  cashier status+discount refused                PASS (pricing gate still fires)
+4  cashier confirmed->scheduled                    PASS
+5  cashier scheduled->in_production refused        PASS (trigger: baker/manager only)
+6  baker scheduled->in_production                  PASS  <- core of the fix
+7  baker in_production->ready                       PASS
+8  baker customer_id edit refused                   PASS (new scope check)
+9  baker cancel (with reason) refused                PASS (blocked by pricing/cancel gate)
+   baker cancel (no reason) refused                  PASS (blocked by manager-only cancel check)
+10 owner status+discount regression                 PASS (unchanged manager behavior)
+```
+Two initial "failures" were test-assertion mismatches, not defects: test 9's first variant
+hit an earlier, equally-correct refusal path than the exact message string I'd guessed, and
+test 10 initially failed on a fixture artifact (zero-subtotal ticket tripping
+`tickets_discount_not_over_subtotal`, unrelated to the migration) — both re-run correctly
+and confirmed. Every row above reflects the corrected, final result. All fixture rows
+(`branch_assignments`, disposable `tickets`) were discarded by `ROLLBACK` — nothing
+persisted.
+
+**Regression check:** full signed-in smoke suite (`node scripts/smoke-signed-in.mjs`,
+retried once after a transient "fetch failed" sign-in blip, then clean) and
+`.venv/Scripts/python.exe -m pytest -q` both green after the migration.
+
+**Documentation corrected:**
+- `docs/STATE-MACHINES.md` §1 — transition table rows for the five `update_ticket`-served
+  hops now say so explicitly; new "Defect 3 resolved" note alongside the existing two.
+- `docs/API-CONTRACT.md` — five stale notes fixed: `confirm_ticket`/`cancel_ticket`/
+  `complete_ticket`'s ⚠️ warnings all described the BLOCKER-005 defect that was resolved
+  2026-08-14 and never updated; `update_ticket`'s row cited the now-dropped
+  `prevent_submitted_ticket_update()`; the "no submit_ticket RPC... worth resolving
+  explicitly" note is resolved. Also fixed, found in the same file: `create_organization_
+  invite`'s row and the Edge Function status table both still said invitation delivery
+  wasn't deployed, contradicting this session's own earlier BLOCKER-001 resolution.
+- `BACKEND_ROADMAP.md` P4.4 — rewritten: write path down to one real remaining ground
+  (BLOCKER-003, for `discount_amount`/`tax_amount` only — not lifecycle progression).
+  Flagged, not fixed: the roadmap's "Current State" summary (dated 2026-08-14, "every
+  write path is BLOCKED") is now badly stale against this section, P4.2b, P6.x, and P9.x —
+  a rewrite out of scope for this pass.
+
+**Executed evidence:**
+```
+mcp__supabase__execute_sql (pg_proc, pg_get_functiondef, information_schema)
+                                             -> read live, quoted above
+mcp__supabase__apply_migration              -> fix_update_ticket_status_role_gate_matches_guard_trigger
+mcp__supabase__execute_sql (rolled-back tx) -> 12/12 checks passing, nothing persisted
+node scripts/smoke-signed-in.mjs            -> SMOKE TEST PASSED (after one transient retry)
+.venv/Scripts/python.exe -m pytest -q       -> 12 passed
+```

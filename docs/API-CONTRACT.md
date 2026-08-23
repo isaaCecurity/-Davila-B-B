@@ -28,12 +28,12 @@ These are the operations that must not be done client-side. Signatures below are
 | RPC | Signature | Returns | Guarantees |
 |---|---|---|---|
 | `create_organization_with_owner` | `p_name text, p_branch_name text, p_timezone text` | jsonb | Creates org, first branch, assigns owner role, sets `profiles.tenant_id` — atomically. Client must refresh the session afterward, or `tenant_id` stays absent from the JWT. |
-| `create_organization_invite` | `p_email text, p_role_key text, p_branch_id uuid, p_valid_days integer` | jsonb | Mints a raw token, stores only its hash, sets expiry. **Delivery is not implemented** — see §7. |
+| `create_organization_invite` | `p_email text, p_role_key text, p_branch_id uuid, p_valid_days integer` | jsonb | Mints a raw token, stores only its hash, sets expiry. Delivery is the `send-invite-email` Edge Function, deployed and live-verified 2026-08-22 — see §7 and `BLOCKERS.md` §BLOCKER-001. |
 | `accept_organization_invite` | `p_raw_token text` | jsonb | Hashes and matches token, checks expiry, creates `user_roles` and `branch_assignments`, marks invite accepted. |
-| `confirm_ticket` | `p_order_id uuid` | jsonb | Validates ≥1 item, recomputes totals, issues invoice, transitions to `confirmed`. **⚠️ Cannot succeed in any state as deployed** — see the defect note in `STATE-MACHINES.md` §1. |
-| `update_ticket` | `p_order_id uuid, p_customer_id uuid, p_fulfilment_type text, p_due_at timestamptz, p_discount_amount numeric, p_tax_amount numeric, p_assigned_to uuid, p_status text, p_cancelled_reason text` | jsonb | The general ticket mutation path. Direct UPDATE on a submitted ticket is blocked by `prevent_submitted_ticket_update()`. |
-| `cancel_ticket` | `p_order_id uuid, p_reason text` | jsonb | Requires a reason. Voids the unpaid invoice. **⚠️ Works only on `draft` tickets as deployed**; a submitted ticket is archived, not cancelled (clarification §5). |
-| `complete_ticket` | `p_order_id uuid, p_warehouse_id uuid` | jsonb | Writes the sale stock movement — which is why it takes a warehouse and must be an RPC. **⚠️ Unreachable as deployed** (`delivered` cannot be reached). |
+| `confirm_ticket` | `p_order_id uuid` | jsonb | Validates ≥1 item, recomputes totals, issues invoice, transitions to `confirmed`. Works as specified — the defect that once made this unreachable was resolved 2026-08-14, see `STATE-MACHINES.md` §1. |
+| `update_ticket` | `p_order_id uuid, p_customer_id uuid, p_fulfilment_type text, p_due_at timestamptz, p_discount_amount numeric, p_tax_amount numeric, p_assigned_to uuid, p_status text, p_cancelled_reason text` | jsonb | The general ticket mutation path — also the de facto RPC for the `draft→submitted`, `confirmed→scheduled`, `scheduled→in_production`, `in_production→ready`, and `ready→delivered` hops (see `STATE-MACHINES.md` §1), none of which has a dedicated RPC. `prevent_submitted_ticket_update()`, the trigger that once blocked all of this, was dropped 2026-08-14. As of 2026-08-22 its own role gate matches `guard_ticket_status_transition()`'s per-status actor list (cashier and baker can now advance a ticket through this RPC, not just owner/admin/branch_manager) — see `STATE-MACHINES.md` §1, defect 3. |
+| `cancel_ticket` | `p_order_id uuid, p_reason text` | jsonb | Requires a reason. Voids the unpaid invoice. Works on any non-terminal status, per `guard_ticket_status_transition()`'s `cancelled` actor list — the "draft-only" defect this note used to describe was the same trigger bug resolved 2026-08-14. |
+| `complete_ticket` | `p_order_id uuid, p_warehouse_id uuid` | jsonb | Writes the sale stock movement — which is why it takes a warehouse and must be an RPC. Reachable now that the full lifecycle is (`STATE-MACHINES.md` §1); its own `reference_type` bug (found separately) was fixed 2026-08-22, see `BLOCKERS.md`. |
 | `archive_ticket` | `p_ticket_id uuid, p_reason text` | `tickets` | Terminal archive. Sets `archived_at`/`archived_by`/`archive_reason`. Note this one uses `p_ticket_id`, unlike its siblings. Requires `tickets.archive`. |
 | `record_payment` | `p_order_id uuid, p_amount numeric, p_method text, p_reference text, p_cash_session_id uuid` | jsonb | Inserts payment, updates `amount_paid`, recomputes invoice status. Rejects `cash` without an open session. |
 | `record_refund` | `p_payment_id uuid, p_amount numeric, p_reason text` | jsonb | Refunds against a payment, capped at its amount by `guard_refund_total()`. **How a refund affects revenue, `amount_paid`, invoice status and cash-session expected cash is unresolved** — see the open questions in the project plan. |
@@ -50,7 +50,10 @@ These are the operations that must not be done client-side. Signatures below are
 
 **`adjust_stock` takes a target quantity, not a delta.** The client showing "42.5 kg" and the user typing "40" means the delta is computed server-side from current truth. A client-computed delta races against concurrent movements.
 
-**There is no `submit_ticket` RPC.** The state machine requires `draft → submitted → confirmed`, but no RPC performs the first hop; `update_ticket` takes a `p_status` and is the de facto path. Worth resolving explicitly.
+**There is no `submit_ticket` RPC**, nor dedicated RPCs for `confirmed→scheduled`,
+`scheduled→in_production`, `in_production→ready`, or `ready→delivered`. `update_ticket`
+takes a `p_status` and is the confirmed, live-verified path for all five (2026-08-22) —
+this is no longer an open question, see `STATE-MACHINES.md` §1 defect 3.
 
 ---
 
@@ -150,7 +153,7 @@ Only for what genuinely cannot run in Postgres:
 
 | Function | Purpose | Status |
 |---|---|---|
-| `send-invite-email` | Delivers invite token via email provider | **Built, committed, not deployed** |
+| `send-invite-email` | Delivers invite token via email provider | **Deployed and live-verified 2026-08-22** — see `BLOCKERS.md` §BLOCKER-001 |
 | `send-ticket-notification` | SMS/WhatsApp ticket confirmation to customer | **Not built** |
 | `generate-report-pdf` | Renders financial report for download | **Not built** |
 
