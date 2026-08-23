@@ -43,6 +43,10 @@ export type BakeflowErrorCode =
   | 'insufficient_role'
   | 'refund_required'
   | 'duplicate_reference'
+  /** A server-side call volume cap was hit (P6.6). Distinct from `insufficient_role`: the
+   *  caller is authorized, just over quota — the UI should suggest retrying later, not
+   *  re-authenticating or escalating permissions. */
+  | 'rate_limited'
   // --- read path ---
   /** A single-row read matched more than one row — a broken uniqueness invariant. */
   | 'multiple_rows_returned'
@@ -167,6 +171,7 @@ const KNOWN_CODES: Readonly<Record<BakeflowErrorCode, true>> = {
   insufficient_role: true,
   refund_required: true,
   duplicate_reference: true,
+  rate_limited: true,
   multiple_rows_returned: true,
   session_expired: true,
   invalid_request: true,

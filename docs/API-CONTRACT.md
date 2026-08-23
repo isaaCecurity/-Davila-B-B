@@ -83,6 +83,7 @@ Standard codes:
 | `insufficient_role` | Caller lacks the role | "You don't have permission for this." |
 | `refund_required` | Cancelling a paid ticket | "Record a refund before cancelling." |
 | `duplicate_reference` | Unique constraint hit | "That {field} is already used." |
+| `rate_limited` | A call-volume cap was hit (P6.6) | "You've done that too many times recently. Try again later." Distinct from `insufficient_role`: the caller is authorized, just over quota. |
 
 The client maps `code` to copy. It never displays a raw Postgres message — `EB-015`'s clarity principle and Core Principle 5 both require plain language.
 
@@ -157,7 +158,26 @@ Only for what genuinely cannot run in Postgres:
 | `send-ticket-notification` | SMS/WhatsApp ticket confirmation to customer | **Not built** |
 | `generate-report-pdf` | Renders financial report for download | **Not built** |
 
-**Corrected 2026-08-22 (was stale since `b6d125e1`, 2026-08-20):** `supabase/functions/` exists in the repo and `send-invite-email` is implemented (`_shared/` scaffold, Resend adapter with mock fallback, deep-link generation, HTML/text templates — see `BACKEND_ROADMAP.md` P6.1/P6.2). It has never been deployed, though — verified live via `mcp__supabase__list_edge_functions` returning `[]`. The practical consequence is unchanged and, if anything, confirmed worse than assumed: `create_organization_invite()` mints tokens correctly, but `organization_invites` has **zero rows, ever** — nobody has invited anyone through this system by any path — so **inviting a user to an organization has never been completed end-to-end**. Clarification §34 is explicit that minting a token is not delivering an invitation. Full investigation: `BLOCKERS.md` §BLOCKER-001 (reopened).
+**Corrected 2026-08-22 (was stale since `b6d125e1`, 2026-08-20):** `supabase/functions/` exists in the repo and `send-invite-email` is implemented (`_shared/` scaffold, Resend adapter with mock fallback, deep-link generation, HTML/text templates — see `BACKEND_ROADMAP.md` P6.1/P6.2). **Deployed and live-verified the same day** (this paragraph itself went stale for a few hours after that — the status row above was updated, this explanatory text below it was not, until this pass caught the contradiction): a real signed-in call — mint via `create_organization_invite()`, dispatch via this function — succeeded end-to-end for the first time in the project's history. Full detail: `BLOCKERS.md` §BLOCKER-001.
+
+**Rate limiting (P6.6, 2026-08-22).** `send-invite-email` calls `enforce_rate_limit()` — a
+small SECURITY DEFINER Postgres function, callable only by `service_role` — immediately
+before dispatch, capped at 20 calls per tenant per rolling hour. Over the cap raises
+`code: 'rate_limited'` (`errcode='P0001'`), mapped to HTTP 429. Enforcement is per
+`(tenant_id, scope)`, not per caller, because the resource being protected — a
+transactional provider's per-recipient sending reputation and quota — is a tenant-level
+concern; the calling actor is still recorded on each ledger row (`rate_limit_events`) for
+traceability. `enforce_rate_limit()` takes `tenant_id`/`actor_id` as explicit, trusted
+parameters rather than deriving them from the JWT (`current_tenant_id()`/`auth.uid()`),
+which is exactly why it is `service_role`-only: broader `EXECUTE` would let any caller
+target another tenant's quota. This is the intended reusable pattern for rate-limiting a
+future Edge Function — call `enforce_rate_limit(p_tenant_id, p_actor_id, p_scope, p_limit,
+p_window_minutes)` from the service-role client after authenticating and authorizing the
+caller, using values already independently verified, never client-supplied ones. Verified
+live: 20 real calls against the deployed function succeeded, a 21st was refused with 429
+and the correct `rate_limited` body, and a second tenant's independent quota was
+unaffected by the first exhausting its own — see `BACKEND_ROADMAP.md` P6.6 for the full
+evidence trail.
 
 **Providers (settled — clarification §35):** email via a transactional email provider; mobile push via **Expo Push** (which abstracts APNs/FCM); SMS via a separate transactional provider; WhatsApp via an approved business messaging channel. **Do not hard-code provider APIs through the codebase — use provider adapters**, so a channel can be swapped without touching business logic. Full detail in `docs/NOTIFICATION-DELIVERY-CHANNELS.md`.
 

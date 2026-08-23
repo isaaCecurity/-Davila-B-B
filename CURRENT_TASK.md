@@ -1,5 +1,37 @@
 # BakeFlow — Current Task
 
+## ✅ P6.6 DELIVERED — rate limiting on send-invite-email (2026-08-22)
+
+Implemented and deployed a reusable, generic rate-limit primitive
+(`enforce_rate_limit()` + `rate_limit_events`, migration
+`p6_6_rate_limit_send_invite_email`), wired it into `send-invite-email` (the only Edge
+Function that exists), redeployed (version 2), and verified live against the real
+deployed function — 20 real calls succeeded, a 21st was refused with 429/`rate_limited`,
+and a second tenant's independent quota was proven unaffected. Confirmed the
+authorization boundary directly: an ordinary authenticated session cannot call
+`enforce_rate_limit()` or read `rate_limit_events` at all (`42501` both ways) — only
+`service_role` can, closing the impersonation vector that keying by an explicit
+`tenant_id` parameter would otherwise open. Full design rationale, the scope decision
+(Edge-Function-layer only, not a general RPC-wide initiative), and the complete evidence
+trail: `BACKEND_ROADMAP.md` P6.6.
+
+Added `rate_limited` to the client's `BakeflowErrorCode` vocabulary and
+`docs/API-CONTRACT.md` §3. Found, did not fix: `sendInviteEmail()`'s client wrapper
+never reads any Edge Function error code at all, pre-existing — logged as TD-017.
+
+Also refreshed `BACKEND_ROADMAP.md`'s top-of-file "Current State" summary (dated
+2026-08-14, claiming "every write path is BLOCKED") against every milestone's actual
+current status before starting P6.6, per instruction — no sequencing changed, nothing
+invented; P4.3/P4.5's own sections were flagged as possibly stale (P9.5/P9.6 report their
+write paths shipped) rather than resolved, since re-auditing them was out of scope here.
+
+**Verified:** `node scripts/smoke-signed-in.mjs` (full suite, clean), `npm run
+typecheck`/`lint --workspace apps/mobile` exit 0, `.venv/Scripts/python.exe -m pytest -q`
+12 passed, plus the dedicated live rate-limit test above (21 real HTTP calls, cleaned up
+afterward — nothing persisted).
+
+---
+
 ## ✅ P4.4 write path — all lifecycle RPCs proven live; a real authorization defect fixed (2026-08-22)
 
 Continuing the staleness audit that closed BLOCKER-001 and BLOCKER-009, checked

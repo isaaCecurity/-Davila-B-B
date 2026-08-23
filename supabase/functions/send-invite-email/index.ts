@@ -12,6 +12,15 @@ import { renderInviteEmailHtml, renderInviteEmailText } from '../_shared/templat
 
 const FUNCTION_NAME = 'send-invite-email';
 
+// P6.6. Counted per (tenant, scope) by enforce_rate_limit() -- see that function's
+// COMMENT ON for why. 20/hour is generous enough to onboard a whole staff in one sitting
+// (BakeFlow tenants are individual bakeries, not high-volume senders) while still capping
+// a runaway client bug or an abusive caller well short of real-world cost: a transactional
+// provider's per-recipient reputation and rate quota.
+const RATE_LIMIT_SCOPE = 'send_invite_email';
+const RATE_LIMIT_MAX_CALLS = 20;
+const RATE_LIMIT_WINDOW_MINUTES = 60;
+
 interface SendInviteRequestBody {
   invite_id: string;
   raw_token: string;
@@ -160,7 +169,37 @@ Deno.serve(async (req: Request) => {
     const html = renderInviteEmailHtml(templateData);
     const text = renderInviteEmailText(templateData);
 
-    // 10. Send Email
+    // 10. Rate limit -- after every other check, so a malformed or unauthorized request
+    // never consumes a legitimate caller's quota. Keyed by the invite's actual tenant
+    // (authoritative), not the caller's active-organization claim.
+    const { error: rateLimitError } = await serviceClient.rpc('enforce_rate_limit', {
+      p_tenant_id: invite.tenant_id,
+      p_actor_id: context.userId,
+      p_scope: RATE_LIMIT_SCOPE,
+      p_limit: RATE_LIMIT_MAX_CALLS,
+      p_window_minutes: RATE_LIMIT_WINDOW_MINUTES,
+    });
+
+    if (rateLimitError) {
+      let code = 'internal_error';
+      try {
+        const detail = JSON.parse((rateLimitError as { details?: string }).details ?? '{}');
+        if (detail?.code === 'rate_limited') code = 'rate_limited';
+      } catch {
+        // detail wasn't JSON -- fall through with internal_error, matching
+        // handleFunctionError's own unknown-shape fallback.
+      }
+      throw new HttpError(
+        code === 'rate_limited' ? 429 : 500,
+        code,
+        code === 'rate_limited'
+          ? `This organization has sent too many invitation emails in the last ${RATE_LIMIT_WINDOW_MINUTES} minutes. Try again later.`
+          : 'Failed to check the invitation rate limit',
+        rateLimitError.message
+      );
+    }
+
+    // 11. Send Email
     const provider = getEmailProvider();
     const result = await provider.sendEmail({
       to: invite.email,

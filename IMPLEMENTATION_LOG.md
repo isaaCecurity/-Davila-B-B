@@ -2045,3 +2045,105 @@ mcp__supabase__execute_sql (rolled-back tx) -> 12/12 checks passing, nothing per
 node scripts/smoke-signed-in.mjs            -> SMOKE TEST PASSED (after one transient retry)
 .venv/Scripts/python.exe -m pytest -q       -> 12 passed
 ```
+---
+
+## 2026-08-22 — P6.6 delivered: rate limiting on send-invite-email, verified against the live deployed function
+
+Investigated what P6.6 ("Rate limiting & production configuration," dependency P6.1, feeds
+P12) could concretely mean before writing anything. `supabase/config.toml`'s
+`[auth.rate_limit]` section governs the local CLI dev stack only; no tool available here
+(`mcp__supabase__*`) can push config values to the hosted project, and there's no evidence
+this repo is even CLI-linked to it — that entire layer is out of reach regardless of intent.
+`docs/API-CONTRACT.md` had no existing rate-limiting content at all. Concluded the
+milestone's real, actionable scope — consistent with its stated P6.1 dependency and its
+place in Phase 6 alongside the other Edge-Function-hardening milestones (P6.2/P6.4/P6.5) —
+is the Edge Function layer: `send-invite-email`, the only one that exists.
+
+**Design**, matching existing architecture rather than adding a dependency:
+- `rate_limit_events` (migration `p6_6_rate_limit_send_invite_email`): append-only ledger,
+  same shape as `audit_log`/`stock_movements`/`sync_changes`. RLS enabled and forced;
+  `REVOKE ALL ... FROM authenticated, anon, PUBLIC` — no client surface at all.
+- `enforce_rate_limit(p_tenant_id, p_actor_id, p_scope, p_limit, p_window_minutes)`:
+  `SECURITY DEFINER`, counts `(tenant_id, scope)` events in the trailing window, raises
+  `errcode='P0001'`/`detail={"code":"rate_limited",...}` at the cap, else inserts and
+  returns. `GRANT EXECUTE ... TO service_role` only — deliberately not `authenticated`,
+  because the function trusts its `tenant_id`/`actor_id` parameters rather than deriving
+  them from the caller's own JWT, so broader `EXECUTE` would let any authenticated caller
+  target another tenant's quota by passing its id.
+- Chose 20 calls/tenant/hour by analogy to `supabase/config.toml`'s own
+  `auth.rate_limit.email_sent = 2`/hour (local-dev precedent in the same repo), loosened
+  because BakeFlow tenants are individual bakeries plausibly onboarding a whole staff at
+  once — treated as an engineering parameter, not a business rule needing sign-off.
+- Counted per `(tenant_id, scope)`, not per caller: the resource being protected (a
+  transactional provider's sending reputation/quota) is a tenant-level concern.
+
+**Integration**: `send-invite-email/index.ts` calls `enforce_rate_limit()` immediately
+before `provider.sendEmail()` — after authentication, membership, role, and invite
+validity/expiry/token checks, so a request that would fail anyway never consumes quota —
+using `invite.tenant_id` (the authoritative tenant, not the caller's active-org JWT claim)
+and `context.userId`. Redeployed via `mcp__supabase__deploy_edge_function` (same
+file-bundling approach as the original P6.2 deploy): version 1 → version 2, `ACTIVE`.
+
+**Live verification, against the real deployed function, not simulated:**
+1. Signed in as the real smoke owner, created one disposable invite in tenant A
+   (`create_organization_invite` over real PostgREST).
+2. Called `send-invite-email` for real, 20 times, same invite (the function never marks an
+   invite "already sent," so one disposable invite sufficed for all 20 calls) → **all 20:
+   200, `success: true`**, mock provider each time.
+3. 21st call → **429**, body:
+   `{"error":{"code":"rate_limited","message":"This organization has sent too many
+   invitation emails in the last 60 minutes. Try again later.","details":"rate limit
+   exceeded for scope send_invite_email: 20 of 20 calls used in the last 60 minutes"}}`.
+4. Switched active organization to the smoke user's second tenant (`set_active_organization`
+   + `auth.refreshSession()`, the same pattern `scripts/smoke-signed-in.mjs` already uses),
+   created a second disposable invite there, called the function once → **200, success** —
+   proving tenant B's quota is untouched by tenant A's exhaustion.
+5. `mcp__supabase__query_logs` (`function_logs`) confirmed a correctly structured
+   `function_error` NDJSON line for the refusal (`status:429, code:"rate_limited"`),
+   matching P6.5's logging contract.
+6. **Authorization/tenant-boundary check**, separately, in a rolled-back transaction
+   (`BEGIN...ROLLBACK`, simulated owner-role JWT under `SET LOCAL ROLE authenticated`):
+   `SELECT enforce_rate_limit(...)` → `42501 permission denied for function
+   enforce_rate_limit`; `SELECT count(*) FROM rate_limit_events` → `42501 permission
+   denied for table rate_limit_events`. Confirms the impersonation vector the design
+   depends on closing is actually closed, not just intended.
+7. Cleanup: `delete from rate_limit_events where scope='send_invite_email'` (21 rows) and
+   `delete from organization_invites where id in (...)` (2 rows) — nothing from this test
+   persisted.
+
+**Client-side**: added `rate_limited` to `BakeflowErrorCode`
+(`packages/api/errors/index.ts`) and `docs/API-CONTRACT.md` §3's code table. While doing
+this, read `sendInviteEmail()`'s current body (`packages/api/mutations/invitations.ts`) to
+confirm whether the new code would actually surface to a UI — it does not: the wrapper
+discards `client.functions.invoke()`'s error body entirely, always reporting
+`unexpected_error`, for every Edge Function error this function can return, not just the
+new one. This is pre-existing (confirmed by reading the code, not assumed) and out of
+scope for this milestone — logged as **TD-017** rather than silently fixed or silently
+ignored.
+
+**Two more stale lines caught in `docs/API-CONTRACT.md` §7 while adding the rate-limiting
+note there**: the function-status table row already said "Deployed and live-verified
+2026-08-22" (fixed in the BLOCKER-001 commit earlier today) but the explanatory paragraph
+directly beneath it still said "has never been deployed" and "zero rows, ever" — both true
+only until earlier the same session. Corrected to match.
+
+**Regression**: full signed-in smoke suite green (`node scripts/smoke-signed-in.mjs`),
+`npm run typecheck`/`lint --workspace apps/mobile` exit 0, `pytest -q` 12 passed — run
+after the migration and again after the redeploy.
+
+**Executed evidence:**
+```
+mcp__supabase__apply_migration               -> p6_6_rate_limit_send_invite_email
+mcp__supabase__execute_sql (grants check)     -> rate_limit_events/enforce_rate_limit:
+                                                  only postgres + service_role, confirmed
+mcp__supabase__deploy_edge_function           -> send-invite-email v2, ACTIVE
+node verify-rate-limit.mjs (scratchpad)       -> OVERALL: PASS (20 ok, 21st refused,
+                                                  tenant isolation confirmed)
+mcp__supabase__query_logs (function_logs)     -> function_error, status 429, rate_limited
+mcp__supabase__execute_sql (rolled-back tx)   -> 42501 both ways (function + table)
+mcp__supabase__execute_sql (cleanup deletes)  -> 21 + 2 rows removed, confirmed
+node scripts/smoke-signed-in.mjs              -> SMOKE TEST PASSED
+npm run typecheck --workspace apps/mobile     -> exit 0
+npm run lint --workspace apps/mobile          -> exit 0
+.venv/Scripts/python.exe -m pytest -q         -> 12 passed
+```

@@ -645,8 +645,97 @@ from logs`) shows the exact NDJSON lines this deliverable added, in order:
 `provider`/`delivery_id` fields and no recipient email. Both halves of P6.5 are now proven
 live, not just reviewed.
 
-## P6.6 · Rate limiting & production configuration — NOT_STARTED
+## P6.6 · Rate limiting & production configuration — COMPLETE (2026-08-22)
 **Dependencies:** P6.1. Feeds P12.
+**Deliverables:** `enforce_rate_limit()` — a reusable, generic rate-limit primitive — plus
+`send-invite-email` wired to it, the only Edge Function that currently exists.
+
+**Scope decision, made explicitly rather than guessed:** "Rate limiting & production
+configuration" as a milestone name spans a lot of ground. Read against its own dependency
+(P6.1, Edge Function scaffold — not any Postgres RPC) and its place in Phase 6 alongside
+P6.2/P6.4/P6.5 (all Edge-Function/observability hardening for the one function that
+exists), this milestone's scope is the Edge Function layer, not a general RPC-wide
+rate-limiting initiative — extending it to arbitrary write RPCs (`adjust_stock`,
+`record_payment`, ...) would be new, unrequested scope with its own authorization
+questions, better left as a deliberate follow-up than invented here. Supabase's own
+platform-level Auth rate limits (`supabase/config.toml`'s `[auth.rate_limit]`) are a
+separate, already-partially-configured layer this repo does not control the live values
+of from here (no available tool pushes `config.toml` to the hosted project) — out of
+scope for the same reason. "Production configuration" narrows, in practice, to the same
+effort: this is the only Edge Function that has ever needed hardening before real traffic.
+
+**Design — reused existing architecture, no new dependency:**
+- `rate_limit_events`: a small append-only ledger table (`tenant_id`, `scope`, `actor_id`,
+  `occurred_at`), the same shape as `audit_log`/`stock_movements`/`sync_changes`. RLS
+  enabled and forced; **zero grants to `authenticated`/`anon`** — no client read or write
+  surface at all, tighter even than `audit_log` (which grants `authenticated` `SELECT`).
+- `enforce_rate_limit(p_tenant_id, p_actor_id, p_scope, p_limit, p_window_minutes)`:
+  `SECURITY DEFINER`, counts events for `(tenant_id, scope)` in the trailing window, raises
+  `code: 'rate_limited'` at the cap, otherwise records this call and returns. **`EXECUTE`
+  granted only to `service_role`** — deliberately not `authenticated`, and this is a real
+  security boundary, not a formality: the function trusts `p_tenant_id`/`p_actor_id` as
+  explicit parameters rather than deriving them from the JWT
+  (`current_tenant_id()`/`auth.uid()`), so broader `EXECUTE` would let any authenticated
+  caller pollute or exhaust *another* tenant's quota by simply passing its id. Migration:
+  `p6_6_rate_limit_send_invite_email`.
+- `send-invite-email/index.ts` (redeployed as version 2) calls it immediately before
+  dispatch, after every other check (auth, membership, role, invite status/expiry/token) —
+  so a malformed or unauthorized request never consumes a legitimate caller's quota — using
+  the invite's actual `tenant_id` (authoritative) and the already-authenticated caller's id.
+  Over the cap: HTTP 429, `code: 'rate_limited'`.
+- **Limit chosen: 20 calls per tenant per rolling hour.** An engineering/operational
+  parameter, not a business rule requiring sign-off (unlike tax/discount/refund logic) —
+  set by analogy to `supabase/config.toml`'s own local-dev `auth.rate_limit.email_sent = 2`
+  (per hour), loosened because inviting a whole staff at once is a real, legitimate burst
+  BakeFlow's small-bakery tenants can hit, which the platform's own default does not need
+  to accommodate. Easily adjusted — a named constant in one file, not a schema commitment.
+- **Counted per `(tenant, scope)`, not per caller**, because the resource being protected —
+  a transactional provider's per-recipient sending reputation and rate quota — is a
+  tenant-level concern; one compromised or careless member should not be able to dodge the
+  cap alone while the tenant's Resend standing still absorbs the damage. `actor_id` is
+  still recorded on every ledger row for traceability, just not part of the enforcement key.
+
+**Verified live, 2026-08-22, against the actually-deployed function — not simulated:**
+- 20 real HTTP calls to `send-invite-email` for one disposable invite, one tenant: **all
+  20 succeeded** (mock provider, `status: "simulated"` each time, as expected with no
+  `RESEND_API_KEY` configured).
+- **21st call: refused**, `429`, body `{"error":{"code":"rate_limited","message":"This
+  organization has sent too many invitation emails in the last 60 minutes. Try again
+  later.","details":"rate limit exceeded for scope send_invite_email: 20 of 20 calls used
+  in the last 60 minutes"}}`.
+- **Tenant isolation**: switched to the smoke user's second organization, created a fresh
+  disposable invite there, called the function once — **succeeded**, proving one tenant
+  exhausting its quota does not affect another's, exactly as the `(tenant_id, scope)`
+  keying is meant to guarantee.
+- **Authorization/tenant boundary** (the specific thing that makes this safe to key by an
+  explicit, trusted `tenant_id` parameter): in a rolled-back transaction, simulated an
+  ordinary `authenticated` session (owner role) and confirmed directly — `SELECT
+  enforce_rate_limit(...)` → `42501 permission denied for function enforce_rate_limit`;
+  `SELECT count(*) FROM rate_limit_events` → `42501 permission denied for table
+  rate_limit_events`. Neither the function nor its backing table has any surface an
+  ordinary authenticated caller can reach at all, closing the impersonation vector the
+  design note above describes.
+- **Failure behavior**: confirmed via `mcp__supabase__query_logs` (`function_logs`) that
+  the refusal produced a correctly structured `function_error` log line
+  (`status:429, code:"rate_limited"`), matching P6.5's structured-logging contract — this
+  failure path is observable the same way every other one already is.
+- Cleanup: the 21 ledger rows and both disposable `organization_invites` rows this test
+  created were deleted afterward (`delete from rate_limit_events where
+  scope='send_invite_email'`; `delete from organization_invites where id in (...)`) —
+  nothing persisted from the test itself.
+- Regression: full signed-in smoke suite green, `npm run typecheck`/`lint --workspace
+  apps/mobile` exit 0, `pytest -q` 12 passed, after the migration and redeploy.
+
+**Client vocabulary**: added `rate_limited` to `BakeflowErrorCode` in
+`packages/api/errors/index.ts` and to `docs/API-CONTRACT.md` §3's code table, matching the
+existing envelope pattern. **Found, not fixed, in the same pass**: `sendInviteEmail()`'s
+client wrapper never reads *any* Edge Function error code (not just this new one) — logged
+as **TD-017**, a pre-existing client-side gap, verified independent of this change.
+
+**Two more stale lines in `docs/API-CONTRACT.md` §7 fixed in passing**: a status row
+already said "Deployed and live-verified" while the explanatory paragraph directly under
+it still said "has never been deployed" and "zero rows, ever" — both true only until
+earlier the same day. Corrected to match.
 
 ## P6.7 · Permission enforcement decision — DEFERRED
 **Objective:** Decide whether the 25 permission keys become the server-side enforcement layer, stay UI-only, or are removed (TD-001, TD-002, AD-016).
