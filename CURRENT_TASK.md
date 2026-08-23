@@ -1,5 +1,29 @@
 # BakeFlow — Current Task
 
+## ✅ Security review of P6.6 + two follow-ups resolved (2026-08-23)
+
+A security review of P6.6's changes found no exploitable vulnerability (rate limiter and
+`update_ticket()` refactor both hold up — tenant boundary, authorization boundary, and
+transition-role matrix all independently verified). One moderate-confidence,
+non-security candidate surfaced and was chased down:
+
+1. **Production-batch preconditions removed from `docs/STATE-MACHINES.md`.** The security
+   review noted that unblocking bakers on `update_ticket()` made a documented
+   (`scheduled→in_production`/`in_production→ready` require a linked batch) but
+   never-enforced precondition newly reachable. Traced against `EB-013` Appendix A — the
+   canonical source this document cites — and found neither precondition exists anywhere
+   in the engineering bible. Corrected the docs rather than inventing trigger enforcement
+   for an unapproved rule.
+2. **TD-017 resolved**: `sendInviteEmail()` now correctly surfaces Edge Function error
+   codes (starting with `rate_limited`) via a new `normalizeFunctionsError()` in
+   `packages/api/errors/index.ts`, verified live through the real compiled client code
+   path (`npx tsx`), not just raw HTTP. See `IMPLEMENTATION_LOG.md` for the full trace.
+
+**Verified:** `npm run typecheck`/`lint --workspace apps/mobile` exit 0, full signed-in
+smoke suite green, `pytest -q` 12 passed.
+
+---
+
 ## ✅ P6.6 DELIVERED — rate limiting on send-invite-email (2026-08-22)
 
 Implemented and deployed a reusable, generic rate-limit primitive

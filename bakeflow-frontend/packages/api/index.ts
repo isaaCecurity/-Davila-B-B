@@ -15,6 +15,7 @@ export type { BakeflowClient } from './client';
 
 export {
   BakeflowApiError,
+  normalizeFunctionsError,
   normalizePostgrestError,
   normalizeThrown,
   type BakeflowErrorCode,

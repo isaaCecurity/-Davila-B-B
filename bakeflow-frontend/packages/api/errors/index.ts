@@ -313,6 +313,90 @@ export function normalizePostgrestError(error: PostgrestErrorLike): BakeflowApiE
   });
 }
 
+/** The `{error: {code, message, details}}` envelope every BakeFlow Edge Function returns
+ *  — `supabase/functions/_shared/errors.ts`'s `errorResponse()`. Declared structurally,
+ *  same reasoning as `PostgrestErrorLike`: no runtime dependency on the Edge Function
+ *  package this client never imports. */
+interface EdgeFunctionErrorBody {
+  error?: {
+    code?: unknown;
+    message?: unknown;
+    details?: unknown;
+  };
+}
+
+/**
+ * Normalize a `supabase-js` Edge Function invocation error — `functions.invoke()`'s
+ * `{ error }` — into a `BakeflowApiError`.
+ *
+ * `@supabase/functions-js` (verified against the installed version's source, `types.ts`/
+ * `FunctionsClient.ts`) sets `FunctionsHttpError`/`FunctionsRelayError`'s `context` to the
+ * raw `Response` object on a non-2xx reply, and throws `FunctionsFetchError` instead — with
+ * no `Response` at all — for a transport failure. This reads that `Response`'s JSON body
+ * and pulls the `code` every BakeFlow Edge Function embeds in it
+ * (`send-invite-email`'s `errorResponse()` calls, for one), the same envelope §3 of
+ * `API-CONTRACT.md` defines for RPCs. Before this existed, every Edge Function error —
+ * `rate_limited` included — was reported as `unexpected_error`, indistinguishable from a
+ * genuine bug (see TD-017).
+ *
+ * Only a `code` already in `KNOWN_CODES` is trusted, the same guard `codeFromDetail` uses
+ * for the RPC path: an Edge Function that raises a code this client has no vocabulary for
+ * yet still degrades to `unexpected_error`, exactly as every code does today, rather than
+ * this function inventing an unreviewed mapping.
+ */
+export async function normalizeFunctionsError(error: unknown): Promise<BakeflowApiError> {
+  if (error instanceof BakeflowApiError) return error;
+
+  const name = error instanceof Error ? error.name : undefined;
+
+  if (name === 'FunctionsFetchError') {
+    return new BakeflowApiError({
+      code: 'network_unavailable',
+      message: 'Could not reach the server. Check your connection and try again.',
+      cause: error,
+    });
+  }
+
+  if (name === 'FunctionsHttpError' || name === 'FunctionsRelayError') {
+    const context = (error as { context?: unknown }).context;
+    // Duck-typed rather than `instanceof Response`: React Native's fetch polyfill and the
+    // JS engine's own `Response` are not guaranteed to be the same constructor identity.
+    if (context !== null && typeof context === 'object' && 'json' in context) {
+      try {
+        const body = (await (context as Response).json()) as EdgeFunctionErrorBody;
+        const candidate = body.error?.code;
+        const known =
+          typeof candidate === 'string' ? ownLookup(KNOWN_CODES, candidate) : undefined;
+        if (known !== undefined) {
+          const bodyMessage = body.error?.message;
+          const serverText = typeof bodyMessage === 'string' ? bodyMessage : undefined;
+          return new BakeflowApiError({
+            code: candidate as BakeflowErrorCode,
+            // Domain-neutral and server-text-free, matching `normalizePostgrestError`
+            // below: `message` must never carry server-supplied text (see the class doc
+            // comment on `serverMessage`) -- the caller maps `code` to real UI copy.
+            message: `request failed (${candidate})`,
+            serverMessage: truncate(serverText),
+            details: truncate(
+              body.error?.details === undefined ? undefined : JSON.stringify(body.error.details),
+            ),
+            cause: error,
+          });
+        }
+      } catch {
+        // Body wasn't JSON, or reading it failed -- fall through to unexpected_error,
+        // matching handleFunctionError's own unknown-shape fallback on the server side.
+      }
+    }
+  }
+
+  return new BakeflowApiError({
+    code: 'unexpected_error',
+    message: 'Something went wrong. Please try again.',
+    cause: error,
+  });
+}
+
 /**
  * Normalize a thrown value.
  *

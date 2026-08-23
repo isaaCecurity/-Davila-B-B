@@ -2147,3 +2147,65 @@ npm run typecheck --workspace apps/mobile     -> exit 0
 npm run lint --workspace apps/mobile          -> exit 0
 .venv/Scripts/python.exe -m pytest -q         -> 12 passed
 ```
+
+---
+
+## 2026-08-23 — TD-017 resolved: Edge Function error codes now surface client-side, verified through the real compiled code path
+
+Following the security review of P6.6, resolved the flagged production-batch precondition
+question (see the `docs(tickets)` commit) and then picked up TD-017, the other loose thread
+the same session left behind: `sendInviteEmail()` never read `send-invite-email`'s own
+structured error body, so `rate_limited` — the whole point of P6.6 — could never actually
+reach a UI.
+
+**Read `@supabase/functions-js`'s actual installed source** (`node_modules/@supabase/
+functions-js/src/types.ts` and `FunctionsClient.ts`) rather than assuming its shape:
+`FunctionsHttpError`/`FunctionsRelayError`'s `context` is set to the raw `Response` object
+on a non-2xx reply (`throw new FunctionsHttpError(response)`); `FunctionsFetchError` has no
+response at all (a transport failure). The SDK's own doc comment confirms the intended read
+pattern: `await error.context.json()`.
+
+**Added `normalizeFunctionsError()`** to `packages/api/errors/index.ts`, modeled on the
+existing `normalizePostgrestError()`: awaits and parses the `Response` body, extracts
+`body.error.code`, and — critically — only trusts it if it's already a member of
+`KNOWN_CODES` (the exact same guard `codeFromDetail()` uses for the RPC path), so a future
+Edge Function code this client has no vocabulary for yet still degrades safely to
+`unexpected_error` rather than this function inventing an unreviewed mapping. Kept
+`message` domain-neutral (`request failed (${code})`) and confined the real server text to
+`serverMessage` — matching `BakeflowApiError`'s own documented safety property (`message`
+is what LogBox/crash reporters/careless `{String(error)}` all render; server text must
+never land there). Wired into `sendInviteEmail()`, replacing its old
+`code: 'unexpected_error'` catch-all. Exported from `packages/api/index.ts` alongside its
+siblings.
+
+**Verified live through the real compiled client code path, not raw HTTP** — deliberately
+stronger evidence than the HTTP-level verification P6.6 itself used, since the whole point
+was confirming the *client* now does the right thing: wrote a throwaway script
+(`scripts/_tmp-verify-normalize-functions-error.ts`, deleted after the run) executed via
+`npx tsx`, importing the actual `createOrganizationInvite`/`sendInviteEmail` from
+`packages/api`, signing in with `@supabase/supabase-js` for real, creating a real invite,
+and calling `sendInviteEmail()` 21 times against the deployed function:
+- Calls 1–20: succeeded normally.
+- Call 21: threw `BakeflowApiError { code: 'rate_limited', message: 'request failed
+  (rate_limited)', serverMessage: 'This organization has sent too many invitation emails
+  in the last 60 minutes. Try again later.' }` — confirming both the code surfaces
+  correctly AND the server text stays out of `message`.
+- Cleanup: `delete from rate_limit_events where scope='send_invite_email'` (20 rows),
+  `delete from organization_invites where id=...` (1 row) — nothing persisted.
+
+**Regression**: `npm run typecheck`/`lint --workspace apps/mobile` exit 0, full signed-in
+smoke suite green, `pytest -q` 12 passed.
+
+**Executed evidence:**
+```
+Read: node_modules/@supabase/functions-js/src/types.ts, FunctionsClient.ts
+mcp__supabase__execute_sql (rate_limit_events count)  -> 0 rows before starting (clean)
+npx tsx scripts/_tmp-verify-normalize-functions-error.ts
+                                                        -> OVERALL: PASS (20 ok, 21st
+                                                           correctly typed BakeflowApiError)
+mcp__supabase__execute_sql (cleanup deletes)           -> 20 + 1 rows removed, confirmed
+node scripts/smoke-signed-in.mjs                       -> SMOKE TEST PASSED
+npm run typecheck --workspace apps/mobile              -> exit 0
+npm run lint --workspace apps/mobile                   -> exit 0
+.venv/Scripts/python.exe -m pytest -q                  -> 12 passed
+```

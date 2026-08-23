@@ -8,7 +8,12 @@
 
 import type { Uuid } from '@bakeflow/types';
 import type { BakeflowClient } from '../client';
-import { BakeflowApiError, normalizePostgrestError, normalizeThrown } from '../errors';
+import {
+  BakeflowApiError,
+  normalizeFunctionsError,
+  normalizePostgrestError,
+  normalizeThrown,
+} from '../errors';
 
 export interface CreateInviteInput {
   email: string;
@@ -112,11 +117,7 @@ export async function sendInviteEmail(
     });
 
     if (error) {
-      throw new BakeflowApiError({
-        code: 'unexpected_error',
-        message: error.message || 'Failed to dispatch invitation email',
-        details: String(error),
-      });
+      throw await normalizeFunctionsError(error);
     }
 
     if (!data || typeof data !== 'object' || !(data as any).success) {
