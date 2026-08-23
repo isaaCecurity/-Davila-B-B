@@ -1,5 +1,29 @@
 # BakeFlow — Current Task
 
+## ✅ P4.5 delivery suite executed; P4.3/P4.5 roadmap sections reconciled (2026-08-23)
+
+`tests/sql/delivery_read_rls.sql` (D1–D10) ran live for the first time — its own header
+still said "NOT EXECUTED — BLOCKER-011" though that blocker was resolved 2026-08-15.
+Proactively checked `deliveries`' triggers for the same bug class the sales suite had just
+found (a trigger scoped `BEFORE UPDATE OF <col>` silently skipping logic on other
+columns) — confirmed `deliveries_guard_transition` doesn't have that problem before
+running anything. Found and fixed three defects, all in the test file, none in product
+code: two fixture bugs (missing org-B `user_roles` row; a column-count mismatch in the
+org-B delivery insert whose naive fix would have hit a `NOT NULL` violation) and one stale
+assertion (D1 still expected a `softDeleted` flag the code had already corrected
+2026-08-15). Suite now passes 11/11. **P4.5 read path is COMPLETE.**
+
+Also reconciled `BACKEND_ROADMAP.md`'s P4.3 and P4.5 sections, both of which had sat stale
+(NOT_STARTED / write-path BLOCKED) despite the P9.5/P9.6 rows in the same file already
+documenting live-verified write paths since 2026-08-21 — a gap the 2026-08-22 Current
+State refresh had explicitly flagged but left unresolved. Both now read COMPLETE
+(read + write), with the evidence trail cited inline. Also caught and fixed the Current
+State summary's stale "P6.6 NOT_STARTED" line (P6.6 shipped 2026-08-22).
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-23.
+
+---
+
 ## ✅ P4.4 sales read-path suite executed for the first time — real defect found and fixed (2026-08-23)
 
 `tests/sql/sales_read_rls.sql` (S1–S18) had never actually run despite its own header

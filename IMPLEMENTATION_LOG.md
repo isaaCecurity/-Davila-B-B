@@ -2302,3 +2302,77 @@ mcp__supabase__execute_sql (fix + negative control, rolled back)
 mcp__supabase__execute_sql (full S1-S18 suite, corrected fixture, rolled back)
                                             -> 27/27 passed
 ```
+
+---
+
+## 2026-08-23 · `tests/sql/delivery_read_rls.sql` executed for the first time; P4.3/P4.5 reconciled
+
+**Scope:** continuing the same Goal Mode pass — the direct analogue of the sales-suite work
+above. `delivery_read_rls.sql`'s own header banner said "NOT EXECUTED — BLOCKER-011"; that
+blocker was resolved 2026-08-15, so this suite (D1-D10) was the next concrete, unblocked,
+never-actually-run item. Also folded in the P4.3/P4.5 roadmap-section reconciliation that
+the 2026-08-22 Current State refresh had explicitly flagged-but-not-done (their own
+sections still read NOT_STARTED/BLOCKED, contradicted by the P9.5/P9.6 rows in the same
+file which already document live-verified write paths).
+
+Checked `deliveries`' triggers first, proactively, given what the sales suite had just
+found: `deliveries_guard_transition` is also `BEFORE UPDATE OF status` only, but
+`pg_get_functiondef(guard_delivery_transition)` shows it guards only `status` itself and
+its own role checks — no other-column freeze logic that scoping could silently skip. Not
+the same bug class as `tickets`; confirmed rather than assumed.
+
+### Three defects surfaced running the suite for the first time — all three in the test file, zero in product code
+
+1. **Fixture bug** (same class as the sales suite): the org-B ticket's creator
+   (`f1...0002`) had no `user_roles` row in org B; `guard_order_actor_and_assignment()`
+   correctly rejected the insert. Fixed by adding the membership row.
+2. **Fixture bug, column-count**: the org-B delivery row supplied only 7 values for 8
+   columns `(id, tenant_id, branch_id, ticket_id, driver_id, status, address_line,
+   created_at)`. Naively patching with an extra `NULL` (for `driver_id`) still failed:
+   `ticket_id` turned out to be the column genuinely missing a value —
+   `23502 null value in column "ticket_id" violates not-null constraint`. Corrected by
+   filling `ticket_id` from the org-B ticket already in the fixture and leaving `driver_id`
+   NULL.
+3. **Stale assertion, not a defect**: D1 still asserted `deliveries` has **no**
+   `deleted_at` (`softDeleted: false`). Checked `queries/delivery.ts` before touching
+   anything: line 95 already reads `softDeleted: true`, with a comment citing the exact
+   2026-08-15 live-verification pass that corrected it. The code was already right; this
+   test was simply never updated to match and still asserted the pre-correction claim.
+   Fixed the assertion, not the code.
+
+### Result: 11/11 passed
+
+`tests/sql/delivery_read_rls.sql` header rewritten from the stale BLOCKER-011 banner to
+record the real 2026-08-23 execution and all three fixes. **P4.5 read path is now
+COMPLETE**, not just IMPLEMENTED.
+
+### P4.3 / P4.5 roadmap sections reconciled
+
+Both milestones' own `BACKEND_ROADMAP.md` sections were rewritten against the already-live
+evidence already sitting in the P9.5/P9.6 rows of the same file (not re-verified
+independently — that evidence was already first-hand: `complete_production_batch()`/
+`fail_production_batch()` and `transition_delivery()`/`update_delivery_details()`, all
+live-verified 2026-08-21, plus BLOCKER-016/017's 2026-08-22 resolutions). P4.3: NOT_STARTED
+→ COMPLETE (read + write). P4.5: "write path BLOCKED" → COMPLETE (read + write) — that
+phrasing was itself always slightly wrong: `authenticated` holding no `UPDATE` grant on
+`deliveries` is the *intended* mechanism forcing the RPC-only write path, not evidence of a
+blocker. Current State summary's per-domain read/write breakdown updated to match, its two
+"not reconciled in this pass" flags now resolved, and its still-stale "P6.6 NOT_STARTED"
+line corrected to COMPLETE in the same pass (P6.6 shipped 2026-08-22, earlier this
+session — simply never propagated to this summary line).
+
+**Executed evidence:**
+```
+mcp__supabase__execute_sql (pg_get_triggerdef for deliveries)
+                                            -> deliveries_guard_transition: BEFORE UPDATE OF status
+mcp__supabase__execute_sql (pg_get_functiondef guard_delivery_transition)
+                                            -> status-only guard confirmed, not the tickets bug class
+mcp__supabase__execute_sql (full D1-D10 fixture + assertions, rolled back)
+                                            -> ERROR 42601 VALUES lists must all be the same length
+mcp__supabase__execute_sql (patched with extra NULL, rolled back)
+                                            -> ERROR 23502 null value in column "ticket_id"
+Read: bakeflow-frontend/packages/api/queries/delivery.ts:95
+                                            -> softDeleted: true, already correct
+mcp__supabase__execute_sql (fixture fully corrected, full D1-D10 suite, rolled back)
+                                            -> 11/11 passed
+```

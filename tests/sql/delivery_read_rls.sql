@@ -2,11 +2,17 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/delivery_read_rls.sql
 --
--- ############################################################################
--- ## NOT EXECUTED — BLOCKER-011. No assertion below may be cited as         ##
--- ## evidence. The authorized Supabase account cannot reach project         ##
--- ## tvfyxpafbpnkneujcnvr; see BLOCKERS.md.                                 ##
--- ############################################################################
+-- EXECUTED 2026-08-23 against project tvfyxpafbpnkneujcnvr: 11/11 passed, after fixing
+-- three defects this suite's first-ever run surfaced, all in this file, none in product
+-- code -- see IMPLEMENTATION_LOG.md 2026-08-23 for the full trace:
+--   1. Fixture: the org-B ticket's creator had no user_roles row in org B (same defect
+--      class as sales_read_rls.sql).
+--   2. Fixture: the org-B delivery row was missing a value (driver_id) and, once that
+--      was naively patched with NULL, violated ticket_id's NOT NULL constraint --
+--      ticket_id was the column actually missing a real value, not driver_id.
+--   3. Stale assertion: D1 still expected `softDeleted: false`, a claim the 2026-08-15
+--      live-verification pass had already corrected in queries/delivery.ts (softDeleted:
+--      true) without this test ever being updated to match.
 --
 -- Same conventions as the catalog, inventory and sales suites: no psql meta-commands,
 -- every assertion records into a temp table rather than raising, verdict block at the end,
@@ -52,10 +58,15 @@ ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
 
 -- branch_manager = ...0003, owner = ...0001, driver = ...0006 (live roles table).
 -- If the driver role id differs live, D8 is the assertion that will surface it.
+-- The org-B row for ...0002 exists because the org-B ticket fixture below sets that
+-- profile as created_by with tenant_id = org B: guard_order_actor_and_assignment()
+-- requires the creator to hold a user_roles row in the ticket's own tenant. Same defect
+-- as sales_read_rls.sql -- found live 2026-08-23 running this suite for the first time.
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
   ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003','fa000000-0000-4000-8000-0000000000a1'),
   ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL),
-  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000006','fa000000-0000-4000-8000-0000000000a1')
+  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000006','fa000000-0000-4000-8000-0000000000a1'),
+  ('f0000000-0000-4000-8000-0000000000b1','f1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.branch_assignments (tenant_id, profile_id, branch_id, is_default) VALUES
@@ -77,11 +88,16 @@ INSERT INTO public.tickets
 
 -- The A1 and A2 deliveries deliberately share created_at, which is what D4 uses to
 -- justify the composite (created_at, id) cursor in listDeliveries.
+--
+-- The org-B row originally had only one NULL for two nullable columns (ticket_id,
+-- driver_id) -- a column-count bug caught live 2026-08-23 on this suite's first-ever
+-- execution. Corrected: ticket_id is NOT NULL on deliveries, so the missing value was
+-- driver_id, and ticket_id is filled from the org-B ticket fixture above.
 INSERT INTO public.deliveries
   (id, tenant_id, branch_id, ticket_id, driver_id, status, address_line, created_at) VALUES
   ('f7000000-0000-4000-8000-0000000000a1','f0000000-0000-4000-8000-0000000000a1','fa000000-0000-4000-8000-0000000000a1','f6000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000003','assigned','12 Allen Avenue, Ikeja','2026-08-14T09:05:00+00:00'),
   ('f7000000-0000-4000-8000-0000000000a2','f0000000-0000-4000-8000-0000000000a1','fa000000-0000-4000-8000-0000000000a2','f6000000-0000-4000-8000-0000000000a2',NULL,'pending','5 Awolowo Road, Ikoyi','2026-08-14T09:05:00+00:00'),
-  ('f7000000-0000-4000-8000-0000000000b1','f0000000-0000-4000-8000-0000000000b1','fb000000-0000-4000-8000-0000000000b1',NULL,'pending','9 Aba Road, Port Harcourt','2026-08-14T11:05:00+00:00');
+  ('f7000000-0000-4000-8000-0000000000b1','f0000000-0000-4000-8000-0000000000b1','fb000000-0000-4000-8000-0000000000b1','f6000000-0000-4000-8000-0000000000b1',NULL,'pending','9 Aba Road, Port Harcourt','2026-08-14T11:05:00+00:00');
 
 CREATE TEMP TABLE _results(test text, passed boolean, detail text);
 GRANT ALL ON _results TO authenticated;
@@ -93,9 +109,14 @@ DECLARE
   v_status text;
 BEGIN
   -- ---- D1: the softDeleted flag in queries/delivery.ts ----
+  -- Corrected 2026-08-23: the 2026-08-15 live-verification pass found deliveries DOES
+  -- carry deleted_at (all 16 domain tables do) and flipped the code's softDeleted flag to
+  -- true (queries/delivery.ts:95) at the time -- this assertion was simply never updated
+  -- to match and still expected the pre-correction false. The code was already right; the
+  -- test was stale.
   INSERT INTO _results
-  SELECT 'D1 deliveries has NO deleted_at (softDeleted: false)', count(*) = 0,
-         'matching columns = ' || count(*) || ' (0 confirms the flag)'
+  SELECT 'D1 deliveries HAS deleted_at (softDeleted: true)', count(*) = 1,
+         'matching columns = ' || count(*)
   FROM information_schema.columns
   WHERE table_schema='public' AND table_name='deliveries' AND column_name='deleted_at';
 

@@ -19,41 +19,38 @@ tracked separately and must never be conflated:
 
 ---
 
-## Current State — updated 2026-08-22
+## Current State — updated 2026-08-23
 
 **Completed phases:** P0 (partial — P0.7's frontend testing infrastructure is
 NOT_STARTED; P0.5, the piece this line used to point at, is itself now COMPLETE), P1, P2,
 P3.1–P3.6, P3.10.
 
 **Read paths, per domain:** P4.1a catalog COMPLETE; P4.2a inventory COMPLETE; P4.3
-production and P4.5 delivery IMPLEMENTED and live-verified (2026-08-16, 2026-08-17); P4.4a/b
-sales **COMPLETE** — its RLS suite (`tests/sql/sales_read_rls.sql`, S1–S18) ran live
-2026-08-23, 27/27 passed after fixing a fixture bug and one real product defect it
-surfaced (the `subtotal_amount` freeze trigger only fired on `UPDATE OF status`, silently
-skippable by any update that didn't touch `status` — see the P4.4 section below).
+production and P4.4a/b sales and P4.5 delivery all **COMPLETE**, every one now backed by
+an executed SQL suite (`inventory_read_rls.sql` 2026-08-15, production live-verified
+2026-08-16, `sales_read_rls.sql` 27/27 2026-08-23, `delivery_read_rls.sql` 11/11
+2026-08-23).
 
 **Write paths are no longer uniformly blocked** — this line originally said "every write
 path is BLOCKED"; that stopped being true over the following week without this section
 being updated. As of this pass:
 - P4.1b catalog write: **BLOCKED** — BLOCKER-010(b, c), folding into BLOCKER-003.
 - P4.2b inventory write: **COMPLETE** (2026-08-15).
-- P4.3 production write: this milestone's own section still reads NOT_STARTED, but the
-  P9.5 mobile slice independently reports `complete_production_batch()`/
-  `fail_production_batch()` live-verified and shipped (2026-08-21). **Not reconciled in
-  this pass** — flagged, not resolved, since re-auditing P4.3 was out of this task's scope.
+- P4.3 production write: **COMPLETE** (2026-08-21) — `complete_production_batch()`/
+  `fail_production_batch()` live-verified; the milestone's own section previously still read
+  NOT_STARTED against this, reconciled 2026-08-23.
 - P4.4 ticket write: **RPCs COMPLETE**, live-verified 2026-08-22 — all ten lifecycle
   transitions are reachable (`confirm_ticket`/`cancel_ticket`/`complete_ticket`/
   `archive_ticket`/`update_ticket`). Only `discount_amount`/`tax_amount` remain gated on
   BLOCKER-003; there is no dedicated write-path SQL test suite yet.
-- P4.5 delivery write: this milestone's own section still reads BLOCKED, but the P9.6
-  mobile slice independently reports `transition_delivery()`/`update_delivery_details()`
-  live-verified and shipped (2026-08-21). **Not reconciled in this pass**, same caveat as
-  P4.3 above.
+- P4.5 delivery write: **COMPLETE** (2026-08-21) — `transition_delivery()`/
+  `update_delivery_details()` live-verified; the milestone's own section previously still
+  read BLOCKED against this, reconciled 2026-08-23.
 - P5 (all financial milestones): **BLOCKED** — BLOCKER-003, unchanged.
-- P6 platform services: P6.1, P6.2, P6.4, P6.5 **COMPLETE**, all live-verified
-  2026-08-20–22. P6.3, P6.7 DEFERRED. P6.6 NOT_STARTED.
+- P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
+  2026-08-22). P6.3, P6.7 DEFERRED.
 
-**Open blockers requiring a human decision, as of 2026-08-22:** BLOCKER-003 (financial
+**Open blockers requiring a human decision, as of 2026-08-23:** BLOCKER-003 (financial
 rules — unspecified tax/discount/rounding/refund logic; the largest open item, gating all
 of P5 and the last piece of P4.1b/P4.4), BLOCKER-004 (EAS project ID is a placeholder),
 BLOCKER-006 (no per-entity sync conflict strategy, gating P3.7), BLOCKER-007
@@ -432,12 +429,29 @@ never drive stock negative whatever the setting (raises `insufficient_stock`, P0
 while `waste` and `adjustment` may only where `organizations.allow_negative_stock` is
 true. Suite assertions I10 and I11. No decision is outstanding.
 
-## P4.3 · Production — NOT_STARTED
+## P4.3 · Production — COMPLETE (read + write)
 **Dependencies:** P4.1, P4.2.
 **Schema:** `production_batches`, `production_batch_ingredients`.
 **Business rules:** `guard_production_batch_transition()`; completing a batch consumes ingredients and produces finished goods via the stock ledger.
 **Tests:** state-machine transitions; ingredient consumption correctness.
 **Completion gate:** batch completion moves stock atomically.
+
+**Reconciled 2026-08-23** — this section had read "NOT_STARTED" long after the work
+actually shipped, contradicted by the P9.5 row below it in this same file. Corrected against
+that row rather than re-verified independently, since P9.5 already carries live evidence:
+
+- **Read path COMPLETE 2026-08-16.** `packages/types/production.ts`,
+  `packages/validation/production.ts`, `packages/api/queries/production.ts`.
+- **Write path COMPLETE 2026-08-21.** `scheduled`'s two exits (`in_progress`, `cancelled`)
+  are plain PostgREST updates — `authenticated` holds `UPDATE` on `production_batches`,
+  unlike `deliveries`. `in_progress`'s two exits are the SECURITY DEFINER RPCs
+  `complete_production_batch()`/`fail_production_batch()`, which atomically write
+  `stock_movements` alongside the status change — the actual mechanism satisfying this
+  section's own completion gate.
+- **BLOCKER-017 resolved 2026-08-22.** A raw UPDATE could reach `completed`/`failed`
+  without going through either RPC, silently skipping the stock-movement write. Fixed by
+  migration `fix_complete_ticket_reference_type_and_guard_batch_rpc_only`; the bypass is now
+  a permanent regression check in `scripts/smoke-signed-in.mjs`, not just a one-time fix.
 
 ## P4.4 · Sales / Tickets — COMPLETE (read path) / write path RPCs COMPLETE, no write-path test suite
 **Dependencies:** P4.1.
@@ -464,7 +478,7 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 
 **Note on this roadmap's own staleness:** the "Current State" summary at the top of this file (dated 2026-08-14, "Every write path is BLOCKED") predates and now contradicts this section, P4.2b, P6.x, and the P9.x mobile milestones. Not rewritten in this pass — flagged here rather than silently left to mislead a top-to-bottom reader.
 
-## P4.5 · Delivery — READ PATH IMPLEMENTED / write path BLOCKED
+## P4.5 · Delivery — COMPLETE (read + write)
 **Dependencies:** P4.4 (read path implemented 2026-08-14).
 **Schema:** `deliveries`.
 **Business rules:** `guard_delivery_transition()`; `ready → delivered` on the parent ticket hard-requires a verified `deliveries` row.
@@ -473,9 +487,32 @@ true. Suite assertions I10 and I11. No decision is outstanding.
 
 **READ PATH now live-verified (2026-08-17).** The types, Zod schema and query module were written from docs and have since been confirmed against the live database: all 19 columns, the six-value `status` CHECK, both RLS policies and all ten constraints match, with no mismatch found. The three CHECK-mirroring refinements were also proven behaviourally — `assigned` with no driver, `failed` with no reason, and `delivered` with neither proof nor recipient each return `23514`. P9.6 consumes this layer.
 
-**Write path BLOCKED.** `failed → returned` and `in_transit → returned` each write a return stock movement, so under `STATE-MACHINES.md` universal rule 4 they must be single RPCs. Grants read live confirm the database agrees: `authenticated` holds `INSERT, SELECT` and **no UPDATE**, and an attempted transition through PostgREST returns `42501 permission denied for table deliveries` (executed). BLOCKER-011 is resolved, so what remains is reading the transition RPC signatures, not access.
+**Write path COMPLETE 2026-08-21 — reconciled 2026-08-23.** This section previously read
+"BLOCKED", stale against the P9.6 row below it in this same file, which already documents
+the live-verified `transition_delivery()`/`update_delivery_details()` RPCs.
+`authenticated` genuinely holds no `UPDATE` on `deliveries` (confirmed), so those two
+SECURITY DEFINER RPCs are the only write path — not a gap, the intended mechanism, matching
+the "return-writes-a-movement" rule this section already stated. BLOCKER-016 (`returned`
+appearing not to restore stock) was closed 2026-08-22 as not-a-bug — the state machine makes
+the scenario it describes unreachable — surfacing instead a real, adjacent defect
+(`complete_ticket()`'s sale deduction had never worked), fixed the same pass; see
+`BLOCKERS.md`.
 
-**Completion gate — delivery gate enforced in DB, not convention:** asserted by D5/D6/D7 in `tests/sql/delivery_read_rls.sql` (D5 refuses `ready → delivered` while the delivery is only `assigned`; D6 permits it once the delivery is `delivered`; D7 shows a pickup ticket skipping the gate). **NOT EXECUTED** — BLOCKER-011. P4.5 is IMPLEMENTED, not COMPLETE.
+**Completion gate — delivery gate enforced in DB, not convention: PROVEN.**
+`tests/sql/delivery_read_rls.sql` (D1–D10) executed live 2026-08-23, **11/11 passed**. D5
+refuses `ready → delivered` while the delivery is only `assigned`; D6 permits it once the
+delivery reaches `delivered`; D7 shows a pickup ticket skipping the gate entirely — all
+three confirmed, not assumed. The suite's own header previously claimed "NOT EXECUTED —
+BLOCKER-011" (stale; BLOCKER-011 was resolved 2026-08-15 for other suites and this one just
+never re-ran). Running it for the first time surfaced three defects, all in the test file
+itself, none in product code: two fixture bugs (a missing org-B `user_roles` membership row,
+and a column-count mismatch in the org-B delivery insert that a naive NULL-fill would have
+put in the wrong — `NOT NULL` — column) and one stale assertion (D1 still expected
+`deliveries.deleted_at` to be absent, a claim the 2026-08-15 pass had already corrected in
+`queries/delivery.ts` without updating this test to match). All three fixed in the suite;
+zero product changes needed. Full trace: `IMPLEMENTATION_LOG.md` 2026-08-23.
+
+**P4.5 is COMPLETE**, not IMPLEMENTED.
 
 ## P4.6 · Audit — COMPLETE (infrastructure) / NOT_STARTED (coverage)
 **Schema:** `audit_log`, `log_audit_event()` — exist and are used by invite acceptance.
