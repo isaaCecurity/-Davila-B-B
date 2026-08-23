@@ -29,12 +29,31 @@ draft ──► submitted ──► confirmed ──► scheduled ──► in_p
 | draft | submitted | owner, admin, branch_manager, cashier | — | No dedicated `submit_ticket` RPC — reached via `update_ticket(p_status := 'submitted')`, verified live 2026-08-22 (see note below) |
 | submitted | confirmed | owner, admin, branch_manager, cashier | ≥1 ticket item; totals computed | Invoice issued. **Items do not freeze here** — see Immutability below |
 | confirmed | scheduled | owner, admin, branch_manager, cashier | — | Via `update_ticket(p_status := 'scheduled')` |
-| scheduled | in_production | owner, admin, branch_manager, baker | A production batch exists for the ticket | Via `update_ticket(p_status := 'in_production')` |
-| in_production | ready | owner, admin, branch_manager, baker | All linked batches completed or failed | Via `update_ticket(p_status := 'ready')`. Finished stock available |
+| scheduled | in_production | owner, admin, branch_manager, baker | **Not enforced** — see note below | Via `update_ticket(p_status := 'in_production')` |
+| in_production | ready | owner, admin, branch_manager, baker | **Not enforced** — see note below | Via `update_ticket(p_status := 'ready')`. Finished stock available |
 | ready | delivered | owner, admin, branch_manager, cashier | `fulfilment_type = 'pickup'`, **or** the linked `deliveries` row for this ticket has `status = 'delivered'` | Via `update_ticket(p_status := 'delivered')` |
 | delivered | completed | owner, admin, branch_manager, cashier | — | Sale stock movement written |
 | any non-terminal | cancelled | owner, admin, branch_manager | `cancelled_reason` provided; if `amount_paid > 0`, a matching `refunds` total must already exist | Unpaid invoice voided. ("Reserved stock released" was in earlier drafts — **there is no reservation mechanism in the schema**; no table, column, or `stock_movements.reason` implements it. Treat reservations as unspecified, not as an existing behaviour.) |
 | cancelled | archived | owner, admin, branch_manager | — | — |
+
+**Correction (2026-08-23) — the `scheduled→in_production` and `in_production→ready`
+preconditions above were unsanctioned.** This table previously claimed "a production
+batch exists for the ticket" and "all linked batches completed or failed" as
+preconditions for these two hops. Traced against `EB-013` Appendix A (the canonical
+lifecycle reference this document's own header cites as its source) and the rest of
+`EB-013`: **neither precondition appears anywhere in the engineering bible.** Appendix
+A's Order Lifecycle section gives only the state sequence and two unrelated rules
+("completed orders SHALL never re-enter production," "cancelled orders SHALL not
+produce revenue") — no batch-linkage requirement. `production_batches.ticket_id` does
+exist, so the check would be mechanically possible, but building it would mean inventing
+a business rule with no source, which `CLAUDE.md`'s blocker discipline exists to prevent.
+Surfaced during a security review of P6.6: unblocking bakers to call `update_ticket()` for
+these two hops made the never-enforced precondition newly *reachable* (a baker can now
+move a ticket to `in_production`/`ready` with zero linked batches), which is what
+prompted checking whether it was ever meant to be real. It wasn't — corrected here rather
+than adding trigger logic for a rule that was never approved. If a real batch-linkage
+requirement is wanted, it needs to be raised as a genuine product decision, not inferred
+from this document's own prior, unsourced claim.
 
 **Terminal:** `completed`, `archived`. (`cancelled` is non-terminal — its only legal exit is `archived`.)
 
