@@ -220,29 +220,27 @@ on whether `sync_conflicts` is created, and the operation-type/payload contract.
 
 ---
 
-## BLOCKER-007 · Documentation conflicts found during roadmap reconciliation
-**Status:** OPEN · **Affects:** P3.7, P4.4, planning accuracy · **Type:** contradiction
+## ✅ BLOCKER-007 · Documentation conflict resolved (2026-08-24)
+**Status:** RESOLVED · **Affects:** P3.7, P4.4, planning accuracy · **Type:** contradiction
 
-Two conflicts surfaced while reconciling every `docs/` specification against the live
-schema for the master roadmap. Recorded rather than resolved, per the no-guessing rule.
+The documentation conflicts found during roadmap reconciliation are resolved by the
+current implementation and the clarification in `docs/OFFLINE-SYNC-MODEL.md`.
 
-**(a) `sync_conflicts` is specified but does not exist.**
-`docs/OFFLINE-SYNC-MODEL.md` §335 names a `sync_conflicts` table as the place a
-conflict is recorded for domain resolution. The live database has no such table
-(verified). Either the table is missing, or the spec describes a design that was
-superseded by recording conflicts on `sync_operations.status = 'CONFLICT'`. Until this
-is settled, P3.7 has no defined destination for a conflict that needs human resolution.
+**(a) `sync_conflicts` is a local conceptual entity, not a required server table.**
+The live server records conflict outcomes on `sync_operations.status = 'CONFLICT'`,
+with conflict details and diagnostic metadata. A client may project those outcomes into
+local `sync_conflicts` records for user-facing resolution.
 
-**(b) Ticket RPCs are described as usable while documented as broken.**
+**(b) Ticket RPCs were described as usable while documented as broken.**
 `docs/API-CONTRACT.md` presents `confirm_ticket()`, `complete_ticket()` and
 `cancel_ticket()` as part of the working RPC surface, while `docs/STATE-MACHINES.md`
 §63-70 records — and this session verified live — that they cannot succeed in any
 state because `prevent_submitted_ticket_update()` fires before
 `guard_ticket_status_transition()`. Both documents cannot be correct.
 
-**Needed:** (a) confirm whether `sync_conflicts` should be created or the spec
-corrected; (b) correct whichever ticket document is wrong, in the same change that
-resolves BLOCKER-005.
+**Resolution:** The sync-conflict distinction is now documented, and the ticket
+documentation was corrected when BLOCKER-005 was resolved. BLOCKER-006 remains open for
+the separate per-entity conflict strategy and sync-applier contract.
 
 ---
 

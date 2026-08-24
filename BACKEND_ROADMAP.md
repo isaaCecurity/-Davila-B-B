@@ -51,14 +51,12 @@ being updated. As of this pass:
 - P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
   2026-08-22). P6.3, P6.7 DEFERRED.
 
-**Open blockers requiring a human decision, as of 2026-08-23:** BLOCKER-003 (financial
-rules — unspecified tax/discount/rounding/refund logic; the largest open item, gating all
-of P5 and the last piece of P4.1b/P4.4), BLOCKER-004 (EAS project ID is a placeholder),
-BLOCKER-006 (no per-entity sync conflict strategy, gating P3.7), BLOCKER-007
-(documentation-conflict housekeeping), BLOCKER-010(b, c) (folds into BLOCKER-003),
-BLOCKER-013 (an `ARCHITECTURE_DECISIONS.md` amendment; the implementation itself is
-already done). Every other blocker previously summarized on this page — BLOCKER-001, 002,
-005, 008, 009, 011, 012, 014, 015, 016, 017 — is **RESOLVED**; see `BLOCKERS.md` for the
+**Open blockers requiring a human decision, as of 2026-08-24:** BLOCKER-006
+(no per-entity sync conflict strategy, gating P3.7), BLOCKER-010(c) (catalog write
+mechanism confirmation), and BLOCKER-013 (an `ARCHITECTURE_DECISIONS.md` amendment;
+the implementation itself is already done). Every other blocker previously summarized
+on this page — BLOCKER-001, 002, 003, 004, 005, 007, 008, 009, 011, 012, 014, 015,
+016, 017 — is **RESOLVED**; see `BLOCKERS.md` for the
 evidence behind each.
 
 **🚦 P8.0 remains open** — its stated prerequisite set (**P2 + P4.1 read path**) is met, so

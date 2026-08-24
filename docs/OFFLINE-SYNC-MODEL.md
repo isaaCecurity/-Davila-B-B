@@ -327,7 +327,7 @@ conflict records
 
 Do not overload domain tables with large amounts of sync-control state unless there is a clear reason.
 
-Recommended conceptual entities:
+Recommended conceptual entities for the local client:
 
 ```text
 local_domain_records
@@ -338,6 +338,10 @@ device_context
 ```
 
 The exact local schema may differ by implementation, but these responsibilities must remain clear.
+`sync_conflicts` is a local client projection for user-facing conflict handling; it is
+not required to exist as a server table. On the server, a conflict is recorded on the
+corresponding `sync_operations` row with status `CONFLICT`, `conflict_details`, and
+diagnostic error metadata.
 
 ---
 

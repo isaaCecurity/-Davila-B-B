@@ -5,6 +5,15 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · Documentation conflict resolution (BLOCKER-007)
+
+Clarified that `sync_conflicts` is a local client projection, while server conflict
+outcomes are recorded on `sync_operations.status = 'CONFLICT'` with diagnostic metadata.
+The ticket documentation conflict was already corrected when BLOCKER-005 was resolved.
+BLOCKER-006 remains open for per-entity conflict strategies and the sync-applier contract.
+
+---
+
 ## 2026-08-24 · EAS project initialization (BLOCKER-004)
 
 **Scope:** Configure the Expo EAS project identity for the mobile app.
