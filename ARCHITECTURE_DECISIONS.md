@@ -93,6 +93,44 @@ it for consistency; do not re-add it until web development begins.
 `has_permission()` gates **zero** of 101 policies; role-based RLS is authoritative.
 Do not retrofit permission enforcement without a separate decision.
 
+## AD-018 — Driver trip cash custody is distinct from branch till custody · APPROVED
+Resolves BLOCKER-019. Driver-collected cash belongs to the active `driver_trip`'s cash
+custody context while the driver is out — it is linked to the branch's cash session but
+must **not** increase the branch drawer's `expected_cash` while it remains with the
+driver. Two custody contexts, not one collapsed model:
+
+1. **Branch cash session / till custody** — the existing `cash_sessions` machinery,
+	 unchanged. `expected_cash` continues to mean physical drawer cash only.
+2. **Driver trip cash custody** — cash the driver is holding, tracked against the trip,
+	 contributing to the trip's own expected-cash-return figure, not the branch drawer's.
+
+At trip reconciliation: expected driver cash (from the trip's recorded cash movements) is
+compared against physical cash returned; any discrepancy is recorded explicitly, never
+silently corrected. Only once accepted does the returned cash enter the branch cash
+session's own recorded cash (a normal cash-in to the till, through whatever mechanism the
+existing cash-session model already uses for that — no new till-side accounting concept).
+
+**Do not duplicate `cash_sessions`' accounting logic.** The trip-cash-custody schema
+follows the same shape (recorded movements, an expected-vs-actual comparison, an explicit
+variance field) rather than inventing a parallel ledger design.
+
+## AD-019 — `deliveries` remains the sole authority for physical delivery state · APPROVED
+Resolves BLOCKER-020. `driver_trips` is an operational/custody wrapper; it does not
+replace or bypass the existing `deliveries` state machine and its `guard_delivery_
+transition()` invariants (`STATE-MACHINES.md`). Three responsibilities stay separated:
+
+- **Ticket/sale completion** — the commercial transaction was recorded.
+- **Driver trip** — operational context for the driver's field activity (custody, route,
+	reconciliation).
+- **`deliveries`** — authoritative physical-delivery / proof-of-delivery state. Unchanged.
+
+For a trip-linked, `fulfilment_type = 'delivery'` ticket: the ticket links to the trip:
+completing its sale must **not** silently transition the linked `deliveries` row.
+`ready → delivered` continues to require the existing verified `deliveries` row exactly as
+today (`STATE-MACHINES.md` §60) — trip work integrates with `deliveries`, it does not
+redefine its authority. Any future RPC touching a trip-linked ticket's delivery status
+must call the existing delivery-transition path, not a new one.
+
 ## AD-017 — MVP financial rules · APPROVED
 The MVP uses the Engineering Bible financial model and defers tax, discounts, COGS,
 gross profit, margin, and refunds. Existing schema objects and API contracts for

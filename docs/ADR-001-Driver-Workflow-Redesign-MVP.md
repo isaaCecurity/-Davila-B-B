@@ -369,6 +369,16 @@ Payment recorded
 Sale completed
 ```
 
+**Resolved 2026-08-24 — AD-019.** For a `fulfilment_type = 'delivery'` ticket linked to a
+trip, "Sale completed" above is the commercial transaction only. It does **not** transition
+the ticket's linked `deliveries` row. `deliveries` remains the sole authority for
+physical-delivery/proof-of-delivery state, and `ready → delivered` continues to hard-require
+a verified `deliveries` row exactly as `STATE-MACHINES.md` §60 already enforces. The trip
+provides operational context (custody, route) around the existing delivery gate; it does not
+replace or bypass it. Any RPC that completes a trip-linked delivery ticket's sale must call
+the existing delivery-transition path to move `deliveries` forward — it must never write to
+`deliveries.status` directly or infer that status from trip/ticket state.
+
 ### Path B — Driver creates ticket
 
 ```text
@@ -617,21 +627,45 @@ Driver-facing reconciliation should remain simple.
 
 # 13. Cash Session Relationship
 
-The existing Cash Session state machine remains:
+**Resolved 2026-08-24 — AD-018.** The existing Cash Session state machine remains
+unchanged:
 
 ```text
 open → closed
 ```
 
-The driver trip should provide the operational context for driver sales and collections.
+Driver trip cash custody is a **distinct context from branch till custody**, linked to
+the branch's cash session but not merged into it while the driver is on the road:
 
-Do not make payment a Ticket state.
+```text
+Branch cash session (till custody)          Driver trip (cash custody)
+──────────────────────────────────          ──────────────────────────
+expected_cash = opening float                trip's own expected cash
+  + cash payments (till-recorded)               = sum(cash collected on trip)
+  - cash expenses                            NOT counted in the branch
+                                              session's expected_cash while
+                                              the driver still holds it
+```
 
-Payment status remains a financial concern independent of the operational ticket lifecycle.
+While the trip is `in_transit`, cash the driver collects is recorded against the trip,
+not the branch drawer. The branch cash session's `expected_cash` must not move because of
+a driver sale until that cash is physically back at the bakery.
 
-At reconciliation/close, the system should provide the supervisor/manager with the totals necessary to reconcile the driver's activity with the applicable cash session.
+At trip reconciliation (§12):
 
-The exact relationship between `driver_trip` and `cash_session` must be finalized during schema implementation.
+1. Compute the trip's expected cash from its own recorded cash movements.
+2. Compare against the physical cash the driver actually returns.
+3. Record any discrepancy explicitly — never silently correct it.
+4. Only once accepted does the returned cash enter the branch cash session as a normal
+	 cash-in, through the cash session's own existing mechanism — not a new one.
+
+**Do not make payment a Ticket state.** Payment status remains a financial concern
+independent of the operational ticket lifecycle.
+
+**Do not duplicate `cash_sessions`' accounting logic.** The trip-cash-custody schema
+should follow the same shape the existing model already uses — recorded movements, an
+expected-vs-actual comparison, an explicit variance field — rather than a parallel ledger
+design. Exact table/column names are a Phase 2 schema-design detail.
 
 ---
 
@@ -974,12 +1008,10 @@ Phase 2 (database design/migration) must not start until they are resolved.
 	 the existing `daily_financial_audits` four-eyes pattern (submitter ≠ confirmer,
 	 confirmer is branch_manager/owner/admin) rather than inventing a new authorization
 	 model.
-11. **BLOCKED — see BLOCKER-020.** Relationship between `driver_trip` and `cash_session`.
-	 This determines whether driver cash collections settle into the branch's currently
-	 open cash session or require a session of their own, which is a real accounting
-	 model choice, not an implementation detail — AD-017's expected-drawer-cash formula
-	 is defined per branch session and this ADR does not say which session a driver's
-	 cash lands in.
+11. **Resolved 2026-08-24 — see AD-018.** Driver trip cash custody is modeled as
+	 distinct from branch till custody: linked to the branch's cash session, but not
+	 merged into its `expected_cash` until the driver returns and the trip is
+	 reconciled. See §13 below for the updated model.
 12. **Resolved.** A failed/no-sale visit is a lightweight visit-outcome record linked to
 	 the trip and route stop — no ticket, no money, no inventory movement. Pure
 	 reporting data; no product decision needed.
@@ -997,13 +1029,17 @@ Phase 2 (database design/migration) must not start until they are resolved.
 
 **Additional blocker surfaced during review, not originally in this list:**
 
-15. **BLOCKED — see BLOCKER-020.** Relationship between `driver_trip`/Path A and the
-	 existing, live-verified `deliveries` entity (P9.6). `STATE-MACHINES.md` hard-requires
-	 a verified `deliveries` row before a delivery-fulfilment ticket can reach
-	 `ready → delivered`. §6 Path A never states whether a trip-linked delivery ticket
-	 still creates/transitions a `deliveries` row, or whether the trip context replaces
-	 that gate for driver-fulfilled tickets. Guessing here risks either duplicating a
-	 gate that already works or silently breaking the live P9.6 write path.
+15. **Resolved 2026-08-24 — see AD-019.** `deliveries` remains the sole authority for
+	 physical-delivery state. A trip-linked delivery ticket still creates/transitions a
+	 `deliveries` row exactly as today; the trip context integrates with that gate, it
+	 does not replace it. See §6 and §11 below for the updated model.
+
+**Still open, deliberately left unresolved:**
+
+16. Offline conflict rules for driver-created customers and tickets remain
+	 **BLOCKER-006** (pre-existing, unchanged by this ADR). No schema, RPC, migration, or
+	 state-machine change in Phase 2 may assume a resolution for it — any work that would
+	 require one is gated and left undone until BLOCKER-006 is decided separately.
 
 ---
 

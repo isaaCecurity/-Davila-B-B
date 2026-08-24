@@ -1,5 +1,32 @@
 # BakeFlow — Current Task
 
+## ✅ ADR-001 Phase 2 (database design) complete — driver_trips schema live (2026-08-24)
+
+User resolved BLOCKER-019 and BLOCKER-020 explicitly (recorded as **AD-018**/**AD-019**);
+BLOCKER-006 stays deliberately open with nothing in this pass depending on it. Inspected
+the live `cash_sessions`/`deliveries`/`tickets`/`payments`/`stock_movements`/`warehouses`
+schema and RPCs before designing anything, then applied the `driver_trips` table (status +
+AD-018 cash-custody fields, structural CHECKs, one-active-trip-per-driver constraint, RLS
+enabled+forced, SELECT-only grant), `tickets.driver_trip_id`, `payments.driver_trip_id`
+with a relaxed/extended CHECK pair, and a `stock_movements` reference_type addition — all
+live. Also caught and fixed the same default-privilege gap found on `cash_sessions`
+earlier this session (new tables get `authenticated` INSERT/UPDATE/DELETE by default;
+revoked explicitly).
+
+Verified live via a rolled-back transaction: 10/10 checks passed (reconciliation-needs-cash,
+variance-needs-note, one-trip-per-driver, trip-scoped cash payment without a till session,
+custody-context mutual exclusivity, new stock_movements reference_type, RLS blocks direct
+client writes, RLS permits the driver's own-trip read). `pytest` 12/12 before and after.
+
+**Not built this pass, by design (Phase 3):** the trip lifecycle RPCs, the transition-guard
+trigger, and — importantly — the `close_cash_session()` change needed to actually pull
+reconciled trip cash into a branch session's `expected_amount`. Nothing is writable from
+the client yet; `driver_trips` currently has no `INSERT`/`UPDATE` grant at all.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## 🛑 ADR-001 approved, Phase 1 domain review complete — Phase 2 blocked on three decisions (2026-08-24)
 
 User directed approval of `docs/ADR-001-Driver-Workflow-Redesign-MVP.md` ("the driver is

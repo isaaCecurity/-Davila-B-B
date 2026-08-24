@@ -5,6 +5,66 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · ADR-001 Phase 2 — driver_trips schema live, BLOCKER-019/020 resolved
+
+User resolved BLOCKER-019 (driver cash custody distinct from branch till custody, linked
+only at reconciliation) and BLOCKER-020 (`deliveries` stays sole delivery-proof
+authority) with explicit decisions. Recorded as **AD-018** and **AD-019** in
+`ARCHITECTURE_DECISIONS.md`; both blockers marked RESOLVED in `BLOCKERS.md`. BLOCKER-006
+(offline conflict strategy) kept deliberately open per instruction — nothing in this pass
+depends on a resolution for it.
+
+Inspected live schema before designing anything (`information_schema.columns`,
+`pg_constraint`, `pg_index`, `pg_policy`, and the bodies of `close_cash_session()`,
+`open_cash_session()`, `record_payment()`, `adjust_stock()`, `has_branch_access()`) —
+found `warehouses` already fits "vehicle as stock location" with no change needed,
+`stock_movements` already has `transfer_in`/`transfer_out` reasons for exactly this
+custody-transfer shape, `tickets.sale_customer_type` already allows `'ROADSIDE'`, and
+critically that `record_payment()`/`close_cash_session()` compute a branch session's
+`expected_amount` purely from `payments.cash_session_id`-linked rows — confirming a
+trip-scoped cash payment must NOT carry the branch's `cash_session_id`, or AD-018 would
+be violated by the existing close logic without anyone touching it.
+
+Applied two migrations via `mcp__supabase__apply_migration`:
+
+- `adr001_phase2_driver_trips_schema` — new `driver_trips` table (status/cash-custody/
+	reconciliation columns, structural CHECKs mirroring `cash_sessions`/
+	`daily_financial_audits` patterns, one-active-trip-per-driver partial unique index,
+	RLS enabled+forced with a `deliveries_select`-style policy, `SELECT`-only grant to
+	`authenticated`); `tickets.driver_trip_id` (trip-ticket relationship); `payments.
+	driver_trip_id` plus a relaxed `payments_cash_needs_session` → `payments_cash_needs_
+	custody_context` CHECK and a new mutual-exclusivity CHECK (a cash payment belongs to
+	the till XOR a trip, never both); `stock_movements_reference_type_check` extended
+	with `'driver_trip'`.
+- `revoke_direct_write_grants_on_driver_trips` — found (same class of gap fixed on
+	`cash_sessions` earlier this session) that Postgres default privileges had granted
+	`authenticated` INSERT/UPDATE/DELETE on the new table despite no write policy
+	existing. Revoked explicitly rather than relying on "no policy yet" as the only
+	backstop.
+
+Verified live via a rolled-back transaction against real fixture org/branch/warehouse/
+profile data (no synthetic auth.users row exists, so fabricated profile fixtures were
+rejected by the FK — switched to real existing rows, same lesson as this session's
+earlier RLS suites): 10 checks, 10/10 passed after fixing one test-setup bug (T7 initially
+failed because a prior sub-test had already fully paid its fixture ticket, so the
+pre-existing overpayment guard fired before the constraint under test could — re-run in
+isolation against a fresh unpaid ticket as T7b, passed). Confirmed: reconciled/completed
+status requires cash figures + reconciler (T2/T3), variance requires a note (T4), one
+active trip per driver (T5), a trip-scoped cash payment needs no till session (T6), a
+payment can't reference both custody contexts (T7b), `stock_movements` accepts the new
+reference_type (T8), `authenticated` cannot write `driver_trips` directly — permission
+denied (T9), and the driver-ownership SELECT policy returns the driver's own trip (T10).
+
+`.venv/Scripts/python.exe -m pytest -q` — 12/12 passed, both before and after.
+
+**Deliberately not built this pass (Phase 3, RPC/security layer):** trip lifecycle RPCs
+(create/verify-loading/depart/return/reconcile), `guard_driver_trip_transition()`,
+`record_driver_trip_payment()`, and the `close_cash_session()` change needed to actually
+absorb reconciled trip cash into a branch session's `expected_amount` (today's function
+only sums `cash_session_id`-linked payments — it does not yet know trips exist). No
+`INSERT`/`UPDATE` grant exists on `driver_trips` yet by design; nothing is callable from
+the client until Phase 3 lands.
+
 ## 2026-08-24 · AD-014 amendment (BLOCKER-013)
 
 Owner approved amending AD-014 to match the implemented session storage: chunked

@@ -4,7 +4,17 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION REQUIRED: ADR-001 approved — three decisions gate Phase 2 (2026-08-24)
+## RESOLVED: ADR-001 Phase 2 decisions — BLOCKER-019 and BLOCKER-020 answered (2026-08-24)
+
+Both decided: driver trip cash is custody-distinct from branch till cash, linked only at
+reconciliation (**AD-018**); `deliveries` stays the sole authority for physical-delivery
+state, trip completion never bypasses it (**AD-019**). BLOCKER-006 (offline conflict
+strategy) stays deliberately open and unaddressed — no schema/RPC in Phase 2 may assume a
+resolution for it. Phase 2 database design proceeding.
+
+---
+
+## (superseded by the resolution above) ADR-001 approved — three decisions gate Phase 2 (2026-08-24)
 
 `docs/ADR-001-Driver-Workflow-Redesign-MVP.md` is now **Approved**. Domain review (Phase 1)
 proceeded immediately — 12 of its 14 open decisions were low-stakes and resolved inline in

@@ -911,8 +911,17 @@ decision-locked formulas.
 
 ---
 
-## BLOCKER-019 · ADR-001 driver trips — relationship to cash sessions is undecided
-**Status:** OPEN · **Affects:** ADR-001 Phase 2/3 (driver trip schema + RPCs), P9.7 · **Type:** financial architecture decision
+## ✅ BLOCKER-019 · ADR-001 driver trips — relationship to cash sessions — RESOLVED 2026-08-24
+**Status:** RESOLVED · **Affects:** ADR-001 Phase 2/3 (driver trip schema + RPCs), P9.7 · **Type:** financial architecture decision
+
+**Resolution:** driver trip cash custody is modeled as distinct from branch till custody,
+linked but not merged — see **AD-018** in `ARCHITECTURE_DECISIONS.md` for the full decision.
+Driver cash contributes to the trip's own expected-cash figure, never the branch drawer's,
+until accepted at reconciliation. Schema/RPC work should follow the existing cash-session
+architecture's shape (recorded movements + expected-vs-actual + explicit variance) rather
+than a new accounting design. Phase 2 database design may proceed on this axis.
+
+**Original (OPEN, 2026-08-24):**
 
 ADR-001 (Driver Workflow Redesign, approved 2026-08-24) §13 explicitly defers this: "The
 exact relationship between `driver_trip` and `cash_session` must be finalized during
@@ -942,8 +951,17 @@ custody, made before any `driver_trips` migration that touches money is written.
 
 ---
 
-## BLOCKER-020 · ADR-001 driver trips — relationship to the existing `deliveries` entity is undecided
-**Status:** OPEN · **Affects:** ADR-001 Phase 1/2 (domain review, driver trip schema), P9.6 · **Type:** architecture decision
+## ✅ BLOCKER-020 · ADR-001 driver trips — relationship to `deliveries` — RESOLVED 2026-08-24
+**Status:** RESOLVED · **Affects:** ADR-001 Phase 1/2 (domain review, driver trip schema), P9.6 · **Type:** architecture decision
+
+**Resolution:** `deliveries` remains the sole authority for physical-delivery state —
+see **AD-019** in `ARCHITECTURE_DECISIONS.md`. A trip-linked delivery ticket still gates
+`ready → delivered` on a verified `deliveries` row exactly as today; trip-level sale
+completion must not silently transition it. Any new RPC touching a trip-linked ticket's
+delivery status must call the existing delivery-transition path. Phase 2 database design
+may proceed on this axis, preserving the current `deliveries` schema and triggers as-is.
+
+**Original (OPEN, 2026-08-24):**
 
 ADR-001 §6 Path A (manager/supervisor creates a ticket, driver fulfils it) never states
 whether a trip-linked, delivery-fulfilment ticket still creates and transitions a
