@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@bakeflow/auth';
+import { getSupabaseClient, rolesFromSession } from '@bakeflow/auth';
 import { useMyOrganizations, useProductCategories, useProducts } from '@bakeflow/hooks';
 import type { Product } from '@bakeflow/types';
 import { useRouter } from 'expo-router';
@@ -39,6 +39,8 @@ export default function CatalogScreen(): React.JSX.Element {
   const router = useRouter();
   const activeTenantId = useSessionStore((s) => s.activeTenantId);
   const userId = useSessionStore((s) => s.userId);
+  const session = useSessionStore((s) => s.session);
+  const isDriver = rolesFromSession(session).includes('driver');
 
   const products = useProducts(client, activeTenantId);
   const categories = useProductCategories(client, activeTenantId);
@@ -92,6 +94,15 @@ export default function CatalogScreen(): React.JSX.Element {
           >
             <Text className="text-sm font-medium text-neutral-900">Drops</Text>
           </Pressable>
+          {isDriver && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/driver/home')}
+              className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
+            >
+              <Text className="text-sm font-medium text-neutral-900">My Trip</Text>
+            </Pressable>
+          )}
           <Pressable
             accessibilityRole="button"
             onPress={() => router.push('/select-organization')}

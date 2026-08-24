@@ -951,7 +951,14 @@ authority (AD-019) — cross-checked line by line against the deployed RPC/trigg
 not written from memory. All three test suites (`driver_trips_rls.sql`, `financial_
 write_rls.sql`, `pytest`) re-verified green after the change.
 
-### Phase 5 — Driver UI
+### Phase 5 — Driver UI · **IN PROGRESS — first slice live 2026-08-25**
+
+`apps/mobile/app/driver/home.tsx` plus the full `driver_trips` data layer (`@bakeflow/
+types`, `@bakeflow/validation`, `@bakeflow/api`, `@bakeflow/hooks`) are live. Covers Start
+Trip, Go, and Return (empty-manifest case). Not yet built: Sell/Create Ticket (needs
+product selection and customer search/create), the partial-return manifest, and the
+supervisor/manager-facing loading-verification and reconcile/complete screens. See
+`IMPLEMENTATION_LOG.md` 2026-08-25 for full detail.
 
 Implement the simple workflow:
 

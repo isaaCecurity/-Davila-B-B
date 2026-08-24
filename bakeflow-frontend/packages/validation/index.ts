@@ -8,6 +8,7 @@ export {
   nonNegativeQuantitySchema,
   nonZeroQuantitySchema,
   positiveQuantitySchema,
+  signedMoneySchema,
   signedQuantitySchema,
   timestamptzSchema,
   uuidSchema,
@@ -41,3 +42,5 @@ export { deliverySchema } from './delivery';
 export { organizationMembershipSchema, organizationRoleSchema } from './organization';
 
 export { driverSchema } from './staff';
+
+export { driverTripSchema } from './driver-trip';

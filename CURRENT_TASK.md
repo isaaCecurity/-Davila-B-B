@@ -1,5 +1,52 @@
 # BakeFlow — Current Task
 
+## ✅ ADR-001 Phase 5 (driver mobile UI) — first vertical slice live (2026-08-25)
+
+Inspected the existing frontend conventions before writing anything (via a research
+subagent plus direct reads of `queries/delivery.ts`, `mutations/delivery.ts`,
+`DeliveryActions.tsx`, `packages/hooks/index.ts`, `_layout.tsx`, `session.ts`) rather than
+inventing parallel patterns. Key finding worth recording: **no tab bar or role-based
+navigation exists anywhere in this app** — `_layout.tsx` is a single flat `Stack` with one
+`NavigationGate`; building the driver's entry point was genuinely new work with zero
+precedent to copy, unlike the data layer below.
+
+**Data layer, following the `delivery.ts` pattern exactly:** `packages/types/driver-
+trip.ts` (types, phase-mapping helpers), `packages/validation/driver-trip.ts` (Zod schema
+mirroring the live CHECK constraints, including a new `signedMoneySchema` in `decimal.ts` —
+`driver_trips.cash_variance` is the first money column in this schema that can legitimately
+be negative), `packages/api/queries/driver-trips.ts` (read, PostgREST+RLS),
+`packages/api/mutations/driver-trips.ts` (write — all 6 lifecycle RPCs plus a trip-scoped
+`record_payment()` wrapper, zero table writes since `driver_trips` grants none), and
+matching hooks in `packages/hooks/index.ts` with `orgScoped()` cache keys throughout.
+
+**Screen, `apps/mobile/app/driver/home.tsx`:** the ADR's own UX constraint enforced in
+code, not just followed by convention — `driverTripPhase()`/`driverTripPhaseLabel()` are
+the *only* place a raw `driver_trips.status` value is translated to driver-facing copy, so
+no screen can accidentally leak a backend state name. Renders "waiting on someone else"
+passively for the two phases the driver cannot act on (`loading` verification,
+`reconciled` close-out — both RPC-gated to other roles), and wires up **Start Trip**,
+**Go**, and **Return (nothing left)** — the return path deliberately covers only the
+common case ADR-001 §10 names explicitly ("a driver may sell everything"); a manifest-entry
+UI for partial returns is not built.
+
+**Deliberately not built this pass:** the Sell/Create-Ticket flow (needs product selection
+and customer search/create, neither of which has a driver-facing screen yet — the honest
+choice was to leave "Sell" unwired rather than link a button to nothing), the partial-
+return manifest screen, the supervisor-facing loading-verification screen, and the
+manager-facing reconcile/complete screens. All are clearly-scoped next slices, not gaps
+papered over.
+
+**Verified:** `npm run typecheck --workspace apps/mobile` clean, `npm run lint --workspace
+apps/mobile` clean (after fixing 4 unescaped-apostrophe lint errors), and a full production
+`npx expo export --platform web` completed with 0 errors (1023 modules bundled) — real
+compilation, not just type-checking. **Not verified:** an interactive click-through against
+a live signed-in session — no browser/device tooling was available in this environment to
+do that, stated explicitly rather than implied as covered.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-25.
+
+---
+
 ## ✅ ADR-001 Phase 4 (STATE-MACHINES.md updated) complete (2026-08-24)
 
 Added `docs/STATE-MACHINES.md` §6 "Driver Trip" documenting the live Phase 2/3 backend:

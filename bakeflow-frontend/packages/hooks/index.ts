@@ -37,12 +37,17 @@
 import {
   adjustStock,
   cancelProductionBatch,
+  completeDriverTrip,
   completeProductionBatch,
+  departDriverTrip,
   failProductionBatch,
+  getCurrentDriverTrip,
   getDeliveryById,
+  getDriverTripById,
   getProductById,
   getProductionBatchWithIngredients,
   listDeliveries,
+  listDriverTrips,
   listDrivers,
   listIngredientStockLevels,
   listIngredients,
@@ -57,25 +62,39 @@ import {
   listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
+  recordDriverTripPayment,
+  reconcileDriverTrip,
+  returnDriverTrip,
+  startDriverTrip,
   startProductionBatch,
   transitionDelivery,
   updateDeliveryDetails,
+  verifyTripLoading,
   type AdjustStockInput,
   type AdjustStockResult,
   type BakeflowClient,
+  type CompleteDriverTripInput,
   type CompleteProductionBatchInput,
   type DeliveryFilters,
   type DeliveryTransition,
+  type DriverTripFilters,
   type FailProductionBatchInput,
   type KeysetPageOptions,
   type Page,
   type PageOptions,
   type ProductionBatchFilters,
+  type ReconcileDriverTripInput,
+  type RecordDriverTripPaymentInput,
+  type RecordDriverTripPaymentResult,
+  type ReturnDriverTripInput,
+  type StartDriverTripInput,
   type UpdateDeliveryDetailsInput,
+  type VerifyTripLoadingInput,
 } from '@bakeflow/api';
 import type {
   Delivery,
   Driver,
+  DriverTrip,
   Ingredient,
   IngredientStockLevel,
   OrganizationMembership,
@@ -176,6 +195,19 @@ export const queryKeys = {
     orgScoped(tenantId, 'tickets-by-id', [...new Set(ticketIds)].sort().join(',')),
   /** Not paged and not filtered by anything but role — see `queries/staff.ts`. */
   drivers: (tenantId: string): unknown[] => orgScoped(tenantId, 'drivers'),
+
+  /* ADR-001 — driver trips. */
+  driverTrips: (
+    tenantId: string,
+    filters?: DriverTripFilters,
+    options?: PageOptions,
+  ): unknown[] => orgScoped(tenantId, 'driver-trips', filters ?? {}, options ?? {}),
+  driverTrip: (tenantId: string, tripId: string): unknown[] =>
+    orgScoped(tenantId, 'driver-trip', tripId),
+  /** Keyed by driver, not by trip id — this is "whichever trip, if any, this driver is
+   *  currently in", which is exactly the ambiguity `driverTrip` above cannot express. */
+  currentDriverTrip: (tenantId: string, driverId: string): unknown[] =>
+    orgScoped(tenantId, 'current-driver-trip', driverId),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -777,6 +809,238 @@ export function useAdjustStock(
         variables.warehouseId,
         variables.itemType,
       );
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Driver trips (ADR-001)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One page of driver trips, newest first. Narrowed by the same tenant/branch/driver
+ * disjunction as `useDeliveries` — see `queries/driver-trips.ts`'s module header for the
+ * live SELECT policy this mirrors.
+ */
+export function useDriverTrips(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: DriverTripFilters,
+  options?: PageOptions,
+): UseQueryResult<Page<DriverTrip>, Error> {
+  return useQuery({
+    queryKey: queryKeys.driverTrips(tenantId ?? 'none', filters, options),
+    queryFn: () => listDriverTrips(client, filters ?? {}, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/**
+ * One driver trip, or `null` when it does not exist, belongs to another organization, or
+ * sits in a branch the caller cannot reach and is not their own.
+ */
+export function useDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+  tripId: string | null,
+): UseQueryResult<DriverTrip | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.driverTrip(tenantId ?? 'none', tripId ?? 'none'),
+    queryFn: () => getDriverTripById(client, tripId ?? ''),
+    enabled: tenantId !== null && tripId !== null,
+  });
+}
+
+/**
+ * The calling driver's own active trip, or `null` when they have none. This is what
+ * `apps/mobile/app/driver/home.tsx` anchors on: the one query that answers "what phase of
+ * Load → Go → Sell → Return → Reconcile am I in, if any."
+ */
+export function useCurrentDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+  driverId: string | null,
+): UseQueryResult<DriverTrip | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.currentDriverTrip(tenantId ?? 'none', driverId ?? 'none'),
+    queryFn: () => getCurrentDriverTrip(client, driverId ?? ''),
+    enabled: tenantId !== null && driverId !== null,
+  });
+}
+
+/**
+ * Refresh what a changed trip invalidates. Same shape as `invalidateDelivery`: the fresh
+ * row is written straight into the detail key (the mutation already returned it, re-read
+ * through the same projection this cache uses), the list is invalidated by tenant-scoped
+ * prefix (a transition changes which filter/page the row belongs to), and — the one thing
+ * with no analogue elsewhere — the driver's own `currentDriverTrip` key is invalidated too,
+ * since that is a *different* cache entry from `driverTrip(tripId)` and a stale copy there
+ * is exactly what would leave the Home screen showing a trip that just completed.
+ */
+function invalidateDriverTrip(queryClient: QueryClient, tenantId: string, row: DriverTrip): void {
+  queryClient.setQueryData(queryKeys.driverTrip(tenantId, row.id), row);
+  void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, 'driver-trips') });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenantId, row.id) });
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.currentDriverTrip(tenantId, row.driver_id),
+  });
+}
+
+/**
+ * Start a new trip. No retry — a replay while the first call actually succeeded would hit
+ * `driver_trips_one_active_per_driver` and surface as a confusing failure of an action that
+ * already worked.
+ */
+export function useStartDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, StartDriverTripInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: StartDriverTripInput) => {
+      requireTenant(tenantId);
+      return startDriverTrip(client, input);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface VerifyTripLoadingVariables {
+  tripId: string;
+  input: VerifyTripLoadingInput;
+}
+
+/** Record and verify a trip's loading. Called by a supervisor/manager/baker, never the
+ *  driver — see `mutations/driver-trips.ts`'s module header. */
+export function useVerifyTripLoading(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, VerifyTripLoadingVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId, input }: VerifyTripLoadingVariables) => {
+      requireTenant(tenantId);
+      return verifyTripLoading(client, tripId, input);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface DriverTripIdVariables {
+  tripId: string;
+}
+
+/** Depart with the loaded vehicle. The trip's own driver only. */
+export function useDepartDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, DriverTripIdVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId }: DriverTripIdVariables) => {
+      requireTenant(tenantId);
+      return departDriverTrip(client, tripId);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface ReturnDriverTripVariables {
+  tripId: string;
+  input: ReturnDriverTripInput;
+}
+
+/** Record the physical return. The trip's own driver only. */
+export function useReturnDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, ReturnDriverTripVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId, input }: ReturnDriverTripVariables) => {
+      requireTenant(tenantId);
+      return returnDriverTrip(client, tripId, input);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface ReconcileDriverTripVariables {
+  tripId: string;
+  input: ReconcileDriverTripInput;
+}
+
+/** Reconcile a returned trip's cash. Management only — never the driver. */
+export function useReconcileDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, ReconcileDriverTripVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId, input }: ReconcileDriverTripVariables) => {
+      requireTenant(tenantId);
+      return reconcileDriverTrip(client, tripId, input);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface CompleteDriverTripVariables {
+  tripId: string;
+  input: CompleteDriverTripInput;
+}
+
+/** Close a reconciled trip out. Management only. */
+export function useCompleteDriverTrip(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<DriverTrip, Error, CompleteDriverTripVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId, input }: CompleteDriverTripVariables) => {
+      requireTenant(tenantId);
+      return completeDriverTrip(client, tripId, input);
+    },
+    onSuccess: (row) => {
+      invalidateDriverTrip(queryClient, requireTenant(tenantId), row);
+    },
+  });
+}
+
+export interface RecordDriverTripPaymentVariables {
+  tripId: string;
+  input: RecordDriverTripPaymentInput;
+}
+
+/**
+ * Record a payment collected on the road, scoped to this trip's own cash custody rather
+ * than a till session (AD-018). Does not change `driver_trips.status`, but the trip detail
+ * key is still invalidated: `reconcile_driver_trip()`'s `expected_cash` is computed from
+ * this payment, so a screen showing that figure should not serve a stale one.
+ */
+export function useRecordDriverTripPayment(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<RecordDriverTripPaymentResult, Error, RecordDriverTripPaymentVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tripId, input }: RecordDriverTripPaymentVariables) => {
+      requireTenant(tenantId);
+      return recordDriverTripPayment(client, tripId, input);
+    },
+    onSuccess: (_result, variables) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenant, variables.tripId) });
     },
   });
 }

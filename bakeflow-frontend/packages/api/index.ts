@@ -161,3 +161,32 @@ export {
   type SendInviteEmailResult,
 } from './mutations/invitations';
 
+// ADR-001 — driver trips, read and write. `driver_trips` is RPC-only: `authenticated`
+// holds no INSERT/UPDATE/DELETE grant at all (a stricter posture than `deliveries`),
+// verified live and enforced again after a default-privilege grant was found and revoked.
+// See the module headers in queries/driver-trips.ts and mutations/driver-trips.ts.
+export {
+  getCurrentDriverTrip,
+  getDriverTripById,
+  listDriverTrips,
+  type DriverTripFilters,
+} from './queries/driver-trips';
+export {
+  completeDriverTrip,
+  departDriverTrip,
+  recordDriverTripPayment,
+  reconcileDriverTrip,
+  returnDriverTrip,
+  startDriverTrip,
+  verifyTripLoading,
+  type CompleteDriverTripInput,
+  type DriverTripManifestItem,
+  type DriverTripPaymentMethod,
+  type ReconcileDriverTripInput,
+  type RecordDriverTripPaymentInput,
+  type RecordDriverTripPaymentResult,
+  type ReturnDriverTripInput,
+  type StartDriverTripInput,
+  type VerifyTripLoadingInput,
+} from './mutations/driver-trips';
+

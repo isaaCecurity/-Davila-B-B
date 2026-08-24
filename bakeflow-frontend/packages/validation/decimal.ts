@@ -58,26 +58,39 @@ const exactDecimalString = z.string({
 // records both directions of the ledger, and `*_stock_levels.quantity_on_hand` has **no**
 // non-negative CHECK live, so both must accept a leading '-'.
 //
-// Signed *money* still does not exist, and P4.4 confirmed it rather than breaking it.
-//
-// A `signedMoneySchema` was briefly added for `tickets.subtotal_amount`,
-// `tickets.amount_paid` and `ticket_items.unit_price`, because `SCHEMA-REFERENCE.md` §4
-// lists `CHECK >= 0` beside some money columns and not those three. Read live on
-// 2026-08-15, all three **do** carry the check:
+// Signed *money* did not exist through P4.4-P9.6, and each domain up to that point
+// confirmed it rather than assuming it. A `signedMoneySchema` was briefly added for
+// `tickets.subtotal_amount`, `tickets.amount_paid` and `ticket_items.unit_price`, because
+// `SCHEMA-REFERENCE.md` §4 lists `CHECK >= 0` beside some money columns and not those
+// three. Read live on 2026-08-15, all three **do** carry the check:
 //
 //   tickets_subtotal_amount_check   CHECK (subtotal_amount >= 0)
 //   tickets_amount_paid_check       CHECK (amount_paid    >= 0)
 //   ticket_items_unit_price_check   CHECK (unit_price     >= 0)
 //
 // The document's omission was an omission, not information. `signedMoneySchema` was
-// therefore removed rather than left as an unused export: **no money column in this
-// schema permits a negative value.** A refund is a row in `refunds`, never a negative
-// payment (§4), which is why that stays true.
+// therefore removed rather than left as an unused export.
+//
+// ADR-001 (2026-08-24) is the first real instance: `driver_trips.cash_variance` is
+// `physical_cash - expected_cash` (`driver_trips_cash_variance_consistent`, read live) with
+// **no** non-negativity CHECK — a driver returning short of expected cash is exactly the
+// case this column exists to surface, per AD-018 ("variance is recorded, never corrected").
+// So a genuinely negative money value is now reachable, and `signedMoneySchema` is back.
 
 /** `NUMERIC(19,4) CHECK (value >= 0)` — e.g. `product_variants.unit_price`. */
 export const nonNegativeMoneySchema = exactDecimalString
   .regex(MONEY_PATTERN, MONEY_MESSAGE)
   .refine((value) => !isNegativeDecimalString(value), 'must be >= 0')
+  .transform((value): Money => unsafeMoney(value));
+
+/**
+ * `NUMERIC(19,4)` with **no sign constraint** — `driver_trips.cash_variance` only, as of
+ * ADR-001. See the module header for why this differs from every other money column in the
+ * schema: a driver returning short of expected cash is not an error state to reject, it is
+ * the fact this column exists to record.
+ */
+export const signedMoneySchema = exactDecimalString
+  .regex(MONEY_PATTERN, MONEY_MESSAGE)
   .transform((value): Money => unsafeMoney(value));
 
 /** `NUMERIC(18,4) CHECK (value >= 0)` — e.g. `ingredients.reorder_level`. */
