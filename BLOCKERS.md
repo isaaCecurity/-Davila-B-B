@@ -520,8 +520,8 @@ unaffected and is verified.
 
 ---
 
-## BLOCKER-013 · AD-014 specifies a cipher `expo-crypto` does not have
-**Status:** OPEN — **implementation half resolved 2026-08-15**; only the AD amendment is outstanding.
+## ✅ BLOCKER-013 · AD-014 cipher mismatch resolved (2026-08-24)
+**Status:** RESOLVED · **implementation and architecture decision reconciled**
 
 **Resolved in code:** the chunking logic moved to `packages/auth/chunked-storage.ts`,
 parameterised by its backend so it is verifiable under Node, and is now covered by eight
@@ -550,10 +550,9 @@ Arguably it is stronger than the approved design, which would have placed cipher
 app sandbox with its key in the same SecureStore — an attacker who reads SecureStore defeats
 both, and this avoids a hand-rolled cipher entirely. It is still **not the approved design**.
 
-**Needed:** either amend AD-014 to record SecureStore-chunked storage as the approved
-mechanism, or approve a real crypto dependency (`react-native-quick-crypto` or
-`expo-standard-web-crypto`) and the lockfile change it implies. Until then the current
-implementation stands and is recorded here rather than passed off as AD-014.
+**Resolution:** AD-014 was amended by owner approval to record the implemented chunked
+SecureStore mechanism. No additional crypto dependency is required. The implementation
+and its executed storage checks now satisfy the approved session-storage decision.
 
 ---
 

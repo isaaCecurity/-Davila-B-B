@@ -52,11 +52,10 @@ being updated. As of this pass:
   2026-08-22). P6.3, P6.7 DEFERRED.
 
 **Open blockers requiring a human decision, as of 2026-08-24:** BLOCKER-006
-(no per-entity sync conflict strategy, gating P3.7), BLOCKER-010(c) (catalog write
-mechanism confirmation), and BLOCKER-013 (an `ARCHITECTURE_DECISIONS.md` amendment;
-the implementation itself is already done). Every other blocker previously summarized
-on this page — BLOCKER-001, 002, 003, 004, 005, 007, 008, 009, 011, 012, 014, 015,
-016, 017 — is **RESOLVED**; see `BLOCKERS.md` for the
+(no per-entity sync conflict strategy, gating P3.7) and BLOCKER-010(c) (catalog write
+mechanism confirmation). Every other blocker previously summarized on this page —
+BLOCKER-001, 002, 003, 004, 005, 007, 008, 009, 011, 012, 013, 014, 015, 016, 017 — is
+**RESOLVED**; see `BLOCKERS.md` for the
 evidence behind each.
 
 **🚦 P8.0 remains open** — its stated prerequisite set (**P2 + P4.1 read path**) is met, so
@@ -868,7 +867,8 @@ read path only, so P4.1b's block does not hold the checkpoint shut either.
 **Dependencies:** **P2 + P4.1** (read path). Not P4.4, not P7.
 **Screens:** sign-in; organization switcher; catalog list; catalog detail.
 **APIs/services consumed:** Supabase auth; `set_active_organization()`; `organizations_select`; catalog reads.
-**Authentication flow:** encrypted session storage per AD-014 (`expo-crypto` AES-GCM + SecureStore key + `expo-file-system` blob) — **no AsyncStorage**.
+**Authentication flow:** session storage per AD-014 using chunked SecureStore entries
+protected by the platform Keychain/Keystore — **no AsyncStorage**.
 **Organization switching:** calling the RPC must force a **token refresh**; `tenant_id` only changes on the new JWT. Every cached query must be invalidated on switch, or one bakery's data will render under another's name.
 **Error/loading states:** offline, no-organization-selected, revoked-membership (null tenant → every policy denies), expired session.
 **Testing:** component tests; an integration test proving a switch re-fetches; a manual device pass on a dev build.
@@ -905,7 +905,8 @@ Service → `packages/api`.
 
 # Phase 10 — Offline / mobile completion
 
-Decisions are recorded (AD-013, AD-014); **none are implemented.**
+Decisions are recorded (AD-013, AD-014). AD-014 session storage is implemented; the
+remaining offline/mobile decisions are not yet implemented.
 
 | ID | Milestone | Status | Notes |
 |---|---|---|---|

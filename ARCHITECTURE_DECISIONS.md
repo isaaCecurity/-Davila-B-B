@@ -76,9 +76,14 @@ One SQLCipher database **per authenticated user**, spanning that user's
 organizations. Key: 32 CSPRNG bytes in SecureStore, never derived from any
 application value. Never silently re-key. Expo Go is not a target runtime.
 
-## AD-014 — Supabase auth session storage · APPROVED (not built)
-AES-256-GCM via `expo-crypto`, key in SecureStore, ciphertext in `expo-file-system`.
-No AsyncStorage. Auth session, SQLCipher key and business database stay separate.
+## AD-014 — Supabase auth session storage · IMPLEMENTED
+Store the Supabase auth session in chunked `expo-secure-store` entries protected by the
+platform Keychain/Keystore. The storage adapter must handle SecureStore's per-value size
+limit, remove stale chunks on overwrite, and treat incomplete writes as no session.
+No AsyncStorage and no plaintext session file are permitted. Auth session, SQLCipher key,
+and business database remain separate. `expo-crypto` is used for randomness where needed,
+not as a cipher; it does not provide AES-GCM.
+*Evidence:* `packages/auth/chunked-storage.ts` and its executed storage checks.
 
 ## AD-015 — Web workspace deferred · IMPLEMENTED
 `apps/web` stays on React 18 and is outside the active npm workspace. Do not upgrade

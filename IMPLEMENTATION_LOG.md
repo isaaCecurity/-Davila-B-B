@@ -5,6 +5,16 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · AD-014 amendment (BLOCKER-013)
+
+Owner approved amending AD-014 to match the implemented session storage: chunked
+`expo-secure-store` entries, platform Keychain/Keystore protection, stale-chunk cleanup,
+and torn-write rejection. AES-GCM via `expo-crypto` was removed because the installed
+module provides no cipher. Existing executed storage checks remain the implementation
+evidence; no new dependency was added.
+
+---
+
 ## 2026-08-24 · Documentation conflict resolution (BLOCKER-007)
 
 Clarified that `sync_conflicts` is a local client projection, while server conflict
