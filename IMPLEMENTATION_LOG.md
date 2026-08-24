@@ -5,6 +5,78 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · ADR-001 Phase 3 — driver trip RPC/security layer live
+
+Continuing directly from Phase 2 in the same session. Before writing any RPC, inspected
+the live bodies of `close_cash_session()`, `open_cash_session()`, `record_payment()`,
+`complete_ticket()`, `guard_delivery_transition()`, `guard_cash_session_transition()`,
+`has_role()`, `has_branch_access()`, `bump_cash_session_revision()`, and the `tickets`
+RLS policies (`tickets_insert`/`tickets_update`) rather than assuming their shape.
+
+Findings that shaped the design instead of guessing it:
+- `tickets_insert`'s RLS policy already lets `driver` insert a ticket where
+	`created_by = auth.uid()` — Path B (driver creates a ticket) needed zero new INSERT
+	policy, only integrity checking on the new `driver_trip_id` column.
+- No `create_ticket()`/`create_customer()` RPC exists at all — both are plain
+	client-side INSERTs today, gated by RLS + triggers. Confirmed no parallel RPC was
+	needed for driver-created tickets.
+- `complete_ticket(p_order_id, p_warehouse_id)` already takes an explicit warehouse
+	and never touches `deliveries` — a trip-linked pickup sale needed zero changes to
+	this function to deduct from the trip's vehicle warehouse; AD-019 required no code
+	change at all, only confirming by inspection that none was needed.
+- `record_payment()` hard-requires an open branch till session for `method='cash'` —
+	confirmed AD-018 could not be satisfied without a change here, not just a new
+	standalone RPC.
+
+Applied `adr001_phase3_driver_trip_lifecycle_rpcs`: `guard_driver_trip_transition()`
+(linear status map, mirrors `guard_cash_session_transition()`/`guard_delivery_
+transition()`), `driver_trips_bump_revision` (reuses the existing generic
+`bump_cash_session_revision()` — its body is table-agnostic despite the name),
+`start_driver_trip()`, `verify_trip_loading()` (writes a `transfer_out`/`transfer_in`
+pair per item, advances `created -> loading -> ready_to_depart` atomically in one
+call, per the one-party-verification decision), `depart_driver_trip()`,
+`return_driver_trip()` (reverse transfer pair), `reconcile_driver_trip()` (computes
+expected cash from the trip's own `payments` rows, never trusts the client),
+`complete_driver_trip()` (validates and records a settlement session), and
+`guard_ticket_driver_trip_assignment()` (new trigger: a ticket's `driver_trip_id` must
+belong to an `in_transit` trip whose driver is that ticket's creator or assignee —
+closes the RLS gap where `driver_trip_id` was otherwise unconstrained).
+
+Applied `adr001_phase3_payment_and_close_session_custody`: extended `record_payment()`
+with an optional `p_driver_trip_id` (trip-scoped cash skips the till-session lookup
+entirely, tagging `driver_trip_id` instead of `cash_session_id`) and extended
+`close_cash_session()` to additionally sum `physical_cash` from `completed` trips whose
+`settlement_cash_session_id` matches — this is the actual mechanism that makes AD-018's
+"reconciled trip cash enters the branch till" real, without ever rewriting the original
+trip-scoped payment rows.
+
+**Defect found and fixed the same pass:** `CREATE OR REPLACE FUNCTION record_payment(...)`
+with a 6th parameter added did not replace the existing 5-parameter function — Postgres
+only replaces on an identical signature, so it silently created a second overload,
+making every 5-positional-arg call (including every call in `financial_write_rls.sql`)
+ambiguous. Caught immediately by re-running that suite; fixed via
+`fix_record_payment_overload_ambiguity` (dropped the stale 5-arg overload).
+
+**Verified live**, all via rolled-back transactions against real fixture data (this
+project has exactly one real `profiles` row — fabricated ones are rejected by the
+`auth.users` FK, so the driver and branch_manager personas are the same real profile
+with the JWT `roles` claim toggled between phases; `has_role()` only reads that claim):
+- New permanent suite `tests/sql/driver_trips_rls.sql`: 20/20 passed — full lifecycle
+	(start → verify-load → depart → driver-created ticket → trip-scoped payment →
+	complete_ticket against the vehicle warehouse → return → reconcile → complete →
+	close_cash_session absorbing the trip's cash), plus the one-active-trip-per-driver,
+	custody-context CHECK constraints, RLS write-denial/read-allow, and the new ticket
+	assignment guard's status-check branch.
+- `tests/sql/financial_write_rls.sql` re-run clean: 28/28, both before discovering the
+	overload defect (confirming it was pre-existing) and after fixing it (confirming the
+	fix).
+- `.venv/Scripts/python.exe -m pytest -q` — 12/12, before and after.
+
+**Deliberately not built:** the driver mobile UI (Phase 5) and `STATE-MACHINES.md`
+itself (Phase 4) — this pass is RPC/security layer only, per the ADR's own phase
+boundaries. `driver_trips` still has no `INSERT`/`UPDATE` grant for `authenticated`;
+every write goes through the RPCs above.
+
 ## 2026-08-24 · ADR-001 Phase 2 — driver_trips schema live, BLOCKER-019/020 resolved
 
 User resolved BLOCKER-019 (driver cash custody distinct from branch till custody, linked

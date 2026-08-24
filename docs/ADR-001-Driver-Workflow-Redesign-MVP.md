@@ -914,7 +914,7 @@ After approval:
 - Confirm inventory loading/return representation.
 - Confirm reconciliation ownership.
 
-### Phase 2 — Database design
+### Phase 2 — Database design · **COMPLETE 2026-08-24**
 
 Define:
 
@@ -927,7 +927,7 @@ Define:
 
 Avoid creating redundant tables where existing entities already provide the correct source of truth.
 
-### Phase 3 — RPC/security layer
+### Phase 3 — RPC/security layer · **COMPLETE 2026-08-24**
 
 Create or revise server-side operations for:
 

@@ -1,5 +1,39 @@
 # BakeFlow — Current Task
 
+## ✅ ADR-001 Phase 3 (RPC/security layer) complete — driver trips are fully operational (2026-08-24)
+
+Continued directly from Phase 2. Inspected `close_cash_session()`, `record_payment()`,
+`complete_ticket()`, `guard_delivery_transition()`, and the `tickets` RLS policies live
+before writing anything — found `tickets_insert` already permits driver-created tickets,
+no `create_ticket()` RPC exists at all (plain client INSERT is the real pattern), and
+`complete_ticket()` already takes an explicit warehouse with no `deliveries` coupling, so
+AD-019 needed zero code changes, only confirmation by reading.
+
+Built the full trip lifecycle: `start_driver_trip()`, `verify_trip_loading()` (one-party,
+writes real transfer movements), `depart_driver_trip()`, `return_driver_trip()`,
+`reconcile_driver_trip()`, `complete_driver_trip()`, a `guard_driver_trip_transition()`
+status guard, and a `guard_ticket_driver_trip_assignment()` trigger closing the RLS gap
+where a ticket's `driver_trip_id` was otherwise unconstrained. Extended `record_payment()`
+for trip-scoped cash (AD-018) and `close_cash_session()` to actually absorb a completed
+trip's cash into the branch till — the real mechanism, not just the schema, behind AD-018.
+
+**Found and fixed the same pass:** `CREATE OR REPLACE FUNCTION` with an added parameter
+doesn't replace a function, it overloads it — `record_payment()`'s new 6th parameter
+created a second, ambiguous overload that would have broken every existing 5-arg caller.
+Caught immediately by re-running `financial_write_rls.sql`; fixed by dropping the stale
+overload, re-confirmed 28/28 after.
+
+New permanent suite `tests/sql/driver_trips_rls.sql`: 20/20 passed, full lifecycle live.
+`financial_write_rls.sql` 28/28 (no regression). `pytest` 12/12. `driver_trips` still has
+no direct write grant — every write is RPC-mediated.
+
+Not built: driver mobile UI (Phase 5), `STATE-MACHINES.md` itself (Phase 4) — out of this
+pass's scope by the ADR's own phase boundaries.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## ✅ ADR-001 Phase 2 (database design) complete — driver_trips schema live (2026-08-24)
 
 User resolved BLOCKER-019 and BLOCKER-020 explicitly (recorded as **AD-018**/**AD-019**);
