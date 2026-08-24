@@ -46,8 +46,16 @@ being updated. As of this pass:
 - P4.5 delivery write: **COMPLETE** (2026-08-21) — `transition_delivery()`/
   `update_delivery_details()` live-verified; the milestone's own section previously still
   read BLOCKED against this, reconciled 2026-08-23.
-- P5 (all financial milestones): **READY** — MVP rules approved in AD-017; implementation
-  and financial-invariant tests remain.
+- P5 (financial, MVP slice): **COMPLETE and live-verified 2026-08-24** — invoices,
+  payments, cash sessions/expenses, and daily financial audits (P5.3/P5.4/P5.6/P5.7) all
+  proven live by the new `tests/sql/financial_write_rls.sql` (28/28), after finding and
+  fixing four real defects the schema/RPCs had carried since before this session
+  (overpayment and `credit`-method gaps in `record_payment()`, a non-cash-expense gap in
+  `guard_expense_cash_session()`, and an unneeded direct-write grant on `cash_sessions`).
+  Refunds (P5.5) are RPC-complete and tested but deferred from the MVP product surface by
+  AD-017. Tax/discounts (P5.1/P5.2) remain deferred by the same decision; the
+  price-history mechanism for non-discount pricing is still open (BLOCKER-010b/c).
+  Reporting (P5.8) not audited this pass.
 - P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
   2026-08-22). P6.3, P6.7 DEFERRED.
 
@@ -536,28 +544,42 @@ zero product changes needed. Full trace: `IMPLEMENTATION_LOG.md` 2026-08-23.
 
 ---
 
-# Phase 5 — Financial backend — READY (MVP scope approved)
+# Phase 5 — Financial backend — MVP slice COMPLETE and live-verified 2026-08-24
 
-**The MVP scope is governed by AD-017.** `docs/REPORTING-MODEL.md` documents
-revenue-recognition and day-boundary decisions, but tax, pricing, discount, rounding,
-refund and finalisation rules are **not specified**. None may be invented.
+**The MVP scope is governed by AD-017** (APPROVED — tax, discounts, COGS, gross profit,
+margin and refunds are explicitly **deferred**; existing schema/RPCs for deferred
+capabilities stay dormant, not exposed by MVP workflows). This table previously read
+"BLOCKED" across every row, and the section text below still asked for decisions AD-017
+had already made — both stale since AD-017 landed; reconciled here against a full live
+audit, not assumed.
 
 | ID | Milestone | Schema | Status |
 |---|---|---|---|
-| P5.1 | Pricing & discounts | `product_variants`, `tickets.discount_amount` | BLOCKED |
-| P5.2 | Taxes | `tickets.tax_amount` | BLOCKED |
-| P5.3 | Invoices | `invoices` | BLOCKED |
-| P5.4 | Payments | `payments`, `apply_payment_to_ticket()` | BLOCKED |
-| P5.5 | Refunds | `refunds`, `guard_refund_total()` | BLOCKED |
-| P5.6 | Cash sessions & expenses | `cash_sessions`, `expenses` | BLOCKED |
-| P5.7 | Daily financial audit | `daily_financial_audits` | BLOCKED |
-| P5.8 | Reporting & P&L | `20260810120000_reporting_views.sql` | BLOCKED |
+| P5.1 | Pricing & discounts | `product_variants`, `tickets.discount_amount` | **PARTIAL.** No effective-dated price-history table exists yet (AD-017 requires one for the catalog write path — see BLOCKER-010b/c); discounts are explicitly deferred from MVP scope by AD-017, not blocked. |
+| P5.2 | Taxes | `tickets.tax_amount` | **DEFERRED by AD-017** — a scope decision, not an open blocker. The column exists and is dormant. |
+| P5.3 | Invoices | `invoices` | ✅ **COMPLETE.** `confirm_ticket()` issues one on confirmation with the frozen ticket total; status derives automatically (`issued`→`partially_paid`→`paid`) as `apply_payment_to_ticket()` accrues payments. Verified live: F7/F8a–c. |
+| P5.4 | Payments | `payments`, `apply_payment_to_ticket()`, `record_payment()` | ✅ **COMPLETE**, two real defects found and fixed 2026-08-24: `record_payment()` actively offered `'credit'` as a method, though AD-017 states a credit sale creates **no** payment row; and nothing enforced AD-017's "overpayments are rejected against the outstanding balance" — a 500 payment against a 100 total succeeded outright. Both fixed (`record_payment()`'s allowed-method list; `guard_payment_relationships()` gained the overpayment check so it holds regardless of write path). Verified live: F2–F6, F9/F10. |
+| P5.5 | Refunds | `refunds`, `record_refund()`, `guard_refund_total()` | **RPC-level COMPLETE and correct** (cumulative-refund-exceeds-payment-balance guard verified live: F9/F10a–c) — built and tested ahead of MVP product scope; AD-017 defers the refund *workflow* from MVP, so this stays dormant/unexposed by design, not because anything is broken. |
+| P5.6 | Cash sessions & expenses | `cash_sessions`, `expenses`, `open_cash_session()`, `close_cash_session()` | ✅ **COMPLETE**, two real defects found and fixed 2026-08-24: `guard_expense_cash_session()` never checked `paid_method='cash'` when a `cash_session_id` was attached (AD-017: "non-cash expenses do not reduce expected drawer cash") — a transfer-method expense could silently corrupt the till reconciliation; fixed to mirror `guard_payment_relationships()`'s identical check. Separately, `cash_sessions` was the one P5 table still holding direct `INSERT`/`UPDATE` grants for `authenticated` (its siblings are all `SELECT`-only, RPC-gated) — a live gap allowing session-impersonation with zero audit trail; revoked. Verified live: F11–F17, including an end-to-end reconciliation (`expected = opening_float + cash_in − cash_out`, non-cash expenses correctly excluded). |
+| P5.7 | Daily financial audit | `daily_financial_audits`, `guard_daily_financial_audit_mutation()` | ✅ **COMPLETE.** Four-eyes rule (the submitter cannot confirm/reject their own audit; a different owner/admin/branch_manager can) and post-confirmation immutability both verified live: F21–F23. No defect found here. |
+| P5.8 | Reporting & P&L | `20260810120000_reporting_views.sql` | **NOT AUDITED this pass** — out of scope for the write-path suite below; status unchanged from prior investigation. |
+
+**Verified 2026-08-24, not assumed:** `tests/sql/financial_write_rls.sql` (F1–F23, 28
+assertions) — the first test suite this domain has ever had — executed live, 28/28
+passed after the four fixes above. Covers the full ticket→confirm→invoice→payment→refund
+lifecycle, cash-session open/close/reconciliation, expense method-consistency, the
+four-eyes audit rule, and tenant isolation across all six financial tables. A fifth,
+unrelated regression from the previous day's own work (`sales_read_rls.sql` S10's
+`subtotal_amount` freeze fix had become too broad, silently blocking legitimate
+`ticket_items`-driven recalculation once a ticket left `draft`) was found while writing
+this suite's F19 and fixed in `guard_ticket_status_transition()`; F18/F19 are now the
+permanent regression guard for both directions of that fix.
 
 **Common to all:**
-**Tests:** financial invariants — totals reconcile; money never floats; rounding only at settlement.
-**Security checks:** finalised documents immutable; no client-side authorization.
-**Completion gate:** every invariant has an executed test; no rule was inferred.
-**Decisions needed:** tax model, discount authority, rounding rule, refund policy, invoice finalisation semantics, revenue-recognition timestamp confirmation.
+**Tests:** financial invariants — totals reconcile; money never floats; rounding only at settlement. Now backed by `tests/sql/financial_write_rls.sql`, not just declared.
+**Security checks:** finalised documents immutable (verified: F23); no client-side authorization (all six tables are either RPC-only or RLS+trigger-guarded, verified: F1, F17, F20).
+**Completion gate:** every invariant has an executed test; no rule was inferred — met for P5.3/P5.4/P5.6/P5.7 and the RPC layer of P5.5.
+**Decisions already made by AD-017** (superseding the stale line that used to sit here): tax and discounts deferred from MVP; rounding is truncation at display only, never mid-calculation; refund *policy* exists at the RPC level (cumulative-cannot-exceed-payment) though the *workflow* is deferred; invoice finalisation semantics are exactly the confirm→issued/partially_paid/paid chain verified above; revenue recognition is `tickets.fulfilled_at` at `delivered`/`completed`. **Still open:** the price-history mechanism for P5.1 (folds into BLOCKER-010b/c).
 
 ---
 

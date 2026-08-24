@@ -1,5 +1,40 @@
 # BakeFlow — Current Task
 
+## ✅ P5 financial backend audited for the first time — five real defects found and fixed (2026-08-24)
+
+Continuing under the standing goal directive after the P8.1 pass below. `BACKEND_ROADMAP.md`
+still marked all of Phase 5 BLOCKED despite AD-017 (approved earlier the same day)
+resolving the scope question. Investigation found the entire MVP financial schema and RPC
+surface — payments, refunds, invoices, cash sessions, expenses, daily financial audits —
+already live, but with zero test coverage, ever. Same "backend built, roadmap frozen,
+never verified" pattern as P4.3/P4.5/P8.1 this week.
+
+Audited every relevant RPC and guard trigger against AD-017's actual text before touching
+anything, reproducing each suspected gap live before fixing it. Found and fixed four real
+defects: `record_payment()` accepted `method='credit'` though AD-017 says a credit sale
+creates no payment row; nothing enforced AD-017's overpayment rule (a 500 payment against
+a 100 ticket succeeded outright); a non-cash expense could attach to a cash session and
+silently corrupt till reconciliation; `cash_sessions` alone among its siblings still held
+direct client write grants, allowing session impersonation with zero audit trail.
+
+Writing the new permanent test suite (`tests/sql/financial_write_rls.sql`, 28 assertions)
+surfaced a fifth defect — a real regression in my *own* fix from two days ago:
+yesterday's `subtotal_amount` freeze fix had become too broad and was silently blocking
+legitimate item-driven recalculation for any ticket past `draft`, breaking core ticket
+editing for the entire `confirmed`→`ready` window. Fixed by comparing against the true
+derived sum instead of blocking any change; re-verified against the full
+`sales_read_rls.sql` suite (27/27) and the live signed-in smoke suite (112/112).
+
+Final state: `financial_write_rls.sql` 28/28, `sales_read_rls.sql` 27/27,
+`smoke-signed-in.mjs` 112/112, `pytest` 12 passed. `BACKEND_ROADMAP.md` Phase 5 rewritten
+from all-BLOCKED to reflect verified reality (P5.3/P5.4/P5.6/P5.7 COMPLETE, P5.5
+RPC-complete but product-deferred by AD-017, P5.1/P5.2 correctly DEFERRED not blocked,
+P5.8 flagged not-audited).
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## ✅ P8.1 re-verified live; discovered it was already fully built and badly under-documented (2026-08-24)
 
 Asked to "start P8.1 — the first frontend vertical slice." Investigation before writing

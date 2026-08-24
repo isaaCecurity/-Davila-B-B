@@ -2516,3 +2516,171 @@ node scripts/smoke-signed-in.mjs            -> fetch failed (transient, retry 2)
 node scripts/smoke-signed-in.mjs            -> 112/112 passed, SMOKE TEST PASSED
 .venv/Scripts/python.exe -m pytest -q       -> 12 passed
 ```
+
+---
+
+## 2026-08-24 · P5 financial backend audited for the first time — five real defects found and fixed
+
+**Scope:** continuing under the standing goal directive after the P8.1 documentation
+correction above. `BACKEND_ROADMAP.md`'s Phase 5 table still read BLOCKED on every row
+despite AD-017 (approved earlier the same day, commit `9b85640a`) resolving the scope
+question. `list_tables`/`pg_proc` showed the entire MVP financial schema and RPC surface
+already live — `payments`, `refunds`, `invoices`, `cash_sessions`, `expenses`,
+`daily_financial_audits`, `record_payment()`, `record_refund()`, `open_cash_session()`,
+`close_cash_session()` — but `tests/sql/` had no financial suite at all, and nothing had
+ever exercised this domain end-to-end. Same pattern as P4.3/P4.5/P8.1 earlier this week:
+backend built, roadmap frozen, zero verification.
+
+### Four real defects found auditing the live RPCs against AD-017, before writing any test
+
+Read every relevant function body (`record_payment`, `guard_payment_relationships`,
+`record_refund`, `guard_refund_total`, `open_cash_session`, `close_cash_session`,
+`guard_cash_session_transition`, `guard_expense_cash_session`,
+`guard_daily_financial_audit_mutation`) against AD-017's stated rules before touching
+anything, then reproduced each suspected gap live in a rolled-back transaction before
+fixing it — none were fixed on suspicion alone.
+
+1. **`record_payment()` actively offered `'credit'` as a payment method.** AD-017: "a
+   credit sale creates no payment row" — credit is the absence of a payment, not a
+   method. Reproduced: a `method='credit'` payment inserted successfully. Fixed by
+   removing `'credit'` from the RPC's allowed-method list. The table's own
+   `payments_method_check` CHECK still permits it — left alone as dormant
+   deferred-capability schema, per AD-017's own allowance, since no live path can reach
+   it once the RPC stops offering it.
+2. **Nothing anywhere enforced AD-017's "overpayments are rejected against the current
+   outstanding balance."** Reproduced: a 500.0000 payment against a 100.0000 ticket total
+   succeeded outright, `tickets.amount_paid` updated to 500. Fixed in
+   `guard_payment_relationships()` (`BEFORE INSERT` on `payments`, not only in
+   `record_payment()`) so the invariant holds regardless of write path — same
+   defense-in-depth precedent as the `tickets_guard_status_transition` fix two days ago.
+   Re-verified: single overpayment refused, cumulative overpayment across two payments
+   refused, a payment landing exactly on the boundary still succeeds (not an off-by-one),
+   a legitimate partial payment still succeeds.
+3. **`guard_expense_cash_session()` validated the branch match but never that
+   `paid_method='cash'` when `cash_session_id` was set** — unlike
+   `guard_payment_relationships()`'s identical, already-existing check for payments.
+   AD-017: "non-cash expenses do not reduce expected drawer cash." Reproduced: a
+   `paid_method='transfer'` expense attached to an open cash session inserted
+   successfully, which `close_cash_session()`'s reconciliation sums unconditionally —
+   silently corrupting the till count. Fixed by mirroring the payments guard exactly.
+4. **`cash_sessions` was the one P5 table still holding direct `INSERT`/`UPDATE` grants
+   for `authenticated`**, unlike its siblings `payments`/`invoices`/`refunds` (all
+   `SELECT`-only, RPC-gated writes). `open_cash_session()`/`close_cash_session()` are both
+   `SECURITY DEFINER` and never needed the grants — they run as the function owner
+   regardless. Reproduced: a direct `INSERT` succeeded with `opened_by` set to a
+   *different* profile than the caller (impersonation) and wrote **zero** `audit_log`
+   rows (the RPC's own `log_audit_event()` call never ran). Fixed by `REVOKE INSERT,
+   UPDATE ON cash_sessions FROM authenticated` — behavior-neutral for the RPC path,
+   verified: both RPCs still work end-to-end, including the audit-log write, after the
+   revoke.
+
+### A fifth defect — a self-introduced regression from two days ago, found writing the new suite's F19
+
+Designing `financial_write_rls.sql`'s F18/F19 (subtotal freeze must still hold, but item
+edits must keep working through `confirmed`) surfaced that
+`widen_tickets_guard_status_transition_to_cover_subtotal_amount` (applied 2026-08-23,
+closing the S10 gap in `sales_read_rls.sql`) had been **too broad**: it blocked *any*
+change to `subtotal_amount` once a ticket left `draft`, including the legitimate one —
+`recalculate_ticket_totals()` (`AFTER` trigger on `ticket_items`, unconditional on
+status) recomputing the true sum whenever an item is added/edited/removed, which is
+supposed to keep working all the way to `ready` (S11a/S11b in `sales_read_rls.sql`,
+proven correct just yesterday). Reproduced directly: inserting a `ticket_item` while
+`status='confirmed'` now failed outright with "subtotal_amount is frozen once a ticket
+leaves draft" — a real regression breaking core ticket editing for the entire
+`confirmed`→`ready` window, not a narrow edge case.
+
+Root cause: the freeze checked "did the value change", when it needed to check "is the
+new value the arbitrary/wrong one" — `confirm_ticket()`'s own recompute only ever
+happened to pass because `recalculate_ticket_totals()` had already produced the identical
+value beforehand, masking the bug in the one place I'd tested it (S10 itself only tests a
+direct out-of-band write, never a real item-driven recalculation on a non-draft ticket —
+a gap in yesterday's own test design).
+
+**Fix** (`fix_subtotal_freeze_overblocked_legitimate_recalculation`): compare the
+attempted `NEW.subtotal_amount` against the true derived sum
+(`SELECT COALESCE(SUM(line_total),0) FROM ticket_items WHERE ticket_id = NEW.id` — the
+exact formula `recalculate_ticket_totals()` uses) rather than against `OLD.subtotal_amount`.
+A write matching the true sum is a legitimate recalculation and is allowed; a write that
+doesn't match is an out-of-band write and is refused, exactly as before. Verified all four
+properties simultaneously in one pass: item-add while `confirmed` now succeeds and
+recalculates correctly (100→150); a direct arbitrary write (999999) is still refused; the
+full `sales_read_rls.sql` suite re-run end to end, 27/27, including S10 and S11a/S11b
+together for the first time. Full signed-in smoke suite re-run clean, 112/112, after this
+fix and again after all four P5 fixes below it.
+
+### `tests/sql/financial_write_rls.sql` — new, F1–F23 (28 assertions), 28/28 passed
+
+The first test suite this domain has ever had. Covers: RLS force on all six tables (F1);
+the full ticket→submit→confirm(invoice)→payment→refund lifecycle including every
+overpayment/refund-overshoot boundary (F2–F10c); the subtotal-freeze regression guard
+(F18/F19); cash-session open/close/reconciliation including the one-open-per-branch
+partial unique index, the variance-note requirement, and the direct-INSERT-refused
+regression guard for defect 4 (F11–F17); the daily-audit four-eyes rule and
+post-confirmation immutability (F21–F23); tenant isolation across all six tables in one
+pass (F20).
+
+Two fixture bugs found authoring it, both fixed in the suite, neither a product defect:
+- Same defect class as `sales_read_rls.sql`/`delivery_read_rls.sql`: the cross-org
+  fixture ticket's creator had no `user_roles` row in org B.
+- `guard_daily_financial_audit_mutation()`'s four-eyes check only compares roles, not
+  branch, but the *RLS* `daily_financial_audits_update_review` policy does require
+  `has_branch_access()` — and `has_branch_access()` only bypasses for owner/admin, not
+  branch_manager (read live: `public.has_branch_access`, same rule
+  `sales_read_rls.sql` S14 already established). Without a `branch_assignments` row for
+  the second manager, the "confirm" `UPDATE` silently matched zero rows — no exception,
+  nothing changed — which the *next* assertion caught, but only by accident. Fixed the
+  fixture (added the assignment) and additionally hardened the F22 assertion itself to
+  check the resulting `status`, not just the absence of an exception, so this class of
+  false-positive can't recur even if branch-scoping breaks again later.
+
+### Documentation corrected
+
+`BACKEND_ROADMAP.md` Phase 5: header and every row of the milestone table rewritten from
+BLOCKED against verified-live status (P5.3/P5.4/P5.6/P5.7 COMPLETE, P5.5 RPC-complete but
+product-deferred by AD-017, P5.1/P5.2 correctly DEFERRED not blocked, P5.8 flagged
+not-audited); the stale "decisions needed" line replaced with what AD-017 actually
+decided. Current State summary's P5 line rewritten to match.
+
+**Executed evidence:**
+```
+mcp__supabase__list_tables                  -> payments/refunds/invoices/cash_sessions/
+                                                expenses/daily_financial_audits all live,
+                                                RLS enabled, 0 rows
+mcp__supabase__execute_sql (pg_proc search)  -> record_payment/record_refund/
+                                                open_cash_session/close_cash_session/
+                                                all guard triggers already live
+mcp__supabase__execute_sql (overpayment repro, rolled back)
+                                              -> 500 vs 100 total succeeded (defect 2 confirmed)
+mcp__supabase__apply_migration p5_financial_ad017_conformance_fixes
+                                              -> record_payment() + guard_payment_relationships() fixed
+mcp__supabase__execute_sql (fix verification, rolled back)
+                                              -> 6/6: credit refused, overpayment refused
+                                                 (single + cumulative + exact boundary),
+                                                 legitimate payment still works
+mcp__supabase__apply_migration fix_guard_expense_cash_session_requires_cash_method
+                                              -> guard_expense_cash_session() fixed
+mcp__supabase__execute_sql (fix verification, rolled back) -> 3/3 passed
+mcp__supabase__execute_sql (cash_sessions impersonation repro, rolled back)
+                                              -> direct INSERT succeeded, opened_by
+                                                 spoofed, 0 audit_log rows (defect 4 confirmed)
+mcp__supabase__apply_migration revoke_direct_write_grants_on_cash_sessions
+                                              -> REVOKE applied
+mcp__supabase__execute_sql (fix verification, rolled back)
+                                              -> 4/4: direct write refused, both RPCs
+                                                 still work end to end, audit row written
+mcp__supabase__execute_sql (subtotal-freeze regression repro, rolled back)
+                                              -> item insert while status=confirmed FAILED
+                                                 (defect 5 / self-regression confirmed)
+mcp__supabase__apply_migration fix_subtotal_freeze_overblocked_legitimate_recalculation
+                                              -> guard_ticket_status_transition() fixed
+mcp__supabase__execute_sql (fix verification, rolled back)
+                                              -> 4/4: legitimate recalc succeeds, arbitrary
+                                                 write still refused, both simultaneously
+mcp__supabase__execute_sql (full sales_read_rls.sql suite, rolled back)
+                                              -> 27/27 passed (S10 + S11a/S11b together)
+node scripts/smoke-signed-in.mjs             -> 112/112 passed (post subtotal-freeze fix)
+mcp__supabase__execute_sql (full financial_write_rls.sql suite, rolled back)
+                                              -> 28/28 passed
+node scripts/smoke-signed-in.mjs             -> 112/112 passed (final, post all P5 fixes)
+.venv/Scripts/python.exe -m pytest -q        -> 12 passed
+```
