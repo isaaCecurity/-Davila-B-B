@@ -4,6 +4,34 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: ADR-001 approved — three decisions gate Phase 2 (2026-08-24)
+
+`docs/ADR-001-Driver-Workflow-Redesign-MVP.md` is now **Approved**. Domain review (Phase 1)
+proceeded immediately — 12 of its 14 open decisions were low-stakes and resolved inline in
+the ADR itself (naming, schema-design details, and workflow defaults that are reversible
+without a data migration). Three are not, and database design/migration (Phase 2) cannot
+start until they're answered:
+
+1. **BLOCKER-019** — does a driver's collected cash settle into the branch's already-open
+	 cash session, or does the trip carry its own cash-custody context settled only at
+	 reconciliation? Both are legitimate; they have different consequences for AD-017's
+	 expected-drawer-cash formula while a driver is out.
+2. **BLOCKER-020** — for a trip-linked delivery ticket, does the existing `deliveries`
+	 entity (live, P9.6, shipped 2026-08-21) remain the authoritative proof-of-delivery
+	 record, or does trip-level sale completion replace that gate? Guessing risks silently
+	 breaking a live feature.
+3. **BLOCKER-006** (pre-existing, unrelated to this ADR) — no per-entity offline conflict
+	 strategy exists yet. ADR-001's Path B (driver creates tickets/customers offline) walks
+	 directly into it; it was already blocking P9.3 for the same reason.
+
+Everything else in the ADR — trip entity naming, route-stop/return/reconciliation schema
+shape, loading-verification authority, ticket-correction mechanism — is resolved and
+unblocked; Phase 1 work can continue on those without further input.
+
+Full detail: `BLOCKERS.md` §BLOCKER-019, §BLOCKER-020.
+
+---
+
 ## ACTION REQUIRED: BLOCKER-018 — how should ingredient purchase cost be captured?
 
 Auditing P5 (financial backend) end to end on 2026-08-24, then checking what P5.8

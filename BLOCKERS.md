@@ -911,6 +911,73 @@ decision-locked formulas.
 
 ---
 
+## BLOCKER-019 · ADR-001 driver trips — relationship to cash sessions is undecided
+**Status:** OPEN · **Affects:** ADR-001 Phase 2/3 (driver trip schema + RPCs), P9.7 · **Type:** financial architecture decision
+
+ADR-001 (Driver Workflow Redesign, approved 2026-08-24) §13 explicitly defers this: "The
+exact relationship between `driver_trip` and `cash_session` must be finalized during
+schema implementation." §23 item 11 lists it as an open decision. It cannot be resolved by
+inference from existing precedent, because both plausible answers are legitimate and have
+different accounting consequences:
+
+- **Driver cash settles into the branch's open cash session.** Matches AD-017's existing
+	one-open-session-per-branch model with zero new session machinery, but means a driver's
+	cash isn't distinguishable from till cash in `expected_cash` until the driver physically
+	returns and someone records it — the branch session's expected drawer cash would be wrong
+	for the entire time the driver is out with collected cash the till never received.
+- **The driver trip has/creates its own cash-session-like context**, settled into the
+	branch session only at trip reconciliation. Correctly represents custody but means a new
+	session concept, and AD-017's "one open session per branch" invariant needs an explicit
+	statement of how a driver-context session interacts with it (is it a sub-session? A
+	separate `cash_sessions` row scoped to the driver rather than the branch? `cash_sessions`
+	today has no driver/trip scoping column at all).
+
+Guessing here means either building AD-017's expected-drawer-cash formula on top of a
+model that's wrong the moment a driver leaves the building, or inventing new cash-session
+semantics that were never approved. This is exactly the kind of unspecified financial
+behaviour CLAUDE.md's Blocker rule requires escalating, not guessing.
+
+**Needed:** a decision on which of the two models above (or a third) governs driver cash
+custody, made before any `driver_trips` migration that touches money is written.
+
+---
+
+## BLOCKER-020 · ADR-001 driver trips — relationship to the existing `deliveries` entity is undecided
+**Status:** OPEN · **Affects:** ADR-001 Phase 1/2 (domain review, driver trip schema), P9.6 · **Type:** architecture decision
+
+ADR-001 §6 Path A (manager/supervisor creates a ticket, driver fulfils it) never states
+whether a trip-linked, delivery-fulfilment ticket still creates and transitions a
+`deliveries` row through the existing, live-verified P9.6 workflow
+(`transition_delivery()`/`update_delivery_details()`, board + detail screens shipped and
+smoke-tested 2026-08-21), or whether the driver-trip context replaces that gate for
+driver-fulfilled tickets.
+
+This matters because `STATE-MACHINES.md` §60 hard-requires a verified `deliveries` row
+before a `fulfilment_type = 'delivery'` ticket can reach `ready → delivered` — that guard
+is live in `guard_ticket_status_transition()` today. Two ways this could go, both real
+architecture choices:
+
+- **`deliveries` stays authoritative**, and a driver trip is purely an operational
+	wrapper (inventory custody + route grouping) around tickets that still go through the
+	existing delivery-proof gate unchanged. Lowest risk to the live P9.6 path, but leaves
+	two separate "did the driver actually hand this over" records (trip-level sale
+	completion and the `deliveries` row) that could disagree.
+- **The driver-trip context absorbs delivery proof** (e.g., completing a sale within an
+	`in_transit` trip satisfies the gate directly, and `deliveries` becomes vestigial for
+	driver-fulfilled tickets, though still used for non-driver couriered deliveries if any).
+	Cleaner single source of truth, but means changing a gate that a live, tested feature
+	currently depends on, and needs its own migration/rollout plan.
+
+Guessing wrong either duplicates a gate that already works correctly, or silently breaks
+the `ready → delivered` transition for every trip-linked ticket the moment `driver_trips`
+schema work starts touching ticket status.
+
+**Needed:** a decision on whether `deliveries` remains the authoritative proof-of-delivery
+record for trip-fulfilled tickets, or is superseded by trip-level sale completion for
+that ticket population — before Phase 2 schema design touches the ticket-status gate.
+
+---
+
 ## Template
 
 ```

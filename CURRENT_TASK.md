@@ -1,5 +1,31 @@
 # BakeFlow — Current Task
 
+## 🛑 ADR-001 approved, Phase 1 domain review complete — Phase 2 blocked on three decisions (2026-08-24)
+
+User directed approval of `docs/ADR-001-Driver-Workflow-Redesign-MVP.md` ("the driver is
+not primarily a delivery courier" — trip-based inventory custody, on-the-road ticket
+creation, automatic credit calculation) and asked for the system to be adjusted to match
+it. Marked the ADR Approved and ran its own Phase 1 (domain review) immediately: of its 14
+listed open decisions, 12 were low-stakes/reversible and resolved inline in the ADR with
+documented rationale (trip entity naming, auto-creation timing, one-party loading
+verification matching existing `adjust_stock()`/production-batch precedent, route-stop and
+reconciliation schema left as Phase 2 design detail, corrections routed through the
+existing `tickets.correct` grant already held by `driver`).
+
+Two are genuine financial/architecture decisions, raised as **BLOCKER-019** (driver
+cash ↔ branch cash-session relationship — affects AD-017's expected-drawer-cash formula)
+and **BLOCKER-020** (whether trip-linked tickets still gate on the existing, live
+`deliveries` entity from P9.6, or whether trip-level completion replaces that gate). A
+third, pre-existing blocker (**BLOCKER-006**, no offline conflict strategy) already
+applies to ADR-001's Path B the same way it already blocked P9.3. Phase 2 (database
+design/migration) cannot start until these three are resolved — writing schema on a
+guessed cash-session model or ticket-status gate risks either a wrong P&L or silently
+breaking live P9.6. No schema, RPC, or migration was written this pass.
+
+Full detail: `BLOCKERS.md` §BLOCKER-019/020, `docs/ADR-001-Driver-Workflow-Redesign-MVP.md` §23.
+
+---
+
 ## 🛑 P5.8 investigated — genuinely blocked on BLOCKER-018 (2026-08-24)
 
 Checked whether P5.8 (Reporting & P&L) was buildable before starting it, following the
