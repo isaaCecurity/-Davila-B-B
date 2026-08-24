@@ -1,5 +1,28 @@
 # BakeFlow — Current Task
 
+## ✅ ADR-001 Phase 4 (STATE-MACHINES.md updated) complete (2026-08-24)
+
+Added `docs/STATE-MACHINES.md` §6 "Driver Trip" documenting the live Phase 2/3 backend:
+the 7-state lifecycle table, loading verification & inventory custody, trip-scoped
+payments/cash custody (AD-018) with the exact CHECK constraints, the ticket↔trip
+assignment guard, `deliveries` remaining authoritative (AD-019), and an explicit "what is
+not a ticket state" section cross-referenced from §1's existing "payment is not a state"
+line. Renumbered the former §6 "Implementation pattern" to §7 and updated its guard-
+function inventory (four→six entity guards, plus the narrower assignment guard called out
+separately).
+
+Every claim in the new section was cross-checked against the live function bodies
+(`pg_get_functiondef` on all 6 trip RPCs + both new trigger functions), not written from
+memory — no discrepancies found; the document matches the deployed code exactly.
+
+Re-ran all three verification gates after the doc change, exactly as required: `tests/sql/
+driver_trips_rls.sql` 20/20, `tests/sql/financial_write_rls.sql` 28/28, `pytest` 12/12.
+No schema or RPC touched this pass — documentation only.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## ✅ ADR-001 Phase 3 (RPC/security layer) complete — driver trips are fully operational (2026-08-24)
 
 Continued directly from Phase 2. Inspected `close_cash_session()`, `record_payment()`,

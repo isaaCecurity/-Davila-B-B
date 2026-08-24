@@ -941,9 +941,15 @@ Create or revise server-side operations for:
 
 Each operation must be atomic where it changes money or stock.
 
-### Phase 4 — State machine update
+### Phase 4 — State machine update · **COMPLETE 2026-08-24**
 
 Only after the above decisions are confirmed should the canonical state-machine document and database transition guards be updated.
+
+`docs/STATE-MACHINES.md` §6 now documents the live Driver Trip lifecycle, loading/custody,
+trip-scoped cash (AD-018), the ticket↔trip assignment guard, and `deliveries`'s continued
+authority (AD-019) — cross-checked line by line against the deployed RPC/trigger bodies,
+not written from memory. All three test suites (`driver_trips_rls.sql`, `financial_
+write_rls.sql`, `pytest`) re-verified green after the change.
 
 ### Phase 5 — Driver UI
 

@@ -59,7 +59,7 @@ from this document's own prior, unsourced claim.
 
 **The `ready → delivered` gate is enforced in the database, not just convention.** For `fulfilment_type = 'delivery'` tickets, the guard trigger looks up the linked `deliveries` row and blocks the transition unless that row's own status is `delivered`. This closes a gap where a ticket could previously reach a terminal-ish state with no verified delivery ever having happened. Pickup tickets skip this check — there's nothing to deliver.
 
-**Payment is not a state.** A ticket tracks `amount_paid` independently of status. A ticket can be paid while still in production, or completed while unpaid (credit sale). Do not model payment as a ticket status — that conflation is the most common way this schema gets corrupted.
+**Payment is not a state.** A ticket tracks `amount_paid` independently of status. A ticket can be paid while still in production, or completed while unpaid (credit sale). Do not model payment as a ticket status — that conflation is the most common way this schema gets corrupted. The same discipline applies to driver trip custody and cash — see §6 "What is not a ticket state" below.
 
 ### Immutability — the hybrid rule
 
@@ -218,9 +218,157 @@ Invoice status is derived from payments, not set by hand. `apply_payment_to_tick
 
 ---
 
-## 6. Implementation pattern
+## 6. Driver Trip
 
-Implement one guard function per entity rather than scattering checks. All five are deployed: `guard_ticket_status_transition()`, `guard_production_batch_transition()`, `guard_delivery_transition()`, `guard_cash_session_transition()`, and invoice status derived via `apply_payment_to_ticket()`.
+Added by ADR-001 (`docs/ADR-001-Driver-Workflow-Redesign-MVP.md`, Approved 2026-08-24;
+Phases 2–3 live 2026-08-24). Entity is **Driver Trip** (`driver_trips`) — the
+operational/custody wrapper around a driver's field activity for one loading-to-return
+cycle. A driver may run multiple trips per day; each is reconciled independently (ADR-001
+§23 item 2).
+
+```
+created ──► loading ──► ready_to_depart ──► in_transit ──► returning ──► reconciled ──► completed
+```
+
+| From | To | Who | Preconditions | Side effects |
+|---|---|---|---|---|
+| — | created | driver (self) | Branch access to `p_branch_id`; warehouse belongs to that branch; **no other active (non-`completed`) trip already exists for this driver** — enforced by a partial unique index, not the guard trigger (INSERT, not an UPDATE OF status the trigger fires on) | Via `start_driver_trip()` |
+| created | loading | owner, admin, branch_manager, supervisor, baker (the verifier — not the driver) | — | Via `verify_trip_loading()`. Writes one `transfer_out`/`transfer_in` movement pair per loaded item (source warehouse → the trip's own warehouse) |
+| loading | ready_to_depart | same verifier, same call | — | Reached inside the same `verify_trip_loading()` invocation as the hop above — `loading` and `ready_to_depart` are both real, guard-checked, audit-logged transitions, but occur atomically in one RPC call, never as two separate client actions. `loading_verified_by`/`loading_verified_at` set |
+| ready_to_depart | in_transit | the trip's own driver (`driver_id = auth.uid()`) | Trip status must already be `ready_to_depart` (checked in the RPC, redundant with but consistent with the guard) | Via `depart_driver_trip()`. `departed_at` set |
+| in_transit | returning | the trip's own driver | — | Via `return_driver_trip()`. Writes the reverse `transfer_out`/`transfer_in` pair per returned item (trip warehouse → source warehouse); `returned_at` set |
+| returning | reconciled | owner, admin, branch_manager, supervisor | `variance_note` present when `cash_variance ≠ 0` | Via `reconcile_driver_trip()`. `expected_cash` computed from the trip's own `payments` rows (never trusted from the client, mirrors `close_cash_session()`'s own discipline); `physical_cash`, `cash_variance`, `reconciled_by`, `reconciled_at` set |
+| reconciled | completed | owner, admin, branch_manager | `p_settlement_cash_session_id` must reference an **open** session at the trip's own branch | Via `complete_driver_trip()`. `settlement_cash_session_id` recorded |
+
+**Terminal:** `completed`. Trips are never deleted (`prevent_driver_trip_delete()` raises
+unconditionally on `DELETE`) and never reopened.
+
+**Role enforcement lives in the RPCs, not the trigger.** Unlike `guard_delivery_
+transition()`, `guard_driver_trip_transition()` only checks state-transition legality (the
+table above) and writes the `audit_log` row — it has no `has_role()`/ownership check of its
+own. Each RPC independently checks role/branch-access/trip-ownership before ever issuing
+the `UPDATE`. This is a deliberate asymmetry, not an oversight: every write path to
+`driver_trips` is RPC-only — `authenticated` holds no direct `INSERT`/`UPDATE`/`DELETE`
+grant on the table at all (verified live; the default-privilege grant Postgres gives new
+tables was found and explicitly revoked) — so there is no raw-`UPDATE` path for the trigger
+to need to defend against on its own, unlike `deliveries`, which the RLS `deliveries_update`
+policy does expose to direct client writes.
+
+**One active trip per driver** is enforced by a partial unique index, mirroring cash
+sessions' "one open per branch":
+
+```sql
+create unique index driver_trips_one_active_per_driver
+  on driver_trips (tenant_id, driver_id)
+  where status <> 'completed' and deleted_at is null;
+```
+
+Multiple trips per day remain allowed — they are simply sequential, never concurrent.
+
+### Loading verification and inventory custody
+
+Loading is **one-party**: the verifying supervisor/manager/baker's own `verify_trip_
+loading()` call both records what was loaded and verifies it, atomically — there is no
+separate driver-side "propose loading" step (ADR-001 §23 item 5, resolved on approval).
+
+A driver's vehicle is represented as an ordinary `warehouses` row (`driver_trips.
+warehouse_id`) — no new inventory concept was introduced. Custody transfer reuses the
+existing `stock_movements` `transfer_out`/`transfer_in` reasons exactly as any other
+warehouse-to-warehouse move would, tagged `reference_type = 'driver_trip'`,
+`reference_id = driver_trips.id` (the only schema change `stock_movements` needed was
+adding `'driver_trip'` to its `reference_type` CHECK). Loading pulls from the branch's
+default warehouse unless an explicit source is given; return reverses the same pair.
+
+Selling from the trip's own warehouse needs no new machinery: a trip-linked ticket's
+`complete_ticket(p_order_id, p_warehouse_id)` call simply passes the trip's `warehouse_id`
+in place of the branch default. `complete_ticket()` itself was inspected and required no
+change — it already took an explicit warehouse and writes the existing `sale` movement
+reason unchanged.
+
+### Trip-scoped payments and cash custody (AD-018)
+
+**Driver cash in custody ≠ cash physically in the branch till**
+(`ARCHITECTURE_DECISIONS.md` AD-018). `record_payment()` accepts an optional
+`p_driver_trip_id`: when set, the payment is tagged `driver_trip_id` instead of
+`cash_session_id` and skips the open-till-session requirement entirely — cash a driver is
+holding never inflates the branch's till session while the trip is still `in_transit`.
+
+```sql
+alter table payments add constraint payments_cash_needs_custody_context check (
+  method <> 'cash' or cash_session_id is not null or driver_trip_id is not null
+);
+alter table payments add constraint payments_custody_context_exclusive check (
+  cash_session_id is null or driver_trip_id is null
+);
+```
+
+A payment belongs to exactly one custody context — the till **or** a trip, never both.
+
+`reconcile_driver_trip()` computes `expected_cash` as the sum of the trip's own
+`cash`-method payments, compared against the physical cash the driver actually returns.
+`close_cash_session()` was extended to fold a **completed** trip's `physical_cash` into
+whichever branch session its `settlement_cash_session_id` names, alongside the existing
+`opening_float + cash_in − cash_out` terms — this is the actual mechanism by which
+reconciled trip cash enters the till. It never rewrites the original trip-scoped payment
+rows; the branch session's expected amount is computed fresh at close time exactly as it
+already was, just with one more summed term.
+
+**Do not make payment a Ticket state** (unchanged from §1) — the same applies to driver
+trip cash. Custody and reconciliation status are tracked on `payments`/`driver_trips`,
+never folded into `tickets.status` or `driver_trips.status` itself.
+
+### Ticket ↔ driver-trip assignment guard
+
+`tickets.driver_trip_id` links a ticket to the trip fulfilling it (Path A: manager-
+assigned, linked once the trip is `in_transit`; Path B: driver-created, linked at
+creation). Setting or changing it is guarded by `guard_ticket_driver_trip_assignment()`
+(`BEFORE INSERT OR UPDATE OF driver_trip_id`):
+
+- the named trip must exist in the ticket's own tenant and branch;
+- the trip must be `in_transit` — a ticket cannot link to a trip that hasn't departed yet
+  or has already returned;
+- the trip's `driver_id` must match the ticket's `created_by` (Path B) or `assigned_to`
+  (Path A) — a ticket cannot be linked to a trip belonging to a different driver.
+
+This closes a gap the `tickets_insert`/`tickets_update` RLS policies leave open on their
+own: those policies already permit a `driver` to insert/update a ticket they created or
+are assigned to (this was already true before ADR-001 — Path B needed no new RLS policy),
+but say nothing about which trip it may reference. This guard is what actually enforces
+that a ticket only ever belongs to its own driver's own active trip.
+
+### `deliveries` remains authoritative (AD-019)
+
+A driver trip is an operational/custody wrapper — it does not replace or bypass the
+`deliveries` state machine (§3 above). For a trip-linked, `fulfilment_type = 'delivery'`
+ticket, completing the sale inside the trip is the commercial transaction only;
+`ready → delivered` still hard-requires the linked `deliveries` row to itself be
+`delivered`, exactly as §1 already states. No RPC introduced by this section writes to
+`deliveries` — `complete_ticket()` was inspected and confirmed unchanged, and no trip RPC
+calls `transition_delivery()` on a ticket's behalf. Integrating trip completion with
+delivery proof (if ever wanted) is future work this ADR does not authorize.
+
+### What is not a ticket state
+
+Neither the driver trip lifecycle above nor a ticket's link to one (`driver_trip_id`) is a
+`tickets.status` value, and none of it is folded into the Ticket state machine in §1. A
+ticket's own status (`draft` → … → `completed`/`cancelled` → `archived`) advances exactly
+as §1 describes regardless of which trip, if any, fulfilled it. `driver_trips.status` is a
+separate lifecycle on a separate table, cross-referenced only via `tickets.driver_trip_id`
+and `payments.driver_trip_id` — the same "payment is not a state" discipline in §1 applies
+here: custody, loading, and reconciliation are operational/financial facts tracked on
+their own entities, not additional ticket statuses.
+
+---
+
+## 7. Implementation pattern
+
+Implement one guard function per entity rather than scattering checks. All six entity
+guards are deployed: `guard_ticket_status_transition()`, `guard_production_batch_
+transition()`, `guard_delivery_transition()`, `guard_cash_session_transition()`,
+`guard_driver_trip_transition()`, and invoice status derived via `apply_payment_to_
+ticket()`. A narrower, seventh guard — `guard_ticket_driver_trip_assignment()` — enforces
+a single foreign-key-shaped invariant (§6) rather than a full state machine, so it is
+listed separately from the entity guards above.
 
 The ticket guard, as illustration:
 

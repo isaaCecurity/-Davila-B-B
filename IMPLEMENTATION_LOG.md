@@ -5,6 +5,34 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · ADR-001 Phase 4 — STATE-MACHINES.md updated to match the live backend
+
+Added §6 "Driver Trip" to `docs/STATE-MACHINES.md`, in the order requested: the 7-state
+lifecycle table (`created → loading → ready_to_depart → in_transit → returning →
+reconciled → completed`); loading verification and inventory custody (one-party,
+`transfer_out`/`transfer_in` pairs, vehicle-as-warehouse); trip-scoped payments and cash
+custody (AD-018, the exact `payments_cash_needs_custody_context`/`payments_custody_
+context_exclusive` CHECK constraints, how `close_cash_session()` folds a completed trip's
+cash into the till); the ticket↔driver-trip assignment guard; `deliveries` remaining
+authoritative (AD-019); and an explicit "what is not a ticket state" section. Renumbered
+the former §6 "Implementation pattern" to §7 and updated its guard-function inventory.
+
+Before writing, re-fetched the live definitions of all 6 trip RPCs
+(`start_driver_trip`, `verify_trip_loading`, `depart_driver_trip`, `return_driver_trip`,
+`reconcile_driver_trip`, `complete_driver_trip`) and both new trigger functions
+(`guard_driver_trip_transition`, `guard_ticket_driver_trip_assignment`) via
+`pg_get_functiondef` rather than writing from memory of having built them minutes
+earlier. Checked every documented precondition, role list, and side effect line by line
+against the actual function bodies — zero discrepancies found; nothing needed correcting.
+
+Re-ran all three verification gates after the doc change:
+- `tests/sql/driver_trips_rls.sql` — 20/20 passed.
+- `tests/sql/financial_write_rls.sql` — 28/28 passed.
+- `.venv/Scripts/python.exe -m pytest -q` — 12/12 passed.
+
+No schema, RPC, or migration touched this pass — documentation only, verified against a
+DB left exactly as Phase 3 finished it.
+
 ## 2026-08-24 · ADR-001 Phase 3 — driver trip RPC/security layer live
 
 Continuing directly from Phase 2 in the same session. Before writing any RPC, inspected
