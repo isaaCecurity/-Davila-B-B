@@ -34,19 +34,20 @@ an executed SQL suite (`inventory_read_rls.sql` 2026-08-15, production live-veri
 **Write paths are no longer uniformly blocked** — this line originally said "every write
 path is BLOCKED"; that stopped being true over the following week without this section
 being updated. As of this pass:
-- P4.1b catalog write: **BLOCKED** — BLOCKER-010(b, c), folding into BLOCKER-003.
+- P4.1b catalog write: **BLOCKED** — BLOCKER-010(c); pricing policy is resolved by AD-017.
 - P4.2b inventory write: **COMPLETE** (2026-08-15).
 - P4.3 production write: **COMPLETE** (2026-08-21) — `complete_production_batch()`/
   `fail_production_batch()` live-verified; the milestone's own section previously still read
   NOT_STARTED against this, reconciled 2026-08-23.
 - P4.4 ticket write: **RPCs COMPLETE**, live-verified 2026-08-22 — all ten lifecycle
   transitions are reachable (`confirm_ticket`/`cancel_ticket`/`complete_ticket`/
-  `archive_ticket`/`update_ticket`). Only `discount_amount`/`tax_amount` remain gated on
-  BLOCKER-003; there is no dedicated write-path SQL test suite yet.
+  `archive_ticket`/`update_ticket`). Tax and discounts are deferred by AD-017; there is
+  no dedicated write-path SQL test suite yet.
 - P4.5 delivery write: **COMPLETE** (2026-08-21) — `transition_delivery()`/
   `update_delivery_details()` live-verified; the milestone's own section previously still
   read BLOCKED against this, reconciled 2026-08-23.
-- P5 (all financial milestones): **BLOCKED** — BLOCKER-003, unchanged.
+- P5 (all financial milestones): **READY** — MVP rules approved in AD-017; implementation
+  and financial-invariant tests remain.
 - P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
   2026-08-22). P6.3, P6.7 DEFERRED.
 
@@ -185,7 +186,8 @@ fixed above:
 **Tests:** `expo prebuild --platform android --clean` → exit 0, no warnings; `android/gradle.properties` contains `expo.sqlite.useSQLCipher=true`; 11 Expo + 6 RN modules autolinked; `tsc --noEmit` → 0; `eslint .` → 0.
 **Security checks:** `android.allowBackup=false`; no secrets in `app.json`.
 **Completion criteria:** met.
-**Blockers:** BLOCKER-004 (EAS project ID placeholder) — blocks builds, not code.
+**Blockers:** none. EAS project ID configured and linked 2026-08-24; native build work
+may proceed.
 
 ## P0.4 · Architectural decisions — COMPLETE
 **Objective:** Locked decisions recorded with evidence.
@@ -383,13 +385,13 @@ here rather than re-verified, since the evidence already exists.
 **Blockers:** none.
 
 ### P4.1b · Catalog write path — BLOCKED
-**Blockers:** **BLOCKER-010** (new, 2026-08-11) — three unresolved sub-decisions:
+**Blockers:** **BLOCKER-010** — one unresolved sub-decision:
 (a) does soft-delete free a natural key? The unique indexes `products_tenant_name_key`,
 `ingredients_tenant_name_key`, `product_categories_tenant_name_key`,
 `product_variants_tenant_sku_key` and `recipes_one_active_per_variant` are **not partial
 on `deleted_at IS NULL`** (verified live), so under AD-012 a soft-deleted name is
 permanently consumed — fixing it is a migration and needs approval;
-(b) may `unit_price` be edited in place with no price-history table (**BLOCKER-003**);
+(b) may `unit_price` be edited in place with no price-history table (**resolved by AD-017**);
 (c) confirmation that PostgREST + RLS, not an RPC, is the write mechanism.
 **Parallelizable:** P4.1a with P6.1, P6.3.
 
@@ -520,9 +522,9 @@ zero product changes needed. Full trace: `IMPLEMENTATION_LOG.md` 2026-08-23.
 
 ---
 
-# Phase 5 — Financial backend — BLOCKED
+# Phase 5 — Financial backend — READY (MVP scope approved)
 
-**Every milestone here is gated on BLOCKER-003.** `docs/REPORTING-MODEL.md` documents
+**The MVP scope is governed by AD-017.** `docs/REPORTING-MODEL.md` documents
 revenue-recognition and day-boundary decisions, but tax, pricing, discount, rounding,
 refund and finalisation rules are **not specified**. None may be invented.
 

@@ -87,3 +87,27 @@ it for consistency; do not re-add it until web development begins.
 ## AD-016 — Permissions not yet enforced server-side · APPROVED (backlog)
 `has_permission()` gates **zero** of 101 policies; role-based RLS is authoritative.
 Do not retrofit permission enforcement without a separate decision.
+
+## AD-017 — MVP financial rules · APPROVED
+The MVP uses the Engineering Bible financial model and defers tax, discounts, COGS,
+gross profit, margin, and refunds. Existing schema objects and API contracts for
+deferred capabilities remain dormant and are not exposed by MVP workflows.
+
+- Money remains `NUMERIC(19,4)` per AD-010. Quantities remain `NUMERIC(18,4)`.
+- Revenue is recognized when a ticket reaches `delivered` or `completed`, using
+	`tickets.fulfilled_at` as the business-event timestamp. Revenue is independent of
+	payment collection.
+- Product pricing uses effective-dated price history. The price active when a ticket
+	is created is copied to its ticket items and remains frozen for that ticket.
+- A credit sale creates no payment row. Outstanding balance is derived from the ticket
+	total less actual payments. Later settlement creates a new append-only payment row.
+- MVP payment methods are `cash`, `card`, `transfer`, and `pos`. Overpayments are
+	rejected against the current outstanding balance.
+- Invoices are issued on confirmation and become void on cancellation only when no
+	payment exists. Paid or partially paid tickets are not cancelled in MVP and may only
+	be archived; refunds remain deferred.
+- Cash sessions follow the branch-level state machine in `STATE-MACHINES.md`: one open
+	session per branch, with expected drawer cash equal to opening float plus cash
+	payments minus cash expenses. Non-cash expenses do not reduce expected drawer cash.
+- Customer balances and ledger views are derived from tickets, invoices, and payments;
+	they are not duplicated in a second source-of-truth ledger.

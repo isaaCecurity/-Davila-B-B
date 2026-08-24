@@ -5,6 +5,21 @@ Never record planned work here.
 
 ---
 
+## 2026-08-24 · EAS project initialization (BLOCKER-004)
+
+**Scope:** Configure the Expo EAS project identity for the mobile app.
+
+**Executed evidence:**
+```
+cd bakeflow-frontend/apps/mobile
+corepack npm exec eas-cli init
+-> Created @isaac2055/bakeflow
+-> Project successfully linked
+-> ID: 5644cf5a-1568-4da7-810e-5049143ee7cd
+```
+
+---
+
 ## 2026-08-20 · Database Migration Reconciliation (P0.5 & P1.4 / BLOCKER-002)
 
 **Scope:** P0.5 Migration reproducibility, P1.4 Migration verification, resolving BLOCKER-002.

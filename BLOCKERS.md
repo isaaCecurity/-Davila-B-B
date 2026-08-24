@@ -131,23 +131,38 @@ Reconciled the database migration tracking gap between remote Supabase productio
 
 ---
 
-## BLOCKER-003 · Financial rules are unspecified
-**Status:** OPEN · **Affects:** B9, B10 · **Type:** business rule
+## ✅ BLOCKER-003 · Financial rules are specified (2026-08-24)
+**Status:** RESOLVED for MVP scope · **Affects:** B9, B10 · **Type:** business rule
 
-No approved rules exist for tax, pricing, discounts, rounding, refunds, invoice
-finalisation, or financial reporting. Agents must not invent any of them.
+The MVP financial rules are now recorded in AD-017 and follow the Engineering Bible.
+Tax, discounts, COGS, gross profit, margin, and refunds are explicitly deferred; their
+existing schema/API structures remain dormant. The complete rule set covers money
+precision, revenue recognition, effective-dated pricing, credit sales, payment methods,
+overpayments, invoice behavior, ticket archiving, customer balances, and cash sessions.
 
-**Needed:** written rules before B9 begins.
+**Clarification recorded 2026-08-24:** The Engineering Bible governs the cash-session
+interpretation. Cash sessions remain branch-level drawer sessions with one open session
+per branch. Expected drawer cash is `opening_float + cash payments - cash expenses`;
+card, transfer, and other non-cash expenses do not reduce expected drawer cash. Drivers
+may submit expense requests where authorized, but the Bible does not grant drivers or
+bakers direct cash-session expense authority. Money remains `NUMERIC(19,4)` under
+AD-010; the earlier BIGINT proposal is not adopted.
+
+**Resolution:** See `ARCHITECTURE_DECISIONS.md` AD-017. Implementation and migration
+work may proceed against the approved MVP scope. Deferred financial capabilities must
+not be implemented by inference.
 
 ---
 
-## BLOCKER-004 · EAS project ID is a placeholder
-**Status:** OPEN · **Affects:** first native build · **Type:** project setup
+## ✅ BLOCKER-004 · EAS project ID configured (2026-08-24)
+**Status:** RESOLVED · **Affects:** first native build · **Type:** project setup
 
-`apps/mobile/app.json` carries `extra.eas.projectId: "REPLACE_WITH_EAS_PROJECT_ID"`.
-No real ID exists anywhere in the repository. It must not be invented.
+`eas init` successfully created and linked the Expo project `@isaac2055/bakeflow`.
+`apps/mobile/app.json` now contains project ID
+`5644cf5a-1568-4da7-810e-5049143ee7cd`.
 
-**Needed:** the EAS project ID, or `eas init`.
+**Evidence:** `corepack npm exec eas-cli init` completed successfully and reported the
+project as linked.
 
 ---
 
@@ -288,8 +303,8 @@ evidence recorded.
 
 ---
 
-## BLOCKER-010 · Catalog write path — three unresolved sub-decisions
-**Status:** OPEN (b, c) · BLOCKER-010a RESOLVED 2026-08-14 · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
+## BLOCKER-010 · Catalog write path — one unresolved sub-decision
+**Status:** OPEN (c) · BLOCKER-010a RESOLVED 2026-08-14 · BLOCKER-010b RESOLVED 2026-08-24 via AD-017 · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
 
 The P4.1 **read** path is safe and proceeding. The **write** path is not, on three
 counts. Recorded rather than guessed.
@@ -299,8 +314,9 @@ counts. Recorded rather than guessed.
 
 **(b) May `product_variants.unit_price` be edited in place?** It is the authoritative
 sale price, `NUMERIC(19,4)`, and **no price-history table exists** (verified). Editing it
-in place silently rewrites the price every historical read reproduces. This is
-**BLOCKER-003** territory — no pricing rule is approved — so no write path may touch it.
+in place silently rewrites the price every historical read reproduces. This was
+**BLOCKER-003** territory. AD-017 now requires effective-dated price history and frozen
+ticket-item prices, so the catalog write path must not mutate historical prices.
 
 **(c) Confirm PostgREST + RLS as the catalog write mechanism.** `API-CONTRACT.md` §1
 assigns single-row writes with no side effects to PostgREST + RLS, not RPCs, and the read
@@ -308,7 +324,7 @@ path follows that. Catalog writes appear to qualify, but this should be confirme
 explicitly before the write path is built, since the roadmap previously specified "CRUD
 RPCs" (now corrected).
 
-**Needed:** ~~(a) resolved~~ (b) the pricing rule from BLOCKER-003, or approval of a `product_variant_prices` history table; (c) confirmation that PostgREST + RLS is the correct catalog write mechanism.
+**Needed:** ~~(a) resolved~~ ~~(b) resolved by AD-017~~ (c) confirmation that PostgREST + RLS is the correct catalog write mechanism.
 
 **Non-blocking work:** the entire P4.1a read path, P6.1, P11.1.
 
