@@ -4,6 +4,30 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION REQUIRED: BLOCKER-018 — how should ingredient purchase cost be captured?
+
+Auditing P5 (financial backend) end to end on 2026-08-24, then checking what P5.8
+(Reporting & P&L) would need to build on: `docs/REPORTING-MODEL.md` locks
+weighted-average costing as the method, and the schema already has the column the
+formula needs (`stock_movements.unit_cost`) — but it is **100% null across every row in
+the live database**, including on `purchase`-reason movements, the one type that's
+supposed to be the actual cost source. Nothing anywhere ever writes it.
+
+This isn't something I can safely decide myself: it's a question of **how a bakery owner
+records what an ingredient purchase actually cost** — a field added to the existing
+`adjust_stock()` purchase path, a separate purchase-order/goods-received workflow, or a
+default per-ingredient standard cost purchases can override. Each has different UX,
+migration, and offline-sync consequences, and guessing would bake an unreviewed workflow
+into the schema.
+
+**Not blocking:** the revenue/cash side of P5.8 (gross/net revenue, refunds, cash
+collected/reconciled) needs none of this and could be built independently — only
+COGS/gross-profit/inventory-valuation are stopped by it.
+
+Full detail: `BLOCKERS.md` §BLOCKER-018.
+
+---
+
 ## RESOLVED: BLOCKER-001 — deployed, invoked, and verified live; a second real bug found and fixed
 
 **Status:** Resolved on 2026-08-22, with your explicit approval to deploy.

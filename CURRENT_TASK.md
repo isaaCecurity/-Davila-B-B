@@ -1,5 +1,27 @@
 # BakeFlow — Current Task
 
+## 🛑 P5.8 investigated — genuinely blocked on BLOCKER-018 (2026-08-24)
+
+Checked whether P5.8 (Reporting & P&L) was buildable before starting it, following the
+same audit-first pattern as P5.1–P5.7 below. `docs/REPORTING-MODEL.md` turned out to be
+thoroughly decision-locked and consistent with AD-017 — not the blocker. The real
+blocker: weighted-average COGS (the locked costing method) needs `stock_movements.
+unit_cost`, which exists as a column but is **100% NULL on every one of 166 live rows**,
+including all four `purchase`-reason rows. Nothing anywhere captures what an ingredient
+purchase actually cost. Deciding how that gets captured has real product/UX/migration
+consequences and isn't specified anywhere — recorded as **BLOCKER-018**
+(`BLOCKERS.md`, `NOTIFICATIONS.md`) rather than guessed.
+
+The revenue/cash half of P5.8 has no such dependency and is buildable independently, but
+building the actual reporting/dashboard layer is substantial new feature work — a
+different kind of task from every other item this session (which has all been
+audit-existing-and-fix). Deliberately not started unilaterally in this pass; left as the
+clearly-scoped next piece of work, blocked-vs-unblocked halves clearly separated.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## ✅ P5 financial backend audited for the first time — five real defects found and fixed (2026-08-24)
 
 Continuing under the standing goal directive after the P8.1 pass below. `BACKEND_ROADMAP.md`

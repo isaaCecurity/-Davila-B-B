@@ -2684,3 +2684,60 @@ mcp__supabase__execute_sql (full financial_write_rls.sql suite, rolled back)
 node scripts/smoke-signed-in.mjs             -> 112/112 passed (final, post all P5 fixes)
 .venv/Scripts/python.exe -m pytest -q        -> 12 passed
 ```
+
+---
+
+## 2026-08-24 · P5.8 (Reporting & P&L) investigated — genuine blocker found, BLOCKER-018 raised
+
+**Scope:** the natural next item after auditing P5.1–P5.7 above. Checked whether P5.8
+was actually buildable before starting: `pg_views`/`pg_matviews` are both empty in the
+live database — `20260810120000_reporting_views.sql` was never applied, so this row's
+prior "BLOCKED" status was, unlike the rest of Phase 5, actually true rather than stale.
+
+Read `docs/REPORTING-MODEL.md` in full (85 sections) to check whether it was concrete
+enough to implement without guessing. It is — §85 locks revenue recognition, reporting-day
+boundary, costing method, and refund treatment explicitly, consistent with AD-017. Checked
+its two named hard schema prerequisites before assuming either way:
+
+- `organizations.timezone text` — **exists live.**
+- `stock_movements.unit_cost numeric` — **exists live, but is 100% NULL on every row**,
+  including all four `purchase`-reason rows (the movement type that should be the actual
+  cost source for weighted-average costing). Verified by `GROUP BY reason` with a
+  `count(unit_cost)` alongside `count(*)`: every reason, zero non-null costs.
+
+Weighted-average COGS (the REPORTING-MODEL.md-locked costing method, explicitly not
+last-cost or FIFO) is therefore uncomputable from live data — not because the formula is
+unspecified, but because nothing anywhere ever captures what an ingredient purchase
+actually cost. Fabricating a cost would produce a silently-wrong P&L (exactly what
+REPORTING-MODEL.md rule 33 and §27–30 forbid); reporting COGS as permanently zero would
+be equally wrong. Deciding **how** cost gets captured — a field on `adjust_stock()`'s
+`purchase` path, a separate purchase-order workflow, a default per-ingredient standard
+cost — has real UX/migration/offline-sync consequences and isn't specified anywhere.
+Recorded as **BLOCKER-018** rather than guessed, per this project's standing rule that
+unspecified financial behaviour stops work.
+
+**Not fully blocked:** the revenue/cash half of P5.8 — gross/net revenue, refunds, cash
+collected/reconciled (REPORTING-MODEL.md §44/§45) — depends only on `tickets`,
+`payments`, `refunds`, `cash_sessions`, `daily_financial_audits`, all verified correct
+earlier today. Only COGS/gross-profit/inventory-valuation are stopped by BLOCKER-018.
+Building the full reporting/dashboard layer (8 conceptual views/RPCs per
+REPORTING-MODEL.md §43/§52) is substantial new feature work, not an audit-and-fix pass
+like the rest of this session — deliberately not started unilaterally in this same pass;
+flagged for a scoped follow-up instead.
+
+### Documentation
+
+`BACKEND_ROADMAP.md` P5.8 row rewritten from "not audited" to the actual finding.
+`BLOCKERS.md` BLOCKER-018 added (full detail, including the reason/count table).
+`NOTIFICATIONS.md` given a matching ACTION REQUIRED entry, newest-first.
+
+**Executed evidence:**
+```
+mcp__supabase__execute_sql (pg_views, pg_matviews)      -> both empty, migration never applied
+Read: docs/REPORTING-MODEL.md (full, 2326 lines)         -> decision-locked, consistent with AD-017
+mcp__supabase__execute_sql (organizations columns)       -> timezone column present
+mcp__supabase__execute_sql (stock_movements columns)     -> unit_cost column present
+mcp__supabase__execute_sql (stock_movements GROUP BY reason, count(unit_cost))
+                                                          -> 0 of 166 rows across all 6 reasons
+                                                             carry a unit_cost
+```

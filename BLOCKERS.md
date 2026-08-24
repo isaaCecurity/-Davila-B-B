@@ -868,6 +868,49 @@ functions afterward.
 
 ---
 
+## BLOCKER-018 · No mechanism captures ingredient/purchase cost, so weighted-average COGS cannot be computed
+**Status:** OPEN · **Affects:** P5.8 (Reporting & P&L) · **Type:** business rule + missing workflow
+
+`docs/REPORTING-MODEL.md` §85 locks weighted-average costing as the MVP method and §27–30
+explains why (last-cost and FIFO are both rejected). The schema already has the column
+the formula needs — `stock_movements.unit_cost NUMERIC` — but it is **100% NULL across
+every row in the live database**, verified 2026-08-24:
+
+| `reason` | rows | rows with `unit_cost` set |
+|---|---|---|
+| `opening_balance` | 31 | 0 |
+| `production_consume` | 79 | 0 |
+| `production_output` | 50 | 0 |
+| `purchase` | 4 | 0 |
+| `sale` | 1 | 0 |
+| `waste` | 1 | 0 |
+
+Nothing in `adjust_stock()` or anywhere else ever writes `unit_cost` — including on the
+four `purchase`-reason rows, which is precisely the movement type weighted-average
+costing needs a real cost basis from. Computing COGS today would mean either fabricating
+a cost (silently wrong P&L, exactly what §27–30 and rule 33 forbid) or reporting it as
+permanently zero/null (a P&L that structurally cannot show gross profit, which
+`docs/REPORTING-MODEL.md` §85 does not intend either).
+
+This is not a guessable detail: it requires deciding **how a bakery owner records what an
+ingredient purchase actually cost** — a field on `adjust_stock()`'s `purchase` reason? A
+separate purchase-order/goods-received flow? A default per-ingredient standard cost that
+purchases can override? Each has different UX, migration, and offline-sync implications,
+and none is specified anywhere in the repo.
+
+**Not blocking:** the revenue- and cash-side reporting metrics `REPORTING-MODEL.md`
+describes (§44/§45 — gross/net revenue, refunds, cash collected/reconciled) need only
+`tickets`, `payments`, `refunds`, `cash_sessions`, `daily_financial_audits` — all verified
+live and correct as of the P5 audit this same day (`tests/sql/financial_write_rls.sql`)
+— and could be built without waiting on this decision. Only COGS/gross-profit/
+inventory-valuation (the other half of P5.8) are stopped by it.
+
+**Needed:** a product decision on the ingredient-cost-capture workflow, then the schema
+change (if any) and RPC work follow directly from `docs/REPORTING-MODEL.md`'s already
+decision-locked formulas.
+
+---
+
 ## Template
 
 ```
