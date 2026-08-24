@@ -1,5 +1,58 @@
 # BakeFlow — Current Task
 
+## ✅ P8.1 re-verified live; discovered it was already fully built and badly under-documented (2026-08-24)
+
+Asked to "start P8.1 — the first frontend vertical slice." Investigation before writing
+anything (per instruction) found it had already been implemented and delivered on
+2026-08-15, and extended since into P9.1 (catalog detail)/P9.4 (inventory)/P9.5
+(production)/P9.6 (delivery) — all with real screens under `apps/mobile/app/`, a
+production-quality auth/session/cache layer, and a continuously-maintained live smoke
+suite (`scripts/smoke-signed-in.mjs`) that every other backend task this session has
+already been running as its own regression gate. Two documents flatly contradicted this:
+`CLAUDE.md` said "Frontend is pre-development: no app code exists yet", and
+`BACKEND_ROADMAP.md`'s Phase 8 section said P8.1 "was and is available to start" — both
+frozen at a stale 2026-08-14/16 snapshot never updated after the work actually shipped.
+
+Rather than rebuild anything, did what the actual gap called for: read every file in the
+P8.1 slice (`_layout.tsx`, `sign-in.tsx`, `select-organization.tsx`, `index.tsx`,
+`product/[id].tsx`, `AppProviders.tsx`, `stores/session.ts`, `packages/auth`,
+`packages/hooks`, `packages/config`, `ScreenState.tsx`) end to end for the security
+properties explicitly asked about — authorization, tenant isolation, token/session
+handling, sensitive-data exposure, input validation, cache isolation, insecure
+client-side trust. Found no defects: every query goes through parameterized PostgREST
+filters (no raw SQL, no string interpolation), the tenant claim is always read from the
+JWT the database will actually enforce (never trusted from what the user tapped), cache
+eviction on organization switch is `removeQueries` ordered before the new session
+publishes, the session lives in chunked SecureStore (Keychain/Keystore, never
+AsyncStorage), the service-role key is structurally excluded from the client bundle by
+the `EXPO_PUBLIC_` env convention, and `BakeflowApiError.message` (rendered raw in
+`ErrorState`) is already guaranteed never to carry raw server text.
+
+Then ran every gate fresh, live, today — not relying on any historical log entry:
+`npm run typecheck` (all workspaces), `npx eslint packages --max-warnings=0`,
+`npm run lint --workspace apps/mobile`, and `pytest -q` all green;
+`npm run verify:cache` **67/67**; `node scripts/smoke-signed-in.mjs` **112/112 passed**
+against the real live project — signs in, confirms the JWT's top-level `tenant_id`
+claim, lists exactly the right organizations, switches via
+`set_active_organization()` + `refreshSession()`, confirms the pre-refresh token still
+serves the *old* tenant, loads that organization's catalog/product-detail, switches to a
+second organization, and confirms zero rows from the first are reachable by any path
+(direct id, list, stock levels, batches, tickets, deliveries). This is the strongest
+verification available in this environment — no physical device/emulator exists here, so
+"on-device run" remains formally NOT PERFORMED, same as every prior pass, but the smoke
+script exercises the actual compiled client code paths against production RLS rather
+than a mock.
+
+Corrected both stale documents: `CLAUDE.md`'s status line, and `BACKEND_ROADMAP.md`'s
+Phase 8 section (P8.0 closed banner, the P8.1 milestone writeup, the frozen 2026-08-14
+blocker table given a correction note rather than silently rewritten, and the P9.1 row).
+Added a Current State frontend-status line. No product code changed — nothing needed
+fixing.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-24.
+
+---
+
 ## ✅ P4.5 delivery suite executed; P4.3/P4.5 roadmap sections reconciled (2026-08-23)
 
 `tests/sql/delivery_read_rls.sql` (D1–D10) ran live for the first time — its own header

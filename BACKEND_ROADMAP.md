@@ -19,7 +19,7 @@ tracked separately and must never be conflated:
 
 ---
 
-## Current State — updated 2026-08-23
+## Current State — updated 2026-08-24
 
 **Completed phases:** P0 (partial — P0.7's frontend testing infrastructure is
 NOT_STARTED; P0.5, the piece this line used to point at, is itself now COMPLETE), P1, P2,
@@ -51,6 +51,16 @@ being updated. As of this pass:
 - P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
   2026-08-22). P6.3, P6.7 DEFERRED.
 
+**Frontend (P8.1 + P9.1/P9.4/P9.5/P9.6): COMPLETE, re-verified live 2026-08-24.** This
+line previously did not exist here; `CLAUDE.md` separately claimed "no app code exists
+yet", which was wrong and has been corrected in the same pass. Sign in → pick
+organization → catalog (P8.1) plus catalog detail, inventory, production, and delivery
+(P9.1/P9.4/P9.5/P9.6) are implemented and gated. Fresh evidence today: `typecheck`,
+`eslint packages`, `lint --workspace apps/mobile` all exit 0; `npm run verify:cache`
+67/67; `node scripts/smoke-signed-in.mjs` 112/112 against the live project — the
+strongest verification available without a physical device/emulator, which this
+environment does not have. Full detail: P8.1 section under Phase 8.
+
 **Open blockers requiring a human decision, as of 2026-08-24:** BLOCKER-006
 (no per-entity sync conflict strategy, gating P3.7) and BLOCKER-010(c) (catalog write
 mechanism confirmation). Every other blocker previously summarized on this page —
@@ -58,12 +68,19 @@ BLOCKER-001, 002, 003, 004, 005, 007, 008, 009, 011, 012, 013, 014, 015, 016, 01
 **RESOLVED**; see `BLOCKERS.md` for the
 evidence behind each.
 
-**🚦 P8.0 remains open** — its stated prerequisite set (**P2 + P4.1 read path**) is met, so
-**P8.1**, the first frontend vertical slice, was and is available to start. In practice,
-backend work continued well past this line rather than pausing here: P6.x and the P9.x
-mobile slices (P9.4–P9.6) are substantially built and live-verified. This line's original
-"no further backend milestone can start" framing is superseded by everything above it in
-this update and by the milestone sections later in this file.
+**✅ P8.0 is CLOSED — P8.1 was delivered 2026-08-15 and re-verified live 2026-08-24.**
+This line previously read "P8.0 remains open... P8.1 was and is available to start",
+which had been stale for over a week: the first frontend vertical slice (sign in → pick
+organization → catalog) shipped 2026-08-15, and the mobile app has since grown well past
+it into the P9.1/P9.4/P9.5/P9.6 slices (catalog detail, inventory, production, delivery),
+all substantially built and live-verified. Re-verified fresh 2026-08-24: `typecheck`,
+`eslint packages`, `lint --workspace apps/mobile` all exit 0; `npm run verify:cache`
+67/67; `node scripts/smoke-signed-in.mjs` **112/112 passed** against the real project,
+covering sign-in, tenant-claim derivation from the live JWT hook, organization switching
+with a forced token refresh, and cross-organization cache/data isolation end-to-end. See
+the P8.1 section below and `CURRENT_TASK.md` for the full evidence trail. This line's
+"no further backend milestone can start" framing was already withdrawn in an earlier
+pass and remains withdrawn.
 
 > **Sequencing resolved 2026-08-11 (BLOCKER-008b).** The earlier note that "the human
 > gated P4 behind P3.7" is withdrawn as a documentation error: it contradicted P3.7's
@@ -827,6 +844,14 @@ sits on a deliberately small prerequisite set.
 
 ## ✅ P8.0 IS OPEN — 2026-08-14
 
+**Frozen snapshot — read the top-of-file "Current State" section for the live picture,
+not the table below.** Most of this table's blocker citations (BLOCKER-001, 010b/c
+partially, and the P4.4b/P4.5 "remaining" notes) were resolved days to weeks after this
+was written and never updated here; only BLOCKER-003 (financial rules) is still
+genuinely open as of 2026-08-23. Left as-written for the historical record of what was
+known at P8.0's opening, per this file's own convention elsewhere of correcting via a
+note rather than silently rewriting history.
+
 **All six requirements are met.** The last one, P4.1's catalog read path, landed and was
 executed live (15/15, `tests/sql/catalog_read_rls.sql`). Four domains are now readable, not
 one: catalog (P4.1a), inventory (P4.2a), production (P4.3a), sales (P4.4a/b) and delivery
@@ -851,32 +876,70 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P3.7 per-entity sync | BLOCKER-006 (BLOCKER-009 resolved 2026-08-22) |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
-**Frontend work (P8.1) is therefore the next thing to build**, exactly as this phase was
-designed to allow. It does not wait on any of the above.
+**Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to
+allow, and has since grown well beyond it — see below.
 
 ---
 
-**Five of six were already met before 2026-08-14.** The checkpoint opens as soon as
-**P4.1's read path** lands. **P4.4 is not a prerequisite** — confirmed 2026-08-11 in resolving BLOCKER-008(a).
-The full prerequisite set is therefore **P2 + P4.1**, stated identically here, in the
-dependency graph above, and in P8.1 below. A catalog *list and detail* screen needs the
-read path only, so P4.1b's block does not hold the checkpoint shut either.
+**Five of six were already met before 2026-08-14.** The checkpoint opened as soon as
+**P4.1's read path** landed. **P4.4 is not a prerequisite** — confirmed 2026-08-11 in resolving BLOCKER-008(a).
+The full prerequisite set was therefore **P2 + P4.1**, stated identically here, in the
+dependency graph above, and in P8.1 below. A catalog *list and detail* screen needed the
+read path only, so P4.1b's block did not hold the checkpoint shut either.
 
-### P8.1 · First frontend vertical slice — "Sign in → pick organization → see catalog"
+### P8.1 · First frontend vertical slice — "Sign in → pick organization → see catalog" — ✅ DELIVERED 2026-08-15, re-verified live 2026-08-24
 **Objective:** Prove the whole spine end-to-end on a real device before broadening.
 **Dependencies:** **P2 + P4.1** (read path). Not P4.4, not P7.
-**Screens:** sign-in; organization switcher; catalog list; catalog detail.
+**Screens:** sign-in (`apps/mobile/app/sign-in.tsx`); organization switcher
+(`select-organization.tsx`); catalog list (`index.tsx`); catalog detail
+(`product/[id].tsx`, shipped same day as part of the immediate P9.1 follow-on).
 **APIs/services consumed:** Supabase auth; `set_active_organization()`; `organizations_select`; catalog reads.
 **Authentication flow:** session storage per AD-014 using chunked SecureStore entries
-protected by the platform Keychain/Keystore — **no AsyncStorage**.
-**Organization switching:** calling the RPC must force a **token refresh**; `tenant_id` only changes on the new JWT. Every cached query must be invalidated on switch, or one bakery's data will render under another's name.
-**Error/loading states:** offline, no-organization-selected, revoked-membership (null tenant → every policy denies), expired session.
-**Testing:** component tests; an integration test proving a switch re-fetches; a manual device pass on a dev build.
-**Completion gate:** a real user signs in, switches organizations, and sees only that organization's catalog.
+protected by the platform Keychain/Keystore — **no AsyncStorage**. Implemented in
+`packages/auth` (`index.ts` + `chunked-storage.ts`), 8 executed round-trip/chunking
+checks in `verify:cache`.
+**Organization switching:** `setActiveOrganization()` calls the RPC **and** forces a
+token refresh in one function — splitting them was identified during implementation as
+the one way this slice could silently half-switch. `AppProviders`' `onAuthStateChange`
+listener evicts every organization-scoped cache entry (`clearOrganizationScopedCache`,
+keyed by `orgScoped()` prefix) before publishing the new session, so no render can land
+between a token change and cache eviction.
+**Error/loading states:** implemented via `components/ScreenState.tsx` — loading, empty,
+error-with-retry, and a distinct "no organization selected" state (a null tenant claim
+denies every policy, so this is deliberately not conflated with "empty catalog").
+Revoked-membership and expired-session both resolve through the same session-store gate
+in `_layout.tsx`.
+**Testing:** no component-test runner exists in this repo (`TECHNICAL_DEBT.md`), so
+verification is via `scripts/verify-cache-isolation.mts` (67 executable checks: query-key
+scoping, cache eviction ordering, JWT claim decoding, money formatting, chunked storage)
+and `scripts/smoke-signed-in.mjs` (a real signed-in run against the live project — the
+manual-device-pass substitute this environment cannot perform). **On-device run: still
+NOT PERFORMED** — no physical device or emulator is available in this environment; the
+smoke script is the strongest verification actually achievable here, exercising the real
+`packages/api`/`packages/auth`/`packages/hooks` code paths against production RLS rather
+than a mock.
+**Completion gate — MET, live-verified 2026-08-24:** `node scripts/smoke-signed-in.mjs`
+signs in, confirms the JWT carries a top-level `tenant_id` claim (not `app_metadata` —
+the bug the 2026-08-15 review found and fixed, see `packages/auth/claims.ts`), lists
+exactly the organizations the user belongs to, switches via
+`set_active_organization()` + `refreshSession()`, confirms the catalog before the
+refresh still serves the *previous* tenant and only the *new* token unlocks the new
+one, loads that organization's catalog and product detail, then switches to a second
+organization and confirms **zero** rows from the first are visible by any path
+(direct id, list, stock levels, batches, tickets, deliveries) — 112/112 assertions
+passed. Prior known defects, all found and fixed during the original 2026-08-15 build
+(not open now): the `app_metadata` claim-reading bug above, a missing
+`SafeAreaProvider`, and a non-deterministic `verify:cache` invocation.
 
-### Backend work that continues in parallel with P8.1
+### Backend work that continued in parallel with P8.1
 P4.2 Inventory · P4.3 Production · P6.1 Edge Functions · P6.4 Audit coverage · P0.5
-migration reproducibility. **Not** P5 (blocked) and **not** P3.7 (blocked).
+migration reproducibility — all since COMPLETE or resolved, see their own sections.
+
+### What shipped beyond P8.1's original scope
+P9.1 (catalog detail with variants/prices), P9.4 (inventory read + write), P9.5
+(production read + write), P9.6 (delivery read + write) are all implemented under
+`apps/mobile/app/{inventory,production,delivery}/` and exercised by the same smoke
+suite above. See their respective P9.x rows for individual evidence.
 
 ---
 
@@ -887,7 +950,7 @@ behaviour → tests → acceptance gate.**
 
 | ID | Slice | Backend dep | Offline behaviour | Status |
 |---|---|---|---|---|
-| P9.1 | Catalog browse | P4.1 | read-through cache | READY after P8.1 |
+| P9.1 | Catalog browse | P4.1 | read-through cache | **COMPLETE 2026-08-15, re-verified live 2026-08-24.** `app/index.tsx` (list) + `app/product/[id].tsx` (detail with priced variants, shipped same day as the immediate P9.1 follow-on to P8.1). Money is never summarised across variants (no "from ₦X") — comparing `NUMERIC(19,4)` strings needs a decimal library not yet a dependency, and `formatNaira` truncates rather than rounds pending BLOCKER-003. |
 | P9.2 | Customer create/select | P4.4a | queued create | BLOCKED (P3.7) |
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | BLOCKED (005, 006) |
 | P9.4 | Inventory view & adjust | P4.2 | online-only for now — queuing needs P10 | **READ PATH COMPLETE / WRITE PATH COMPLETE 2026-08-21.** `AdjustStockAction` on each stock row calls the already-existing `adjust_stock()` RPC (P4.2b) — an absolute target, not a delta; three reasons (`adjustment`, `waste`, `opening_balance`), role-gated per reason server-side. The RPC contract itself was proven live in the P9.5 smoke work (an opening-balance call against a disposable fixture); this slice is the hook + UI wiring around it |

@@ -2410,3 +2410,109 @@ Read: bakeflow-frontend/packages/api/queries/delivery.ts:95
 mcp__supabase__execute_sql (fixture fully corrected, full D1-D10 suite, rolled back)
                                             -> 11/11 passed
 ```
+
+---
+
+## 2026-08-24 · P8.1 re-verified live — discovered already fully built, docs badly stale
+
+**Scope:** instructed to "start P8.1 — the first frontend vertical slice", with explicit
+instructions to inspect before changing anything, reuse existing patterns, verify the
+real user flow (not just compilation), and run a security review across everything
+touched. **Zero product code changed** — investigation found the slice already existed,
+already worked, and already had continuous live regression coverage; the actual gap was
+two badly stale documents.
+
+### What "inspect before changing" found
+
+`Glob`/`Read` on `bakeflow-frontend/apps/mobile` found real, production-quality screens
+already committed: `_layout.tsx` (the navigation gate), `sign-in.tsx`,
+`select-organization.tsx`, `index.tsx` (catalog), `product/[id].tsx` (detail — P9.1,
+shipped same day as P8.1), plus `inventory/`, `production/`, `delivery/` screens (P9.4,
+P9.5, P9.6) built on top of it since. This contradicted two documents directly:
+
+- `CLAUDE.md` line 5: "Frontend is pre-development: no app code exists yet."
+- `BACKEND_ROADMAP.md` Phase 8: "P8.0 remains open... P8.1 was and is available to start."
+
+`CURRENT_TASK.md` told the true story once read in full: `## ✅ P8.1 DELIVERED — sign in
+→ choose bakery → catalog (2026-08-15)`, followed by same-day entries fixing a bug found
+in review (`activeTenantIdFromSession` read `app_metadata`, but the live
+`custom_access_token_hook` writes top-level JWT claims — the accessor returned `null` for
+every signed-in user until fixed) and closing BLOCKER-014 (the access-token hook existed
+in the database but was never registered in the project's Auth settings, so it was never
+invoked at all). Since then, `scripts/smoke-signed-in.mjs` — the exact P8.1 flow, sign-in
+through organization switching through catalog reads — has been the project's standing
+live regression suite, run and passing throughout essentially every backend task this
+session, most recently in today's own earlier P4.4/P4.5 work.
+
+### Security review of the P8.1 slice
+
+Read every file in the slice end to end against the requested categories — authorization,
+tenant isolation, token/session handling, sensitive-data exposure, input validation,
+cache isolation, insecure client-side trust:
+
+| File | What it does right |
+|---|---|
+| `packages/auth/index.ts`, `claims.ts` | Session lives in chunked `expo-secure-store` (Keychain/Keystore), never AsyncStorage; `tenant_id` is always decoded from the JWT payload the database will enforce, never trusted from a client tap; the module's own doc comment states plainly that these values are not authorization and a forged token only changes which empty screen renders. |
+| `packages/config/index.ts` | Only `EXPO_PUBLIC_*` variables are readable in the client bundle — the service-role key is structurally excluded, not just conventionally avoided. |
+| `providers/AppProviders.tsx` | `onAuthStateChange` evicts organization-scoped cache entries **before** publishing the new session on a tenant-claim change, closing the window where a render could land between a token switch and cache eviction. |
+| `packages/hooks/index.ts` | Every organization-scoped query key is built only through `orgScoped()`, keyed on the claim actually in force rather than the id tapped; `clearOrganizationScopedCache` uses `removeQueries` (not `invalidateQueries`) so a switch can never render a frame of the previous bakery's data. |
+| `packages/api/queries/organizations.ts`, `catalog.ts` | Every filter goes through the PostgREST query builder (`.eq()`, `.is()`) — no raw SQL, no string interpolation, so a crafted route param (e.g. `product/[id]`) cannot reach the database as anything but a parameterized filter value. |
+| `components/ScreenState.tsx` | `ErrorState` renders `error.message` raw — safe only because `BakeflowApiError.message` is already guaranteed (TD-017 work, 2026-08-23) to never carry raw server text. Checked this invariant still holds before trusting the render. |
+
+No defects found. The architecture already anticipated and defended against every
+category asked about, several of them explicitly in its own doc comments.
+
+### Fresh live verification (not relying on any historical log entry)
+
+| Command | Result |
+|---|---|
+| `npm run typecheck --workspace apps/mobile` | exit 0 |
+| `npm run typecheck` (all workspaces) | exit 0 |
+| `npx eslint packages --max-warnings=0` | exit 0 |
+| `npm run lint --workspace apps/mobile` | exit 0 |
+| `npm run verify:cache` | **67/67 passed** |
+| `node scripts/smoke-signed-in.mjs` | **112/112 passed**, exit 0 (two prior attempts failed on the very first network call — `fetch failed` at sign-in — both transient; a third attempt succeeded outright) |
+| `.venv/Scripts/python.exe -m pytest -q` | 12 passed |
+
+The smoke run is the strongest verification achievable in this environment: no physical
+device or emulator exists here, so "on-device run" remains formally NOT PERFORMED, same
+as every prior pass — but the script signs in for real, decodes the real JWT, calls
+`set_active_organization()` + `refreshSession()` for real, and reads the catalog through
+the actual `packages/api`/`packages/hooks` code paths against live RLS, then repeats the
+whole thing under a second organization and asserts zero cross-tenant leakage by six
+independent paths (direct id, list, stock levels, batches, tickets, deliveries).
+
+### Documentation corrected
+
+- `CLAUDE.md` line 5: removed the false "no app code exists yet" claim; states the
+  actual 2026-08-24 frontend status and warns against trusting a status claim in this
+  file over the real repository state.
+- `BACKEND_ROADMAP.md`: the "P8.0 remains open" banner rewritten to "P8.0 is CLOSED";
+  the P8.1 milestone section rewritten with the full delivery/verification evidence
+  trail; the frozen 2026-08-14 blocker table given a correction banner rather than
+  silently rewritten (most of its citations were resolved days to weeks later and never
+  updated); the P9.1 table row updated from "READY after P8.1" to COMPLETE; a new
+  frontend-status paragraph added to the top-of-file Current State section.
+- `CURRENT_TASK.md`: new entry at the top recording this pass.
+
+**Executed evidence:**
+```
+Glob apps/mobile/app/*.tsx (and inventory/production/delivery subdirs)
+                                            -> 11 screens already exist, contradicting
+                                               CLAUDE.md's "no app code exists yet"
+Read: apps/mobile/app/_layout.tsx, sign-in.tsx, select-organization.tsx, index.tsx,
+      product/[id].tsx, providers/AppProviders.tsx, stores/session.ts,
+      packages/auth/index.ts, claims.ts, packages/config/index.ts,
+      packages/hooks/index.ts, components/ScreenState.tsx,
+      packages/api/queries/organizations.ts, catalog.ts
+                                            -> full security review, no defects found
+npm run typecheck --workspace apps/mobile   -> exit 0
+npm run typecheck                           -> exit 0 (all workspaces)
+npx eslint packages --max-warnings=0        -> exit 0
+npm run lint --workspace apps/mobile        -> exit 0
+npm run verify:cache                        -> 67/67 passed
+node scripts/smoke-signed-in.mjs            -> fetch failed (transient, retry 1)
+node scripts/smoke-signed-in.mjs            -> fetch failed (transient, retry 2)
+node scripts/smoke-signed-in.mjs            -> 112/112 passed, SMOKE TEST PASSED
+.venv/Scripts/python.exe -m pytest -q       -> 12 passed
+```

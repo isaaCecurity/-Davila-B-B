@@ -2,7 +2,7 @@
 
 BakeFlow is a mobile-first operational management platform for independent bakeries (starting with the Nigerian market). It connects orders, inventory, production, deliveries, and finance into one system so a bakery owner gets accurate financial visibility without bookkeeping knowledge.
 
-**Status:** backend is live and ahead of this repo (see `docs/PROJECT-OVERVIEW.md` §migration-sync for the gap — reconcile before assuming the committed migrations reflect production). Frontend is pre-development: no app code exists yet. Application code will be built phase-by-phase per `docs/AI-BUILD-GUIDE.md`, into the structure defined in `docs/FRONTEND-STRUCTURE.md`.
+**Status:** backend is live and ahead of this repo (see `docs/PROJECT-OVERVIEW.md` §migration-sync for the gap — reconcile before assuming the committed migrations reflect production). Frontend is in active development, built phase-by-phase per `docs/AI-BUILD-GUIDE.md` into the structure defined in `docs/FRONTEND-STRUCTURE.md`. As of 2026-08-24: the P8.1 vertical slice (sign in → pick organization → catalog) plus the P9.1/P9.4/P9.5/P9.6 mobile slices (catalog detail, inventory, production, delivery) are implemented and live-verified — see `BACKEND_ROADMAP.md` P8.0–P9 and `scripts/smoke-signed-in.mjs`. This line previously read "no app code exists yet", which had been stale for over a week; do not trust a status claim in this file over the actual repository state — verify with `Glob`/`git log` before assuming either way.
 
 ## Tech stack
 
