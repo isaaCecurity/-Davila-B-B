@@ -1,5 +1,73 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-021 RESOLVED — driver field-sale shortcut implemented, tested, and wired in (2026-08-25)
+
+User resolved BLOCKER-021 with an explicit decision: a driver-created, trip-linked
+roadside/field-sale ticket takes a shortened `draft → completed` lifecycle — **not** by
+adding `driver` to the seven existing forward-hop actor lists, and **not** making
+`draft → completed` universally legal for any ticket. Implemented exactly to spec:
+
+**Inspected before writing anything**, per the explicit instruction: read
+`guard_ticket_status_transition()`'s live body (already had it from the earlier BLOCKER-021
+discovery), `guard_production_batch_transition()`'s existing `bakeflow.production_batch_rpc`
+flag technique (BLOCKER-017's fix — the reusable primitive this migration mirrors),
+`confirm_ticket()`/`complete_ticket()`'s exact invoice/stock-movement logic (reused, not
+reinvented), `has_branch_access()`, and confirmed live that `authenticated` in fact holds no
+`UPDATE` grant on `tickets` at all (`INSERT`/`SELECT` only) — correcting an assumption made
+mid-implementation, not a guess left uncorrected.
+
+**Distinguishing signal** (instruction #2): no new column — `driver_trip_id IS NOT NULL`
+(already carries the driver-created/trip-linked meaning) plus `fulfilment_type = 'pickup'`
+(a deliberate addition, to keep AD-019's `deliveries` gate untouched for delivery-fulfilment
+tickets, which the user's own instruction required preserving).
+
+**Built** (migration `adr001_blocker021_driver_field_sale_shortcut`): `guard_ticket_
+status_transition()` gained `'completed'` as a legal target from `'draft'`, reachable only
+when a transaction-local flag is set (mirrors BLOCKER-017's exact technique) — with two
+defence-in-depth checks even under the flag (`fulfilment_type = 'pickup'`,
+`driver_trip_id IS NOT NULL`). New RPC `complete_driver_field_sale(p_ticket_id,
+p_warehouse_id)`: verifies branch access, `status = 'draft'`, the trip link, the trip is
+`in_transit`, the caller is the trip's own driver or a manager (mirrors `record_payment()`'s
+identical two-layer identity check), and ≥1 item — then recomputes `subtotal_amount`
+(`confirm_ticket()`'s mechanism), issues the invoice (`confirm_ticket()`'s exact upsert),
+and writes the sale stock movement **against the trip's own warehouse, not the branch
+default** (the goods were in the vehicle's custody, not on the branch shelf — the one place
+this deliberately diverges from `complete_ticket()`, per the "inventory/custody
+constraints" requirement). Recorded as **AD-020**.
+
+**Tests** (instruction #4, all five required scenarios plus three extra): new permanent
+suite `tests/sql/driver_field_sale_rls.sql`, **8/8 passed** live — S1 authorized driver
+completes their own ticket (invoice + stock movement verified against the trip warehouse
+specifically), S2 unrecognized driver identity refused, S3 shortcut refused once the trip
+is no longer `in_transit`, S4 unauthorized role refused, S5 delivery-fulfilment ticket
+refused (AD-019 preserved), S6 a raw UPDATE is refused even with full table-owner
+privilege and even against an otherwise-eligible ticket (isolates the flag gate from the
+grant layer), S7 a non-trip-linked ticket refused, S8 the normal lifecycle
+(`confirm_ticket()`) is unaffected. Regression: `driver_trips_rls.sql` 20/20,
+`financial_write_rls.sql` 28/28 — both re-run and confirmed clean before marking anything
+resolved, per instruction #5. `pytest` 12/12.
+
+**Docs updated** (instruction #6 plus the standing rule): `docs/API-CONTRACT.md` §2 gained
+the new RPC's row; `docs/STATE-MACHINES.md` §6 gained "Driver field-sale shortcut (AD-020)";
+`ARCHITECTURE_DECISIONS.md` gained AD-020; `BLOCKERS.md`/`NOTIFICATIONS.md` mark
+BLOCKER-021 RESOLVED, done only after the implementation and every test above passed, not
+before.
+
+**Wired into the frontend**: `apps/mobile/app/driver/sell.tsx`'s Sell flow now runs
+`createRoadsideTicket` → `completeDriverFieldSale` → `recordDriverTripPayment`, in that
+order — completion first is what makes the invoice exist for the payment to attach to (a
+correction to the first slice's flow, which had no invoice for `record_payment()` to find
+since the ticket never left `draft`). `packages/api/mutations/sales.ts` gained
+`completeDriverFieldSale()`; `packages/hooks/index.ts` gained `useCompleteDriverFieldSale`.
+
+**Verified:** `npm run typecheck`/`lint --workspace apps/mobile` both clean, `pytest -q`
+12 passed, `npx expo export --platform web` 0 errors (1025 modules). **Not verified:** an
+interactive click-through — no device/browser tooling in this environment.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-25.
+
+---
+
 ## ✅ ADR-001 Phase 5 second slice — "Sell" live, scoped down by a new finding: BLOCKER-021 (2026-08-25)
 
 Continuing Phase 5 into the "Sell" step the first slice deliberately left unwired.

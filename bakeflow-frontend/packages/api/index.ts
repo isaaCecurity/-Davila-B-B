@@ -110,15 +110,16 @@ export {
   type TicketFilters,
 } from './queries/sales';
 
-// ADR-001 Phase 5 — ticket creation only (the driver "Sell" step). `createRoadsideTicket`
-// is a plain INSERT (verified live RLS lets a driver create their own ticket), not an RPC —
-// see the module header for why that is the schema's own design, not a workaround. No
-// lifecycle mutation (`confirm`/`submit`/`complete`) is exported: those four RPCs' own
-// signatures are now read live, but `guard_ticket_status_transition()`'s actor lists never
-// include `driver` at any hop (**BLOCKER-021**), and `discount_amount`/`tax_amount` still
-// have no approved rules (BLOCKER-003). See `mutations/sales.ts`'s header for what is and
-// is not blocked.
+// ADR-001 Phase 5 — the driver "Sell" step: ticket creation (`createRoadsideTicket`, a
+// plain INSERT — verified live RLS lets a driver create their own ticket, not an RPC
+// workaround, see the module header) and the driver field-sale completion shortcut
+// (`completeDriverFieldSale`, AD-020, resolving BLOCKER-021). No *general* lifecycle
+// mutation (`confirmTicket`/`submitTicket`) is exported: `guard_ticket_status_transition()`
+// still never includes `driver` in the seven normal forward-hop actor lists, and
+// `discount_amount`/`tax_amount` still have no approved rules (BLOCKER-003). See
+// `mutations/sales.ts`'s header for the full picture.
 export {
+  completeDriverFieldSale,
   createRoadsideTicket,
   type CreateRoadsideTicketInput,
   type RoadsideTicketLine,

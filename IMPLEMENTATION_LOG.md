@@ -5,6 +5,110 @@ Never record planned work here.
 
 ---
 
+## 2026-08-25 · BLOCKER-021 RESOLVED — driver field-sale shortcut (AD-020)
+
+User's decision, verbatim intent: a driver-created, trip-linked roadside/field-sale ticket
+takes `draft → completed` directly instead of the seven-hop production lifecycle — NOT by
+adding `driver` to the existing forward-hop actor lists, NOT making `draft → completed`
+universally legal. Explicit conditions given: linked to `driver_trip_id`; trip
+`in_transit`; caller authorized per the existing assignment rule; valid items;
+inventory/custody constraints satisfied; payment/credit server-derived; existing
+financial/RLS protections stay authoritative.
+
+**Inspection before implementation** (`mcp__supabase__execute_sql` against project
+`tvfyxpafbpnkneujcnvr`):
+- Re-read `guard_ticket_status_transition()`'s live `prosrc` to base the edit on the exact
+  deployed source, not memory.
+- Read `guard_production_batch_transition()` and `complete_production_batch()` in full —
+  the `bakeflow.production_batch_rpc` transaction-local-flag technique (BLOCKER-017) is
+  what this migration's `bakeflow.driver_field_sale_rpc` flag mirrors exactly.
+- Read `information_schema.role_table_grants` for `tickets`/`authenticated`: **INSERT and
+  SELECT only, no UPDATE** — corrects an assumption made in this migration's own first-draft
+  comment (which wrongly claimed `authenticated` held a direct UPDATE grant, contradicting
+  BLOCKERS.md's own earlier, correct finding). The flag is defence in depth against future
+  RPC/migration paths, not a client bypass that was otherwise reachable — documentation
+  written afterward reflects the corrected understanding.
+- Read `invoices`' constraints (`UNIQUE(ticket_id)`, `total_amount >= 0`) and
+  `log_audit_event()`'s signature to reuse `confirm_ticket()`'s exact upsert shape.
+- Read `has_branch_access()` and `branch_assignments`' FK (`profile_id → profiles(id)`) —
+  confirms the single-real-profile constraint applies to authorization fixtures here too,
+  same as `driver_trips_rls.sql` already documented.
+
+**Migration applied**: `adr001_blocker021_driver_field_sale_shortcut`.
+`guard_ticket_status_transition()`: `'completed'` added to `'draft'`'s legal targets,
+gated by `bakeflow.driver_field_sale_rpc`; two defence-in-depth checks inside that gate
+(`fulfilment_type = 'pickup'`, `driver_trip_id IS NOT NULL`) even with the flag set;
+`'completed'`'s actor list now branches on `OLD.status` (`{owner,admin,branch_manager,
+driver}` for the `draft` shortcut vs. the unchanged `{owner,admin,branch_manager,cashier}`
+for the normal `delivered → completed` hop) — a role-membership check layered under the
+RPC's own, more specific trip-identity check, the same two-layer shape `record_payment()`
+already uses. New function `complete_driver_field_sale(p_ticket_id, p_warehouse_id)`:
+branch access → `status = 'draft'` → `driver_trip_id` set → `fulfilment_type = 'pickup'` →
+trip `in_transit` → `trip.driver_id = auth.uid()` or manager → ≥1 item → recompute
+subtotal → set flag → UPDATE status → upsert invoice → per-line sale stock movement
+against `COALESCE(p_warehouse_id, trip.warehouse_id)` (the vehicle, not the branch
+default). `GRANT EXECUTE ... TO authenticated`.
+
+**Live-verified in a rolled-back transaction before writing the permanent suite** (three
+iterations, each fixing a real test-construction issue, not a product defect): (1) two
+simultaneously non-completed trips for the one real driver hit
+`driver_trips_one_active_per_driver` — fixed by walking the first trip to `completed`
+through its own three legal hops before creating the second; (2) linking a ticket to a
+not-yet-in_transit trip hit `guard_ticket_driver_trip_assignment()`'s own precondition —
+fixed by linking while `in_transit`, then transitioning the trip afterward, which is also
+the more realistic scenario; (3) the RPC's transaction-local flag, set by an earlier
+scenario in the same shared test transaction, was still `'true'` for a later scenario
+that needed it `'false'` to test the gate in isolation — a test-script artifact only
+(unreachable in production, where each RPC call is its own transaction), fixed with an
+explicit reset.
+
+**Permanent suite**: `tests/sql/driver_field_sale_rls.sql`, **8/8 passed** live (S1–S8, see
+the file's own header for the full list — authorized completion with invoice + stock
+movement verified against the trip's warehouse specifically; unrecognized-identity refusal;
+trip-not-`in_transit` refusal; unauthorized-role refusal; delivery-fulfilment refusal
+proving AD-019 untouched; a raw UPDATE refused even with full table-owner privilege,
+isolating the flag gate from the grant layer; non-trip-linked-ticket refusal; the normal
+`confirm_ticket()` lifecycle unaffected).
+
+**Regression, re-run and confirmed clean before marking BLOCKER-021 resolved** (per
+instruction #5 — resolve the docs only after implementation and tests pass): `tests/sql/
+driver_trips_rls.sql` **20/20**, `tests/sql/financial_write_rls.sql` **28/28**,
+`.venv/Scripts/python.exe -m pytest -q` **12 passed**.
+
+**Docs**: `docs/API-CONTRACT.md` §2 — new `complete_driver_field_sale` row.
+`docs/STATE-MACHINES.md` §6 — new "Driver field-sale shortcut (AD-020)" subsection, placed
+between the assignment-guard and `deliveries`-authority subsections it directly relates to.
+`ARCHITECTURE_DECISIONS.md` — new **AD-020**. `BLOCKERS.md`/`NOTIFICATIONS.md` —
+BLOCKER-021 marked RESOLVED, with the resolution text and original problem statement both
+kept (matching the AD-018/AD-019 precedent), only after every test above had already run
+green.
+
+**Frontend wiring**: `packages/api/mutations/sales.ts` — `completeDriverFieldSale()`,
+same `readBack`-via-`getTicketWithItems` pattern as every other mutation in the package;
+module header rewritten to reflect BLOCKER-021's resolution rather than its open state.
+`packages/api/index.ts` — exported, with the barrel comment corrected. `packages/hooks/
+index.ts` — `useCompleteDriverFieldSale`, invalidating the trip's `driverTripTickets` list
+(the mutation itself takes only a ticket id, so the trip id needed for the cache key is
+threaded through the hook's own variables). `apps/mobile/app/driver/sell.tsx` — `checkout()`
+now chains `createTicket` → `completeSale` → (transition to the payment step), instead of
+creating the ticket and stopping at `draft`; module header and the "done" screen's copy
+both updated to describe what actually happens now (the sale is complete, not "the office
+will process it later"). This is a correction, not just an addition: the first slice's
+`record_payment()` call was attaching a payment to a ticket with no invoice yet
+(`v_invoice` would have resolved `NULL` inside `record_payment()`, since `confirm_ticket()`
+had never run) — completing first is what makes the payment attach to a real invoice.
+
+**Verified:**
+- `npm run typecheck --workspace apps/mobile` → exit 0.
+- `npm run lint --workspace apps/mobile` → exit 0, zero warnings.
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed (re-run again after all doc edits).
+- `npx expo export --platform web` → 0 errors, 1025 modules (unchanged count — no new
+  files this pass, only edits to already-bundled ones).
+- **Not verified:** an interactive click-through against a live signed-in session — no
+  browser/device tooling available in this environment.
+
+---
+
 ## 2026-08-25 · ADR-001 Phase 5 — driver mobile UI, second slice ("Sell") — and BLOCKER-021 found
 
 Continuing Phase 5. Before writing UI, read live whether a driver could actually complete a

@@ -1,7 +1,8 @@
 /**
- * Sales write path — the driver "Sell" step, ADR-001 Phase 5. **Ticket creation only.**
+ * Sales write path — the driver "Sell" step, ADR-001 Phase 5. Ticket creation, plus the
+ * driver field-sale completion shortcut (AD-020, resolving BLOCKER-021).
  *
- * ## Why this is the first plain-table-write mutation module in the package
+ * ## Why ticket creation is the first plain-table-write mutation in the package
  *
  * Every other write path in `@bakeflow/api` (inventory, production, delivery, driver
  * trips, invitations) is RPC-only, because `API-CONTRACT.md` §1's decision rule reserves
@@ -24,22 +25,24 @@
  * is the bounded case `API-CONTRACT.md` §1 is willing to accept split, unlike a payment or a
  * stock movement — see the module's own reasoning trail in `IMPLEMENTATION_LOG.md`.
  *
- * ## What this deliberately does not do: advance the ticket past `draft`
+ * ## The ticket can now reach `completed` — but only through one narrow door
  *
- * **BLOCKER-021** (see `BLOCKERS.md`): `guard_ticket_status_transition()`'s actor lists
- * never include `driver` at any of the seven forward hops, so a driver-created ticket
- * cannot legally reach `submitted`, let alone `confirmed`/`completed`, without a
- * cashier/branch_manager/owner/admin doing it. This module stops at `draft` on purpose — a
- * driver hands the created ticket off; someone with the right role advances it later (at
- * reconciliation, or live over the till). Do not add a `confirmTicket`/`submitTicket` call
- * here until BLOCKER-021 is resolved; every such call from a driver would come back
- * `insufficient_role`.
+ * **BLOCKER-021 is resolved as of 2026-08-25 (AD-020).** `guard_ticket_status_transition()`
+ * still never includes `driver` in the seven normal forward-hop actor lists — that decision
+ * was explicit and stands. Instead, a driver-created, trip-linked **pickup** ticket may take
+ * `draft → completed` directly, through the dedicated `completeDriverFieldSale()` below,
+ * which wraps the new `complete_driver_field_sale()` RPC. It is gated server-side on trip
+ * `in_transit`, driver/manager identity, and `fulfilment_type = 'pickup'` (a `delivery`
+ * ticket is refused, so AD-019's `deliveries` gate is never bypassed) — see
+ * `STATE-MACHINES.md` §6 "Driver field-sale shortcut" for the full mechanism. There is still
+ * no `confirmTicket`/`submitTicket` call here, and none should be added: the shortcut is the
+ * only path off `draft` this module exposes, and it is not a generic status-setter.
  *
- * `record_payment()` is **not** blocked by any of this — its own driver branch is already
- * correctly scoped (see `mutations/driver-trips.ts`) and works against a `draft` ticket,
- * since the RPC only refuses a `cancelled` one. So "Sell" (this module) followed by "Record
- * Payment" (`recordDriverTripPayment`) is a complete, honest driver flow today, even though
- * the ticket itself stays in `draft` until the office processes it.
+ * `record_payment()` was never blocked by any of this — its own driver branch is already
+ * correctly scoped (see `mutations/driver-trips.ts`) and works against either a `draft` or a
+ * `completed` ticket, since the RPC only refuses a `cancelled` one. The Sell screen calls
+ * `createRoadsideTicket` → `completeDriverFieldSale` → `recordDriverTripPayment`, in that
+ * order: completing first is what makes the invoice exist for the payment to attach to.
  *
  * ## `unit_price` is never actually written by this client
  *
@@ -170,6 +173,67 @@ export async function createRoadsideTicket(
       message:
         'createRoadsideTicket: the ticket was created but could not be read back; the ' +
         'insert and tickets_select disagree for this caller',
+    });
+  }
+  return row;
+}
+
+/**
+ * Complete a driver-created, trip-linked roadside ticket directly — `draft → completed`,
+ * skipping the seven-hop production lifecycle (AD-020, resolving BLOCKER-021). Recomputes
+ * the total from items, issues the invoice, and writes the sale stock movement, all
+ * server-side; see `STATE-MACHINES.md` §6.
+ *
+ * `warehouseId` is optional and should almost always be omitted: the RPC defaults to the
+ * driver trip's own warehouse (the vehicle), which is where the sold stock actually was.
+ * Only pass it to override that — there is no legitimate reason to for this screen's flow.
+ *
+ * @throws {BakeflowApiError} `invalid_request` when the ticket is not `draft`, is not
+ *   linked to a driver trip, or is `fulfilment_type = 'delivery'` (the shortcut is
+ *   pickup-only, preserving AD-019); `invalid_transition` when the trip is not `in_transit`
+ *   or the ticket has no items; `insufficient_role` when the caller is neither the trip's
+ *   own driver nor a manager.
+ */
+export async function completeDriverFieldSale(
+  client: BakeflowClient,
+  ticketId: Uuid,
+  warehouseId?: Uuid,
+): Promise<TicketWithItems> {
+  if (!uuidSchema.safeParse(ticketId).success) {
+    throw invalid('completeDriverFieldSale', 'ticketId must be a uuid');
+  }
+  if (warehouseId !== undefined && !uuidSchema.safeParse(warehouseId).success) {
+    throw invalid('completeDriverFieldSale', 'warehouseId must be a uuid');
+  }
+
+  const payload = await run(
+    client.rpc('complete_driver_field_sale', {
+      p_ticket_id: ticketId,
+      p_warehouse_id: warehouseId ?? null,
+    }),
+  );
+
+  if (typeof payload !== 'object' || payload === null) {
+    throw new BakeflowApiError({
+      code: 'response_shape_invalid',
+      message: `completeDriverFieldSale: expected a jsonb envelope, received ${typeof payload}`,
+    });
+  }
+  const envelope = payload as { ticket?: unknown };
+  if (typeof envelope.ticket !== 'object' || envelope.ticket === null) {
+    throw new BakeflowApiError({
+      code: 'response_shape_invalid',
+      message: 'completeDriverFieldSale: the envelope carried no ticket',
+    });
+  }
+
+  const row = await getTicketWithItems(client, ticketId);
+  if (row === null) {
+    throw new BakeflowApiError({
+      code: 'unexpected_error',
+      message:
+        'completeDriverFieldSale: the change was applied but the ticket could not be read ' +
+        'back; the RPC and tickets_select disagree for this caller',
     });
   }
   return row;

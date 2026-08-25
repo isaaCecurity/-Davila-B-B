@@ -1,6 +1,7 @@
 import { getSupabaseClient, rolesFromSession } from '@bakeflow/auth';
 import { BakeflowApiError, type DriverTripPaymentMethod } from '@bakeflow/api';
 import {
+  useCompleteDriverFieldSale,
   useCreateRoadsideTicket,
   useCurrentDriverTrip,
   useProductCategories,
@@ -24,17 +25,16 @@ import { useSessionStore } from '../../stores/session';
  * ## What this screen does, precisely
  *
  * Builds a cart from the catalog, creates a `draft` roadside ticket for it
- * (`createRoadsideTicket` — `@bakeflow/api` `mutations/sales.ts`), then records a payment
- * against it (`useRecordDriverTripPayment`, already live from the first Phase 5 slice). Two
- * real writes, both already scoped and tested; nothing here invents new backend behaviour.
+ * (`createRoadsideTicket`), completes it directly to `completed`
+ * (`completeDriverFieldSale` — AD-020, resolving BLOCKER-021: a driver-created, trip-linked
+ * pickup ticket skips the seven-hop production lifecycle, since the goods are already
+ * loaded), then records a payment against it (`useRecordDriverTripPayment`, live since the
+ * first Phase 5 slice). Completion runs before payment on purpose: it is what creates the
+ * invoice `record_payment()` attaches the payment to. Three real writes, all server-gated
+ * and tested (`tests/sql/driver_field_sale_rls.sql`); nothing here invents new backend
+ * behaviour — see `@bakeflow/api` `mutations/sales.ts` for the RPC contracts.
  *
  * ## What it deliberately does not do
- *
- * **Never advances the ticket past `draft`.** `guard_ticket_status_transition()`'s actor
- * lists exclude `driver` at every hop — see `BLOCKERS.md` BLOCKER-021. This screen hands
- * off a `draft` ticket plus a recorded payment; the office advances it later. There is no
- * "confirm" or "complete" button here, and there should not be one until BLOCKER-021 is
- * resolved.
  *
  * **Never computes a cart total.** Money is an exact `NUMERIC(19,4)` decimal string and
  * arithmetic on it needs a decimal library that is not a dependency (`@bakeflow/types`
@@ -136,6 +136,9 @@ function SellFlow({
   const [createdTicketId, setCreatedTicketId] = useState<string | null>(null);
 
   const createTicket = useCreateRoadsideTicket(client, tenantId);
+  const completeSale = useCompleteDriverFieldSale(client, tenantId);
+  const checkoutPending = createTicket.isPending || completeSale.isPending;
+  const checkoutError = completeSale.error ?? createTicket.error;
 
   function addOrReplace(line: CartLine): void {
     setCart((prev) => {
@@ -159,10 +162,19 @@ function SellFlow({
         },
       },
       {
-        onSuccess: (result) => {
-          setCreatedTicketId(result.ticket.id);
+        onSuccess: (created) => {
           setCart([]);
-          setStep('payment');
+          // AD-020: completes the sale (invoice + stock movement) before payment is taken,
+          // so record_payment() below has a real invoice to attach the payment to.
+          completeSale.mutate(
+            { ticketId: created.ticket.id, tripId },
+            {
+              onSuccess: () => {
+                setCreatedTicketId(created.ticket.id);
+                setStep('payment');
+              },
+            },
+          );
         },
       },
     );
@@ -171,9 +183,9 @@ function SellFlow({
   if (step === 'done') {
     return (
       <View className="flex-1 items-center justify-center gap-4 p-6">
-        <Text className="text-lg font-semibold text-neutral-900">Sale recorded</Text>
+        <Text className="text-lg font-semibold text-neutral-900">Sale complete</Text>
         <Text className="text-center text-base text-neutral-500">
-          The ticket and payment are saved. The office will process it when you&apos;re back.
+          The ticket, stock, and payment are all recorded.
         </Text>
         <Pressable
           accessibilityRole="button"
@@ -231,18 +243,18 @@ function SellFlow({
           ))}
           <Pressable
             accessibilityRole="button"
-            disabled={createTicket.isPending}
+            disabled={checkoutPending}
             onPress={checkout}
             className={`flex-row items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70 ${
-              createTicket.isPending ? 'opacity-40' : ''
+              checkoutPending ? 'opacity-40' : ''
             }`}
           >
-            {createTicket.isPending && <ActivityIndicator size="small" color="white" />}
-            <Text className="text-base font-medium text-white">Create ticket</Text>
+            {checkoutPending && <ActivityIndicator size="small" color="white" />}
+            <Text className="text-base font-medium text-white">Sell</Text>
           </Pressable>
-          {createTicket.isError && (
+          {checkoutError !== null && (
             <View className="gap-1 rounded-lg bg-red-50 p-3">
-              <Text className="text-sm text-red-900">{describeSaleError(createTicket.error)}</Text>
+              <Text className="text-sm text-red-900">{describeSaleError(checkoutError)}</Text>
             </View>
           )}
         </View>

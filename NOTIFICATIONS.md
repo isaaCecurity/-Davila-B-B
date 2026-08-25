@@ -4,7 +4,25 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## NEW: BLOCKER-021 — driver-created roadside tickets have no legal path to completion (2026-08-25)
+## RESOLVED: BLOCKER-021 — driver field-sale shortcut implemented and live-verified (2026-08-25)
+
+Decided: a driver-created, trip-linked roadside ticket takes `draft → completed` directly
+via a new `complete_driver_field_sale()` RPC, instead of the seven-hop production
+lifecycle — gated on trip `in_transit`, driver/manager identity, `fulfilment_type =
+'pickup'` only (preserving AD-019's `deliveries` authority untouched), and a
+transaction-local flag so the hop is unreachable any other way. Recorded as **AD-020**.
+Live-verified: new suite `tests/sql/driver_field_sale_rls.sql` 8/8, plus
+`driver_trips_rls.sql` 20/20 and `financial_write_rls.sql` 28/28 confirmed unaffected,
+`pytest` 12/12. `docs/API-CONTRACT.md` updated with the new RPC's signature.
+
+Also wired into the driver-facing Sell screen (`apps/mobile/app/driver/sell.tsx`): Sell
+now completes the ticket before recording payment, so the payment attaches to a real
+invoice instead of a still-`draft` ticket with none. `npm run typecheck`/`lint --workspace
+apps/mobile` both clean. See `IMPLEMENTATION_LOG.md` 2026-08-25 for full detail.
+
+---
+
+## (superseded by the resolution above) BLOCKER-021 — driver-created roadside tickets have no legal path to completion (2026-08-25)
 
 Building ADR-001 Phase 5's "Sell" step (driver creates a roadside ticket, sells from the
 truck), found the live ticket state machine cannot actually complete that sale:

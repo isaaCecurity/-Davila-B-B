@@ -37,6 +37,7 @@
 import {
   adjustStock,
   cancelProductionBatch,
+  completeDriverFieldSale,
   completeDriverTrip,
   completeProductionBatch,
   createRoadsideTicket,
@@ -1095,6 +1096,40 @@ export function useCreateRoadsideTicket(
       const tenant = requireTenant(tenantId);
       void queryClient.invalidateQueries({
         queryKey: queryKeys.driverTripTickets(tenant, variables.input.driverTripId),
+      });
+    },
+  });
+}
+
+export interface CompleteDriverFieldSaleVariables {
+  ticketId: string;
+  /** A trip whose running sales list should be refreshed. Not read by the mutation itself
+   *  — `completeDriverFieldSale()` takes only the ticket id — but needed here since the
+   *  cache key for "this trip's sales" is keyed by trip, not by ticket. */
+  tripId: string;
+  warehouseId?: string;
+}
+
+/**
+ * Complete a driver-created, trip-linked roadside ticket directly (AD-020, resolving
+ * BLOCKER-021) — `draft → completed`, skipping the normal seven-hop lifecycle. No retry:
+ * a replay against a ticket that already completed would return `invalid_request`, which
+ * would read as a failure of an action that actually succeeded the first time.
+ */
+export function useCompleteDriverFieldSale(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<TicketWithItems, Error, CompleteDriverFieldSaleVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ ticketId, warehouseId }: CompleteDriverFieldSaleVariables) => {
+      requireTenant(tenantId);
+      return completeDriverFieldSale(client, ticketId, warehouseId);
+    },
+    onSuccess: (_result, variables) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.driverTripTickets(tenant, variables.tripId),
       });
     },
   });

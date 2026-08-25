@@ -336,6 +336,46 @@ are assigned to (this was already true before ADR-001 — Path B needed no new R
 but say nothing about which trip it may reference. This guard is what actually enforces
 that a ticket only ever belongs to its own driver's own active trip.
 
+### Driver field-sale shortcut (AD-020)
+
+A driver-created, trip-linked roadside sale is stock that is **already produced and
+already loaded** — §1's seven forward hops describe a baking pipeline that has already
+happened before the driver departed. `complete_driver_field_sale(p_ticket_id,
+p_warehouse_id)` lets such a ticket take `draft → completed` directly, bypassing
+`submitted`/`confirmed`/`scheduled`/`in_production`/`ready`/`delivered` entirely — but only
+when every one of these holds, all checked by the RPC before it touches the row:
+
+- `tickets.driver_trip_id` is set;
+- that trip's `status = 'in_transit'`;
+- the caller is the trip's own driver (`driver_trips.driver_id = auth.uid()` — the same
+  identity the assignment guard above already establishes at link time) or a manager;
+- `fulfilment_type = 'pickup'` — refused outright for `'delivery'`, so this hop can never
+  substitute for the `deliveries` gate below;
+- the ticket has at least one item.
+
+It then performs the same side effects the normal lifecycle would have: recomputes
+`subtotal_amount` from items (`confirm_ticket()`'s own mechanism), issues the invoice
+(`confirm_ticket()`'s insert, same `ON CONFLICT (ticket_id)` upsert), and writes the sale
+stock movement (`complete_ticket()`'s mechanism) — **against the driver trip's own
+warehouse**, not the branch's default, since the goods were in the vehicle's custody per
+`verify_trip_loading()`, not on the branch shelf.
+
+**Guard mechanism**: `guard_ticket_status_transition()` gained `'completed'` as a legal
+target from `'draft'`, gated by a transaction-local flag
+(`bakeflow.driver_field_sale_rpc`) that only `complete_driver_field_sale()` ever sets —
+the identical technique `guard_production_batch_transition()` already uses for
+`bakeflow.production_batch_rpc` (§7). `authenticated` holds no `UPDATE` grant on `tickets`
+at all (`INSERT`/`SELECT` only, matching `deliveries`), so the flag is defence in depth
+against any future RPC or migration path, not a client bypass that was otherwise reachable.
+
+**Not affected by this shortcut**: `record_payment()`'s driver-trip-scoped branch is
+unchanged — recording a payment against a `draft` ticket already worked before this
+decision and still does. A ticket may be `completed` via this path while `amount_paid <
+total_amount`; that is a credit sale, exactly as legitimate here as anywhere else in the
+schema (§1, "payment is not a state").
+
+Full decision text: **AD-020** (`ARCHITECTURE_DECISIONS.md`), resolving **BLOCKER-021**.
+
 ### `deliveries` remains authoritative (AD-019)
 
 A driver trip is an operational/custody wrapper — it does not replace or bypass the

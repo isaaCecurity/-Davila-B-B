@@ -996,8 +996,27 @@ that ticket population — before Phase 2 schema design touches the ticket-statu
 
 ---
 
-## BLOCKER-021 · Driver-created roadside tickets have no legal path to a completed sale
-**Status:** OPEN · **Affects:** P9.3 (Ticket creation — driver), ADR-001 Phase 5 (driver UI, "Sell" step) · **Type:** authorization gap + business rule (ticket lifecycle for already-loaded stock)
+## ✅ BLOCKER-021 · Driver-created roadside tickets have no legal path to a completed sale — RESOLVED 2026-08-25
+**Status:** RESOLVED · **Affects:** P9.3 (Ticket creation — driver), ADR-001 Phase 5 (driver UI, "Sell" step) · **Type:** authorization gap + business rule (ticket lifecycle for already-loaded stock)
+
+**Resolution:** a driver-created, trip-linked roadside ticket takes a shortened `draft →
+completed` lifecycle instead — see **AD-020** in `ARCHITECTURE_DECISIONS.md` for the full
+decision and `STATE-MACHINES.md` §6 "Driver field-sale shortcut" for the mechanism.
+Explicitly **not** done: `driver` was not added to any of the seven existing forward-hop
+actor lists, and `draft → completed` is not universally legal for any ticket — the hop is
+reachable only through the new `complete_driver_field_sale()` RPC, gated by trip
+`in_transit` status, driver/manager identity, `fulfilment_type = 'pickup'` (so AD-019's
+`deliveries` gate is never bypassed), and a transaction-local flag mirroring
+`guard_production_batch_transition()`'s existing `bakeflow.production_batch_rpc`
+technique (BLOCKER-017). Verified live: `tests/sql/driver_field_sale_rls.sql` 8/8
+(authorized completion, unrecognized-identity refusal, trip-not-in_transit refusal,
+unauthorized-role refusal, delivery-fulfilment refusal, raw-UPDATE-without-the-flag
+refusal, non-trip-linked refusal, normal lifecycle unaffected), plus regression:
+`driver_trips_rls.sql` 20/20, `financial_write_rls.sql` 28/28, `pytest` 12/12 — none
+touched by this change, confirmed clean before marking resolved. `docs/API-CONTRACT.md`
+§2 gained the new RPC's row.
+
+**Original (OPEN, 2026-08-25):**
 
 Investigating what Phase 5's "Sell" screen (ADR-001's `Load → Go → Sell → Record Payment →
 Repeat → Return → Reconcile`) would need to call, found two compounding problems in the

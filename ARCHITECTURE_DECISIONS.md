@@ -131,6 +131,48 @@ today (`STATE-MACHINES.md` §60) — trip work integrates with `deliveries`, it 
 redefine its authority. Any future RPC touching a trip-linked ticket's delivery status
 must call the existing delivery-transition path, not a new one.
 
+## AD-020 — Driver field-sale tickets take a shortened `draft → completed` lifecycle · APPROVED
+Resolves BLOCKER-021. A driver-created, trip-linked roadside/field-sale ticket sells stock
+that is **already produced and already loaded** (per `verify_trip_loading()`) — the seven
+production-pipeline hops (`submitted → confirmed → scheduled → in_production → ready →
+delivered → completed`) describe a baking process that has already happened before the
+driver departed. Forcing that ticket through all seven hops, or adding `driver` to their
+actor lists, would either misrepresent what the driver is doing or let a driver silently
+skip the production controls a made-to-order ticket still needs.
+
+**Explicitly not done:** `driver` was not added to any of the seven existing forward-hop
+actor lists in `guard_ticket_status_transition()`, and `draft → completed` is not
+universally legal for any ticket. The shortcut is a new, narrowly-gated hop, reachable only
+through `complete_driver_field_sale(p_ticket_id, p_warehouse_id)`, itself gated by:
+
+- the ticket is linked to a `driver_trip_id`;
+- that trip is currently `in_transit`;
+- the caller is that trip's own driver (`driver_trips.driver_id = auth.uid()`, the same
+	identity the assignment guard already establishes at link time) or a manager;
+- `fulfilment_type = 'pickup'` — a `delivery`-fulfilment ticket is refused outright, so
+	**AD-019 is untouched**: `deliveries` stays the sole proof-of-delivery authority for
+	every ticket that needs one;
+- the ticket has at least one item.
+
+The RPC performs the same side effects the normal lifecycle would have: recomputes
+`subtotal_amount` from items (`confirm_ticket()`'s mechanism), issues the invoice
+(`confirm_ticket()`'s insert), and writes the sale stock movement (`complete_ticket()`'s
+mechanism) — **out of the driver trip's own warehouse**, not the branch default, since the
+goods were in the vehicle's custody, not the branch shelf. Payment/credit stays exactly as
+already decided: `record_payment()`'s existing driver-trip-scoped branch is unchanged and
+untouched by this decision, and `amount_paid < total_amount` remains a legitimate credit
+sale, same as any other ticket.
+
+**Guard mechanism**: `guard_ticket_status_transition()` gained `'completed'` as a legal
+target from `'draft'`, but only reachable when a transaction-local flag
+(`bakeflow.driver_field_sale_rpc`) is set — the same technique `guard_production_batch_
+transition()` already established for BLOCKER-017. `complete_driver_field_sale()` sets it
+immediately before its own status UPDATE; no other caller (including a raw table write) can
+set it, so the hop is refused everywhere except through that one function. `authenticated`
+in fact holds no `UPDATE` grant on `tickets` at all (`INSERT`/`SELECT` only, matching
+`deliveries`' posture) — the flag is defence in depth against any future RPC or migration
+path, not a client bypass that was otherwise reachable.
+
 ## AD-017 — MVP financial rules · APPROVED
 The MVP uses the Engineering Bible financial model and defers tax, discounts, COGS,
 gross profit, margin, and refunds. Existing schema objects and API contracts for
