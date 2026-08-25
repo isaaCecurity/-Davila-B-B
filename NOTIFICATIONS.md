@@ -4,6 +4,25 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## NEW: BLOCKER-021 — driver-created roadside tickets have no legal path to completion (2026-08-25)
+
+Building ADR-001 Phase 5's "Sell" step (driver creates a roadside ticket, sells from the
+truck), found the live ticket state machine cannot actually complete that sale:
+`guard_ticket_status_transition()`'s actor lists never include `driver` at any of the
+seven forward hops, and the eight-status chain (`draft → … → completed`) has no shortcut
+for stock that's already baked and already loaded — the same eight hops apply to a
+made-to-order cake and a truck sale of bread that's already on the vehicle. Two decisions
+needed: (1) can a driver advance their own trip-linked ticket unassisted, or must a
+manager/cashier confirm every roadside sale live, and (2) should a trip-linked pickup
+ticket get a shortened lifecycle. Full detail, evidence and options in **BLOCKER-021**.
+
+**Not blocked:** ticket creation (a driver can `INSERT` a draft `ROADSIDE` ticket + items
+today, verified live) and `record_payment()` against an existing trip-linked ticket (its
+driver branch is already correctly scoped). Scoped Phase 5 down to ticket creation only
+until this is answered — see `IMPLEMENTATION_LOG.md`.
+
+---
+
 ## RESOLVED: ADR-001 Phase 2 decisions — BLOCKER-019 and BLOCKER-020 answered (2026-08-24)
 
 Both decided: driver trip cash is custody-distinct from branch till cash, linked only at

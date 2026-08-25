@@ -94,12 +94,7 @@ export {
   type FailProductionBatchInput,
 } from './mutations/production';
 
-// P4.4a/P4.4b — the sales READ path (customers, tickets, ticket_items). No ticket mutation
-// is exported. `guard_ticket_status_transition()` is the sole authority on status since
-// 2026-08-14, the four lifecycle RPCs (`confirm_ticket`, `complete_ticket`,
-// `cancel_ticket`, `archive_ticket`) have not had their signatures read from the live
-// database, `draft -> submitted` has no RPC at all, and `discount_amount`/`tax_amount` have
-// no approved rules (BLOCKER-003). See the module header for why none of that is guessed.
+// P4.4a/P4.4b — the sales READ path (customers, tickets, ticket_items).
 export {
   findCustomersByPhone,
   getCustomerById,
@@ -114,6 +109,20 @@ export {
   type CustomerFilters,
   type TicketFilters,
 } from './queries/sales';
+
+// ADR-001 Phase 5 — ticket creation only (the driver "Sell" step). `createRoadsideTicket`
+// is a plain INSERT (verified live RLS lets a driver create their own ticket), not an RPC —
+// see the module header for why that is the schema's own design, not a workaround. No
+// lifecycle mutation (`confirm`/`submit`/`complete`) is exported: those four RPCs' own
+// signatures are now read live, but `guard_ticket_status_transition()`'s actor lists never
+// include `driver` at any hop (**BLOCKER-021**), and `discount_amount`/`tax_amount` still
+// have no approved rules (BLOCKER-003). See `mutations/sales.ts`'s header for what is and
+// is not blocked.
+export {
+  createRoadsideTicket,
+  type CreateRoadsideTicketInput,
+  type RoadsideTicketLine,
+} from './mutations/sales';
 
 // P4.5 — delivery, read and write.
 //

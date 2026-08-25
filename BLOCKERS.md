@@ -996,6 +996,71 @@ that ticket population — before Phase 2 schema design touches the ticket-statu
 
 ---
 
+## BLOCKER-021 · Driver-created roadside tickets have no legal path to a completed sale
+**Status:** OPEN · **Affects:** P9.3 (Ticket creation — driver), ADR-001 Phase 5 (driver UI, "Sell" step) · **Type:** authorization gap + business rule (ticket lifecycle for already-loaded stock)
+
+Investigating what Phase 5's "Sell" screen (ADR-001's `Load → Go → Sell → Record Payment →
+Repeat → Return → Reconcile`) would need to call, found two compounding problems in the
+live `tickets` state machine that make an unassisted driver roadside sale unreachable —
+neither was touched by ADR-001 Phases 2/3, and neither is guessable:
+
+**1. `guard_ticket_status_transition()`'s actor lists never include `driver`, at any hop.**
+Verified live via `pg_get_functiondef`:
+
+```
+submitted/confirmed/scheduled/delivered/completed → owner, admin, branch_manager, cashier
+in_production/ready                                → owner, admin, branch_manager, baker
+cancelled/archived                                  → owner, admin, branch_manager
+```
+
+`tickets_insert` RLS *does* let a driver create their own ticket (`created_by = auth.uid()`,
+confirmed live), and `confirm_ticket()`/`update_ticket()` carry no independent role gate of
+their own — both defer entirely to this trigger (the same deferral pattern the 2026-08-23
+`update_ticket()` fix established). So a driver can INSERT a draft ticket + items, but
+`update_ticket(p_status='submitted')` — the only path off `draft` — raises
+`insufficient_role` for a driver caller, full stop. A driver-created ticket cannot advance
+one single hop without a cashier/branch_manager/owner/admin doing it for them.
+
+**2. Even with a role, the lifecycle is eight linear hops with no skip.** The `allowed`
+transition map only permits exactly one forward hop per `UPDATE` (`draft→submitted→
+confirmed→scheduled→in_production→ready→delivered→completed`), regardless of
+`fulfilment_type`. A driver's roadside sale is goods **already baked and already loaded**
+(verified via `verify_trip_loading()`) — `scheduled`/`in_production`/`ready` describe a
+baking pipeline that has already happened before the trip departed. Nothing in the schema
+lets an already-fulfilled sale skip those three states; today's only path is to walk a
+truck sale through the same eight-status machine as a made-to-order cake.
+
+Both are real product/architecture decisions, not implementation gaps:
+
+- **Should a driver be able to advance their own trip-linked ticket unassisted** (add
+  `driver` to the relevant actor arrays, scoped to `driver_trip_id IS NOT NULL` and the
+  trip belonging to them — mirroring how `record_payment()`'s own driver branch is scoped),
+  or is a manager/cashier required to confirm every roadside sale live (operationally
+  odd for a driver alone on a route, but may be the intended financial control)?
+- **Should a trip-linked pickup ticket have a shorter path** (e.g. `confirmed →
+  completed` directly once `driver_trip_id` is set, on the theory the goods are already
+  produced), or must it walk the full eight-status chain regardless?
+
+Guessing either one means either patching a security-relevant role gate with no
+authorization to do so, or inventing a new ticket-lifecycle shortcut that
+`docs/STATE-MACHINES.md` §1 does not describe and no one has approved.
+
+**Not blocking:** `record_payment()` itself already has a correctly-scoped driver branch
+(role gate includes `driver`; the `p_driver_trip_id IS NOT NULL` branch requires
+`v_trip.driver_id = auth.uid()` or a manager) — so *recording a payment* against an
+existing trip-linked ticket is not blocked by this. What's blocked is getting that ticket
+to a real, completed sale in the first place. Ticket **creation** (`INSERT` into `tickets`/
+`ticket_items`, roadside/`ROADSIDE`/`customer_id = NULL`) is also not blocked — verified
+live, RLS permits it today.
+
+**Needed:** a decision on (1) whether drivers advance their own trip-linked tickets
+unassisted and (2) whether a trip-linked pickup ticket gets a shortened lifecycle — then
+the trigger/actor-array change (if any) follows directly. Until decided, ADR-001 Phase 5's
+"Sell" step is scoped down to ticket **creation only** (a `draft` ticket the driver hands
+off) rather than a complete, unassisted sale — see `IMPLEMENTATION_LOG.md`.
+
+---
+
 ## Template
 
 ```

@@ -304,6 +304,8 @@ export interface TicketFilters {
   customerId?: Uuid;
   assignedTo?: Uuid;
   fulfilmentType?: TicketFulfilmentType;
+  /** `tickets.driver_trip_id` — ADR-001. What one driver trip has sold so far. */
+  driverTripId?: Uuid;
   /** Inclusive lower bound on `created_at`, as an ISO-8601 timestamp. */
   since?: string;
 }
@@ -363,6 +365,7 @@ export async function listTickets(
   if (filters.assignedTo !== undefined) query = query.eq('assigned_to', filters.assignedTo);
   if (filters.fulfilmentType !== undefined)
     query = query.eq('fulfilment_type', filters.fulfilmentType);
+  if (filters.driverTripId !== undefined) query = query.eq('driver_trip_id', filters.driverTripId);
   if (filters.since !== undefined) query = query.gte('created_at', filters.since);
 
   if (options.after !== undefined) {

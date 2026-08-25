@@ -1,5 +1,63 @@
 # BakeFlow — Current Task
 
+## ✅ ADR-001 Phase 5 second slice — "Sell" live, scoped down by a new finding: BLOCKER-021 (2026-08-25)
+
+Continuing Phase 5 into the "Sell" step the first slice deliberately left unwired.
+Verified live before writing anything (per the session's standing discipline) whether a
+driver could actually complete a roadside sale end to end — found two things:
+
+**Ticket creation is unblocked, exactly as `BACKEND_ROADMAP.md` P9.3 already said**:
+`tickets_insert`/`ticket_items_insert` RLS (read live) let a `driver` create their own
+`draft` ticket + items via plain `INSERT`; no `create_ticket()` RPC exists for anyone.
+`sale_customer_type = 'ROADSIDE'` with `customer_id = null` is the live, unblocked path
+for a walk-up sale — P9.2 (customer create/select) stays blocked (P3.7) without stopping
+this.
+
+**But a driver-created ticket has no legal path off `draft` — new finding, BLOCKER-021.**
+Read `guard_ticket_status_transition()` live: its actor lists never include `driver` at
+any of the seven forward hops, so `update_ticket(p_status='submitted')` — the only exit
+from `draft` — returns `insufficient_role` for a driver caller, every time. Also found the
+eight-status chain has no shortcut for stock that's already baked and loaded (verified via
+`verify_trip_loading()`) — `scheduled`/`in_production`/`ready` describe a baking pipeline
+that already happened. Recorded as **BLOCKER-021** (`BLOCKERS.md`, `NOTIFICATIONS.md`)
+rather than guessed — patching a role-gate trigger or inventing a lifecycle shortcut are
+both real authorization/business decisions, not implementation details.
+
+**Scoped Phase 5's "Sell" to what's actually unblocked**: ticket creation
+(`createRoadsideTicket` — `packages/api/mutations/sales.ts`, the package's first plain
+table-write mutation, deliberately not an RPC — see its header) followed by
+`recordDriverTripPayment` (already live from the first slice; its own driver branch was
+already correctly scoped and needs no change). This is a complete, honest driver flow:
+cart → draft ticket → payment recorded → done. The ticket stays `draft`; the office
+advances it later. No "confirm"/"submit" button exists on this screen, and none should
+until BLOCKER-021 is resolved.
+
+**Built:** `apps/mobile/app/driver/sell.tsx` (cart from the catalog — reusing
+`useProducts`/`useProductCategories`/`useProductVariants` from P9.1 — then create-ticket
+then record-payment, as three in-screen steps), `packages/api/mutations/sales.ts` (new),
+`driver_trip_id` filter added to `listTickets`/`TicketFilters` plus the column itself added
+to the `Ticket` type/`ticketSchema` (present live, never modelled before this), a new
+`useDriverTripTickets`/`useCreateRoadsideTicket` pair in `packages/hooks/index.ts`, and the
+"Sell" button wired into `driver/home.tsx`'s `OnTheRoad` state (previously a placeholder).
+**No cart or payment total is computed anywhere** — money is an exact decimal string and
+arithmetic on it needs a decimal library that isn't a dependency; the driver, holding the
+physical cash, types the amount collected.
+
+Also fixed a real documentation staleness gap found along the way: `docs/API-CONTRACT.md`
+§2's RPC table was missing all seven `driver_trips` RPCs and had `record_payment`'s
+pre-ADR-001 5-argument signature — both live-verified and added.
+
+**Verified:** `npm run typecheck --workspace apps/mobile` clean, `npm run lint --workspace
+apps/mobile` clean, `pytest -q` 12 passed, `npm run deps:check --workspace apps/mobile`
+up to date, and a full production `npx expo export --platform web` — see
+`IMPLEMENTATION_LOG.md` 2026-08-25 for the exact module count. **Not verified:** an
+interactive click-through against a live signed-in session — no browser/device tooling
+available in this environment.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-25.
+
+---
+
 ## ✅ ADR-001 Phase 5 (driver mobile UI) — first vertical slice live (2026-08-25)
 
 Inspected the existing frontend conventions before writing anything (via a research

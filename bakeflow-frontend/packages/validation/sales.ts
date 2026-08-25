@@ -129,6 +129,7 @@ export const ticketSchema = z
     assigned_to: uuidSchema.nullable(),
     correction_of_ticket_id: uuidSchema.nullable(),
     sale_customer_type: z.enum(SALE_CUSTOMER_TYPES),
+    driver_trip_id: uuidSchema.nullable(),
     archived_at: timestamptzSchema.nullable(),
     archived_by: uuidSchema.nullable(),
     archive_reason: z.string().nullable(),

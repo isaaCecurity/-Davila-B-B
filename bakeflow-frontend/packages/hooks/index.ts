@@ -39,6 +39,7 @@ import {
   cancelProductionBatch,
   completeDriverTrip,
   completeProductionBatch,
+  createRoadsideTicket,
   departDriverTrip,
   failProductionBatch,
   getCurrentDriverTrip,
@@ -59,6 +60,7 @@ import {
   listProducts,
   listProductionBatches,
   listRecipesByIds,
+  listTickets,
   listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
@@ -75,6 +77,7 @@ import {
   type BakeflowClient,
   type CompleteDriverTripInput,
   type CompleteProductionBatchInput,
+  type CreateRoadsideTicketInput,
   type DeliveryFilters,
   type DeliveryTransition,
   type DriverTripFilters,
@@ -88,6 +91,7 @@ import {
   type RecordDriverTripPaymentResult,
   type ReturnDriverTripInput,
   type StartDriverTripInput,
+  type TicketFilters,
   type UpdateDeliveryDetailsInput,
   type VerifyTripLoadingInput,
 } from '@bakeflow/api';
@@ -107,6 +111,7 @@ import type {
   ProductionBatchWithIngredients,
   Recipe,
   Ticket,
+  TicketWithItems,
   Warehouse,
 } from '@bakeflow/types';
 import {
@@ -208,6 +213,9 @@ export const queryKeys = {
    *  currently in", which is exactly the ambiguity `driverTrip` above cannot express. */
   currentDriverTrip: (tenantId: string, driverId: string): unknown[] =>
     orgScoped(tenantId, 'current-driver-trip', driverId),
+  /** What one driver trip has sold so far — the "Sell" screen's running list. */
+  driverTripTickets: (tenantId: string, tripId: string): unknown[] =>
+    orgScoped(tenantId, 'driver-trip-tickets', tripId),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -1041,6 +1049,53 @@ export function useRecordDriverTripPayment(
     onSuccess: (_result, variables) => {
       const tenant = requireTenant(tenantId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenant, variables.tripId) });
+    },
+  });
+}
+
+/**
+ * What one driver trip has sold so far — the "Sell" screen's running list. Each row stays
+ * `draft` (see `mutations/sales.ts`'s header on **BLOCKER-021**) until the office advances
+ * it, so this is "created", not "confirmed".
+ */
+export function useDriverTripTickets(
+  client: BakeflowClient,
+  tenantId: string | null,
+  tripId: string | null,
+): UseQueryResult<Page<Ticket>, Error> {
+  const filters: TicketFilters | undefined =
+    tripId === null ? undefined : { driverTripId: tripId };
+  return useQuery({
+    queryKey: queryKeys.driverTripTickets(tenantId ?? 'none', tripId ?? 'none'),
+    queryFn: () => listTickets(client, filters ?? {}),
+    enabled: tenantId !== null && tripId !== null,
+  });
+}
+
+export interface CreateRoadsideTicketVariables {
+  input: CreateRoadsideTicketInput;
+}
+
+/**
+ * Create a roadside ticket for a sale made during the current trip — the "Sell" step.
+ * Stays `draft`; no lifecycle RPC is called (BLOCKER-021). Invalidates the trip's own
+ * running sales list, not `driverTrip` — creating a ticket does not change trip status.
+ */
+export function useCreateRoadsideTicket(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<TicketWithItems, Error, CreateRoadsideTicketVariables> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ input }: CreateRoadsideTicketVariables) => {
+      const tenant = requireTenant(tenantId);
+      return createRoadsideTicket(client, tenant, input);
+    },
+    onSuccess: (_result, variables) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.driverTripTickets(tenant, variables.input.driverTripId),
+      });
     },
   });
 }

@@ -5,6 +5,97 @@ Never record planned work here.
 
 ---
 
+## 2026-08-25 · ADR-001 Phase 5 — driver mobile UI, second slice ("Sell") — and BLOCKER-021 found
+
+Continuing Phase 5. Before writing UI, read live whether a driver could actually complete a
+roadside sale, via `mcp__supabase__execute_sql` against `pg_proc`/`pg_policies`/
+`information_schema.columns` (project `tvfyxpafbpnkneujcnvr`) — not assumed from docs:
+
+- `tickets_insert`/`ticket_items_insert` RLS (full policy text read): a `driver` may
+	`INSERT` a ticket with `created_by = auth.uid()` and its items, confirming
+	`BACKEND_ROADMAP.md` P9.3's existing claim that ticket creation is plain-INSERT with no
+	`create_ticket()` RPC for anyone.
+- `tickets.customer_id` is nullable, `sale_customer_type` CHECK is
+	`('REGISTERED','ROADSIDE')` — the walk-up/roadside path needs no customer record, so P9.2
+	(customer create/select, blocked on P3.7) does not block this.
+- `record_payment()`'s live body (already extended for AD-018 in Phase 3) has a correctly
+	scoped `driver` branch: role gate includes `driver`, and the `p_driver_trip_id` branch
+	requires `v_trip.driver_id = auth.uid()` or a manager, checks the trip is `in_transit`,
+	and checks the ticket is linked to that trip. Confirmed reusable as-is.
+- `guard_ticket_status_transition()`'s full body, read live: actor lists for every one of
+	the seven forward hops (`submitted`/`confirmed`/`scheduled`/`in_production`/`ready`/
+	`delivered`/`completed`) are drawn from `{owner, admin, branch_manager, cashier}` or
+	`{owner, admin, branch_manager, baker}` — **`driver` appears in none of them.** So
+	`update_ticket(p_status='submitted')`, the only exit from `draft`, returns
+	`insufficient_role` for a driver caller regardless of trip/ticket state.
+- `confirm_ticket()`/`complete_ticket()`, read live: no gate of their own — both defer
+	entirely to the trigger above, so the same result holds for the whole lifecycle.
+- The `allowed` transition map only permits one forward hop per `UPDATE`, uniformly for
+	every `fulfilment_type` — no shortcut exists for a `pickup` ticket whose goods are
+	already produced and already loaded (per `verify_trip_loading()`).
+
+**Recorded as BLOCKER-021** (`BLOCKERS.md`, `NOTIFICATIONS.md`) rather than patched:
+whether a driver may advance their own trip-linked ticket unassisted, and whether a
+trip-linked pickup ticket should get a shortened lifecycle, are both real
+authorization/business decisions this session has no standing to guess at — the same
+discipline BLOCKER-019/020 followed during Phase 2.
+
+**Scoped this slice to what's unblocked**: ticket creation + payment, stopping at `draft`.
+
+**Files added:**
+- `packages/api/mutations/sales.ts` — `createRoadsideTicket()`. The package's first plain
+	table-write mutation (every other domain is RPC-only) — its header explains why that is
+	the schema's own design (the RLS shape only makes sense as a plain-INSERT contract) and
+	names the bounded atomicity gap accepted (a network failure between the two INSERTs
+	yields a `draft` ticket with zero items — recoverable, not a financial fact, unlike a
+	split payment/stock write `API-CONTRACT.md` §1 would refuse to allow). `unit_price` is
+	sent as `'0'` and never trusted — `guard_order_item_price()` overwrites it unconditionally
+	on insert, verified live.
+- `apps/mobile/app/driver/sell.tsx` — cart (product → variant → quantity, reusing
+	`useProducts`/`useProductCategories`/`useProductVariants` from P9.1) → `createRoadsideTicket`
+	→ `PaymentStep` (`useRecordDriverTripPayment`, already live) → done. No cart or payment
+	total is computed anywhere in this screen — money is an exact `NUMERIC(19,4)` decimal
+	string and arithmetic on it needs a decimal library that is not a dependency, the same
+	constraint `product/[id].tsx` (P9.1) already documents; the driver types the amount
+	actually collected.
+
+**Files edited:**
+- `packages/types/sales.ts` / `packages/validation/sales.ts` — added `driver_trip_id` to
+	the `Ticket` type and `ticketSchema`. The live column (added in ADR-001 Phase 2) had never
+	been modelled in the read path; needed for the new `driverTripId` filter below.
+- `packages/api/queries/sales.ts` — added `driverTripId` to `TicketFilters`/`listTickets`.
+- `packages/api/index.ts` — exported `createRoadsideTicket`; rewrote the stale "no ticket
+	mutation is exported" comment block to name BLOCKER-021 specifically rather than the
+	now-resolved "signatures not read live" reason.
+- `packages/hooks/index.ts` — `useDriverTripTickets` (a trip's running sales list),
+	`useCreateRoadsideTicket`.
+- `apps/mobile/app/driver/home.tsx` — wired the "Sell" button into `OnTheRoad` (previously
+	a placeholder); updated the module header's "not built yet" note.
+- `docs/API-CONTRACT.md` §2 — found and fixed a real staleness gap while reading
+	`record_payment`'s live signature for the payment step: the table was missing all seven
+	`driver_trips` RPCs entirely and still showed `record_payment`'s pre-Phase-3 5-argument
+	signature. Added the seven RPC rows and the `p_driver_trip_id` note, and a
+	`close_cash_session` note on AD-018's settlement behavior.
+- `BLOCKERS.md` — BLOCKER-021 added (full detail: two live actor-list excerpts, the
+	transition-map excerpt, what is/isn't blocked).
+- `NOTIFICATIONS.md`, `CURRENT_TASK.md`, `BACKEND_ROADMAP.md` P9.3,
+	`docs/ADR-001-Driver-Workflow-Redesign-MVP.md` Phase 5 status — updated to match.
+
+**Verified:**
+- `npm run typecheck --workspace apps/mobile` → exit 0 (after hand-patching the gitignored
+	`.expo/types/router.d.ts` to add `/driver/sell`, same stopgap as the first slice — the
+	generator only runs under `expo start`/`export`, not `tsc`).
+- `npm run lint --workspace apps/mobile` → exit 0, zero warnings.
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed.
+- `npm run deps:check --workspace apps/mobile` → dependencies up to date.
+- `npx expo export --platform web` → **0 errors, 1025 modules bundled** (was 1023 before
+	this slice's 2 new files), real production compilation of every new module.
+- **Not verified:** an interactive click-through against a live signed-in session — no
+	browser/device tooling available in this environment, stated explicitly rather than
+	implied as covered.
+
+---
+
 ## 2026-08-25 · ADR-001 Phase 5 — driver mobile UI, first vertical slice
 
 Ran a research subagent (`Explore`) plus direct reads of the delivery feature (P9.6, the

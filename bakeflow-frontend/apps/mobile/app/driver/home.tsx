@@ -39,11 +39,11 @@ import { useSessionStore } from '../../stores/session';
  *
  * ## What this slice does not include yet
  *
- * "Sell" (create a ticket, take a payment) needs product selection and customer
- * search/create, neither of which has a driver-facing screen built yet — deliberately left
- * as the next vertical slice rather than wiring a button to nothing. "Return" here only
- * covers the common case ADR-001 §10 names explicitly ("a driver may sell everything") —
- * returning specific items needs a manifest-entry screen, also not yet built.
+ * "Sell" now has its own screen (`app/driver/sell.tsx`) — cart from the catalog, create a
+ * `draft` roadside ticket, record a payment. It deliberately stops at `draft`: see that
+ * screen's header and `BLOCKERS.md` BLOCKER-021 for why no driver-facing "confirm" exists.
+ * "Return" here only covers the common case ADR-001 §10 names explicitly ("a driver may
+ * sell everything") — returning specific items needs a manifest-entry screen, not yet built.
  */
 export default function DriverHomeScreen(): React.JSX.Element {
   const client = getSupabaseClient();
@@ -251,16 +251,23 @@ function DepartAction({ tenantId, tripId }: { tenantId: string; tripId: string }
 
 function OnTheRoad({ tenantId, tripId }: { tenantId: string; tripId: string }): React.JSX.Element {
   const client = getSupabaseClient();
+  const router = useRouter();
   const returnTrip = useReturnDriverTrip(client, tenantId);
 
   return (
     <View className="gap-4">
-      <View className="gap-2 rounded-xl border border-neutral-200 p-4">
+      <View className="gap-3 rounded-xl border border-neutral-200 p-4">
         <Text className="text-lg font-semibold text-neutral-900">On the road</Text>
         <Text className="text-sm text-neutral-500">
-          Selling and payment recording are the next thing to build here — this trip is live
-          and ready for them.
+          Sell from the truck and record what customers hand over.
         </Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/driver/sell')}
+          className="flex-row items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70"
+        >
+          <Text className="text-base font-medium text-white">Sell</Text>
+        </Pressable>
       </View>
 
       <View className="gap-3 rounded-xl border border-neutral-200 p-4">

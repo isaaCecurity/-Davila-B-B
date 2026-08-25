@@ -951,14 +951,19 @@ authority (AD-019) — cross-checked line by line against the deployed RPC/trigg
 not written from memory. All three test suites (`driver_trips_rls.sql`, `financial_
 write_rls.sql`, `pytest`) re-verified green after the change.
 
-### Phase 5 — Driver UI · **IN PROGRESS — first slice live 2026-08-25**
+### Phase 5 — Driver UI · **IN PROGRESS — second slice live 2026-08-25**
 
 `apps/mobile/app/driver/home.tsx` plus the full `driver_trips` data layer (`@bakeflow/
 types`, `@bakeflow/validation`, `@bakeflow/api`, `@bakeflow/hooks`) are live. Covers Start
-Trip, Go, and Return (empty-manifest case). Not yet built: Sell/Create Ticket (needs
-product selection and customer search/create), the partial-return manifest, and the
-supervisor/manager-facing loading-verification and reconcile/complete screens. See
-`IMPLEMENTATION_LOG.md` 2026-08-25 for full detail.
+Trip, Go, and Return (empty-manifest case). `apps/mobile/app/driver/sell.tsx` now covers
+Sell + Record Payment: cart from the catalog → `draft` roadside ticket
+(`createRoadsideTicket()`, plain INSERT — no `create_ticket()` RPC exists for anyone) →
+payment recorded against it. **The ticket deliberately stays `draft`** — see
+**BLOCKER-021** (`BLOCKERS.md`): `guard_ticket_status_transition()`'s actor lists exclude
+`driver` at every hop, so no driver-facing confirm/complete exists until that's resolved.
+Not yet built: the partial-return manifest, and the supervisor/manager-facing
+loading-verification and reconcile/complete screens. See `IMPLEMENTATION_LOG.md`
+2026-08-25 for full detail.
 
 Implement the simple workflow:
 

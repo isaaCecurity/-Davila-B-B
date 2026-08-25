@@ -242,6 +242,10 @@ export interface Ticket {
   correction_of_ticket_id: Uuid | null;
   /** `NOT NULL`, one of two upper-case values. See `SALE_CUSTOMER_TYPES`. */
   sale_customer_type: SaleCustomerType;
+  /** ADR-001. The driver trip this ticket was sold on, or `null` for a non-driver sale.
+   *  Setting or changing it is guarded by `guard_ticket_driver_trip_assignment()` —
+   *  `STATE-MACHINES.md` §6. */
+  driver_trip_id: Uuid | null;
   archived_at: Timestamptz | null;
   archived_by: Uuid | null;
   archive_reason: string | null;
