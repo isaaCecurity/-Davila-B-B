@@ -44,3 +44,5 @@ export { organizationMembershipSchema, organizationRoleSchema } from './organiza
 export { driverSchema } from './staff';
 
 export { driverTripSchema } from './driver-trip';
+
+export { cashSessionSchema } from './finance';

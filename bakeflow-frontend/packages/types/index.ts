@@ -124,3 +124,6 @@ export {
   driverTripPhaseLabel,
   isTerminalDriverTripStatus,
 } from './driver-trip';
+
+export type { CashSession, CashSessionStatus } from './finance';
+export { CASH_SESSION_STATUSES } from './finance';

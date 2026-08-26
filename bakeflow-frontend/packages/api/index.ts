@@ -5,13 +5,24 @@
 // A screen never calls Supabase directly, and nothing in this package contains a
 // business rule the database does not also enforce.
 //
-// Scope today: the P4.1a catalog READ path and the P4.2a inventory READ path. Both WRITE
-// paths are absent deliberately — catalog's is BLOCKED (BLOCKER-010), and inventory's
-// depends on the unspecified negative-stock policy plus CLAUDE.md rule 7 (stock levels are
-// never written directly; only the ledger is appended to). Neither may be added here
-// until those decisions are made.
+// Scope today: the catalog, inventory, production, sales, delivery, driver-trip, and
+// online finance paths. Financial writes remain RPC-only; deferred catalog pricing and
+// offline synchronization are intentionally outside this package's current scope.
 
 export type { BakeflowClient } from './client';
+
+export { listCashSessions } from './queries/finance';
+export {
+  closeCashSession,
+  openCashSession,
+  PAYMENT_METHODS,
+  recordPayment,
+  type CloseCashSessionInput,
+  type OpenCashSessionInput,
+  type PaymentMethod,
+  type RecordPaymentInput,
+  type RecordPaymentResult,
+} from './mutations/finance';
 
 export {
   BakeflowApiError,

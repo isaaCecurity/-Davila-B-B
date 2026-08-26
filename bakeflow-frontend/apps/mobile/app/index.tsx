@@ -94,6 +94,13 @@ export default function CatalogScreen(): React.JSX.Element {
           >
             <Text className="text-sm font-medium text-neutral-900">Drops</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/finance' as never)}
+            className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
+          >
+            <Text className="text-sm font-medium text-neutral-900">Finance</Text>
+          </Pressable>
           {isDriver && (
             <Pressable
               accessibilityRole="button"

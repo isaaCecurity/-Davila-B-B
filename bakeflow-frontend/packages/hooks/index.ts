@@ -37,6 +37,7 @@
 import {
   adjustStock,
   cancelProductionBatch,
+  closeCashSession,
   completeDriverFieldSale,
   completeDriverTrip,
   completeProductionBatch,
@@ -59,12 +60,15 @@ import {
   listProductStockLevels,
   listProductVariants,
   listProducts,
+  listCashSessions,
+  listTickets,
   listProductionBatches,
   listRecipesByIds,
-  listTickets,
   listTicketsByIds,
   listVariantsByProduct,
   listWarehouses,
+  openCashSession,
+  recordPayment,
   recordDriverTripPayment,
   reconcileDriverTrip,
   returnDriverTrip,
@@ -78,12 +82,16 @@ import {
   type BakeflowClient,
   type CompleteDriverTripInput,
   type CompleteProductionBatchInput,
+  type CloseCashSessionInput,
   type CreateRoadsideTicketInput,
   type DeliveryFilters,
   type DeliveryTransition,
   type DriverTripFilters,
   type FailProductionBatchInput,
   type KeysetPageOptions,
+  type OpenCashSessionInput,
+  type RecordPaymentInput,
+  type RecordPaymentResult,
   type Page,
   type PageOptions,
   type ProductionBatchFilters,
@@ -110,6 +118,7 @@ import type {
   ProductVariant,
   ProductionBatch,
   ProductionBatchWithIngredients,
+  CashSession,
   Recipe,
   Ticket,
   TicketWithItems,
@@ -217,6 +226,10 @@ export const queryKeys = {
   /** What one driver trip has sold so far — the "Sell" screen's running list. */
   driverTripTickets: (tenantId: string, tripId: string): unknown[] =>
     orgScoped(tenantId, 'driver-trip-tickets', tripId),
+  cashSessions: (tenantId: string, branchId?: string): unknown[] =>
+    orgScoped(tenantId, 'cash-sessions', branchId ?? 'all'),
+  paymentTickets: (tenantId: string, branchId?: string): unknown[] =>
+    orgScoped(tenantId, 'payment-tickets', branchId ?? 'all'),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -1131,6 +1144,83 @@ export function useCompleteDriverFieldSale(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.driverTripTickets(tenant, variables.tripId),
       });
+    },
+  });
+}
+
+export function useCashSessions(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId?: string,
+): UseQueryResult<CashSession[], Error> {
+  return useQuery({
+    queryKey: queryKeys.cashSessions(tenantId ?? 'none', branchId),
+    queryFn: () => listCashSessions(client, branchId),
+    enabled: tenantId !== null,
+  });
+}
+
+export function useOpenCashSession(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<CashSession, Error, { input: OpenCashSessionInput }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input }) => {
+      requireTenant(tenantId);
+      return openCashSession(client, input);
+    },
+    onSuccess: (session) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant, session.branch_id) });
+    },
+  });
+}
+
+export function useCloseCashSession(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<CashSession, Error, { input: CloseCashSessionInput }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input }) => {
+      requireTenant(tenantId);
+      return closeCashSession(client, input);
+    },
+    onSuccess: () => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+    },
+  });
+}
+
+export function usePaymentTickets(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId?: string,
+): UseQueryResult<Page<Ticket>, Error> {
+  return useQuery({
+    queryKey: queryKeys.paymentTickets(tenantId ?? 'none', branchId),
+    queryFn: () => listTickets(client, { openOnly: true, branchId }),
+    enabled: tenantId !== null,
+  });
+}
+
+export function useRecordPayment(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<RecordPaymentResult, Error, { input: RecordPaymentInput }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input }) => {
+      requireTenant(tenantId);
+      return recordPayment(client, input);
+    },
+    onSuccess: () => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.paymentTickets(tenant) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
     },
   });
 }

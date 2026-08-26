@@ -68,6 +68,25 @@ Full trace: `IMPLEMENTATION_LOG.md` 2026-08-25.
 
 ---
 
+## IN PROGRESS — P9.7 online finance slice (2026-08-26)
+
+Added the first online finance surface: exact-decimal `CashSession` types and validation,
+RLS-backed session reads, RPC-only `open_cash_session`/`close_cash_session` wrappers,
+cache-safe hooks, and `apps/mobile/app/finance/index.tsx` with session history, till
+opening, and server-authoritative close/reconciliation. The catalog now links to Finance.
+
+Verified: mobile typecheck and lint pass. Payment entry, expense capture, interactive
+device testing, and offline queuing remain outstanding for P9.7/P10.
+
+The payment-entry follow-up is now also implemented: staff can select an invoiced open
+ticket, choose cash/card/transfer/POS, enter an exact decimal amount, and record it through
+`record_payment()`. Cash payments require the currently open till; invoice eligibility,
+overpayment rejection, and payment application remain server-authoritative. Expense capture
+is deliberately not included because its complete client write contract has not yet been
+verified against the live database.
+
+---
+
 ## ✅ ADR-001 Phase 5 second slice — "Sell" live, scoped down by a new finding: BLOCKER-021 (2026-08-25)
 
 Continuing Phase 5 into the "Sell" step the first slice deliberately left unwired.
