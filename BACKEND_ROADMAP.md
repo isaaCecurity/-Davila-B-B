@@ -21,9 +21,9 @@ tracked separately and must never be conflated:
 
 ## Current State — updated 2026-08-24
 
-**Completed phases:** P0 (partial — P0.7's frontend testing infrastructure is
-NOT_STARTED; P0.5, the piece this line used to point at, is itself now COMPLETE), P1, P2,
-P3.1–P3.6, P3.10.
+**Completed phases:** P0 (P0.7's frontend testing infrastructure delivered 2026-08-28 —
+see P11.3; P0.5, the piece this line used to point at earlier, is itself now COMPLETE),
+P1, P2, P3.1–P3.6, P3.10.
 
 **Read paths, per domain:** P4.1a catalog COMPLETE; P4.2a inventory COMPLETE; P4.3
 production and P4.4a/b sales and P4.5 delivery all **COMPLETE**, every one now backed by
@@ -229,11 +229,14 @@ may proceed.
 **Tests:** `assert_schema_invariants()` clean; all DEFINER functions pin `search_path`; RLS forced on every RLS-enabled table.
 **Completion criteria:** met.
 
-## P0.7 · Testing infrastructure — COMPLETE (backend) / NOT_STARTED (frontend)
+## P0.7 · Testing infrastructure — COMPLETE (backend and frontend)
 **Objective:** Executable test harnesses.
-**Deliverables:** `pytest` suite (12 tests); `tests/sql/security_multiorg_sync.sql` (16 assertions).
-**Gap:** no frontend test runner (`jest-expo`). CI now runs lint/typecheck/pytest as of
-2026-08-11, but not the SQL suites. → **P11.1** (PARTIAL).
+**Deliverables:** `pytest` suite (12 tests); `tests/sql/security_multiorg_sync.sql` (16 assertions); frontend `jest-expo` runner, delivered 2026-08-28 — see **P11.3**.
+**Gap:** `.github/workflows/ci.yml` now has a lint/typecheck/`npm test`/pytest gate,
+including the new "Unit tests" step added 2026-08-28 — but per P11.1, this workflow's
+actual execution on GitHub (as opposed to the equivalent commands run locally) remains
+unproven. The SQL suites still have no CI path at all — same reasoning as before,
+recorded in the workflow file's own header (BLOCKER-002).
 
 ---
 
@@ -1017,7 +1020,7 @@ business database; backups must not yield readable data (AD-013).
 |---|---|---|
 | P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **PARTIAL** — see below |
 | P11.2 | Shared DB fixture library | NOT_STARTED |
-| P11.3 | Unit tests (frontend) | NOT_STARTED — no runner yet |
+| P11.3 | Unit tests (frontend) | ✅ **DELIVERED 2026-08-28.** `jest-expo` runner (`bakeflow-frontend/jest.config.js`, `npm test`), wired into `.github/workflows/ci.yml`. 39 assertions covering `packages/types/scalars.ts` (`isZeroDecimalString`/`isNegativeDecimalString`/`compareDecimalStrings`) and `packages/validation/decimal.ts` (every money/quantity schema). A real tsconfig quirk found and fixed: `@types/jest`'s ambient globals were not auto-included under this project's `moduleDetection: "force"` + `moduleResolution: "bundler"` config — each test file needs an explicit `/// <reference types="jest" />`, documented in `docs/TESTING-STRATEGY.md`. |
 | P11.4 | Integration tests | NOT_STARTED |
 | P11.5 | API/service tests | NOT_STARTED |
 | P11.6 | Database/RLS tests | COMPLETE (16 assertions) |

@@ -22,9 +22,25 @@ Test these exhaustively. Test UI rendering lightly.
 |---|---|---|---|
 | Spec invariants | pytest | Naming and type consistency across docs | Every commit |
 | Database | pgTAP or SQL scripts via Supabase CLI | RLS, constraints, triggers, RPCs | Every migration |
+| Unit | Jest (`jest-expo` preset) | Pure logic with no live database — `packages/validation`'s decimal/uuid/timestamp schemas, `packages/types`'s decimal-string helpers, error normalization | Every commit |
 | Integration | Vitest + local Supabase | Client → RPC → database round trips | Every feature |
 | Component | React Native Testing Library | Screens with mocked data | Selectively |
 | End-to-end | Maestro or Detox | The nine steps of the core user journey | Before release |
+
+**Unit layer added 2026-08-28 (P11.3)** — the first frontend test runner this repo has
+had. `jest-expo` rather than a lighter plain-TypeScript transform: it is the one
+config that runs both today's RN-free pure logic and, later, actual React Native
+components via React Native Testing Library, without maintaining two separate
+configs — the Component row above already named RNTL, which needs Jest regardless.
+Root config: `bakeflow-frontend/jest.config.js`; run via `npm test`. Convention:
+colocated `__tests__/<module>.test.ts` beside the module under test, one `/// <reference
+types="jest" />` line at the top of each test file — found necessary because this
+project's `moduleDetection: "force"` + `moduleResolution: "bundler"` tsconfig does not
+pick up `@types/jest`'s ambient globals (`describe`/`it`/`expect`) automatically the way
+a conventional tsconfig would; verified live (removing the reference reproduces
+`TS2593: Cannot find name 'describe'`). The Integration row (Vitest + local Supabase)
+remains unbuilt — this environment has no local Supabase instance (see BLOCKER-011's
+history), so it could not be verified and was not attempted.
 
 Database tests carry the most weight. A passing RLS test is worth more than a hundred passing component snapshots.
 

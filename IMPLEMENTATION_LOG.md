@@ -5,6 +5,101 @@ Never record planned work here.
 
 ---
 
+## 2026-08-28 · P11.3 delivered — frontend unit-test infrastructure (Jest/jest-expo)
+
+Continuing past P9.8, per "continue with the whole implementation unless something
+blocks you." Surveyed `BACKEND_ROADMAP.md` for what remained genuinely unblocked:
+offline queuing/P3.7/P10 (BLOCKER-006), P9.8's COGS half (BLOCKER-018), and P12
+production readiness (needs Sentry/Play Store/production-secrets access this
+environment does not have) all ruled themselves out. P11.3 — no frontend test runner
+exists at all — was the one clean unblocked item. Confirmed with the user before
+installing new project-wide tooling, since adopting a test framework is a bigger,
+harder-to-reverse commitment than a feature slice.
+
+### Install
+
+```
+npm install --workspace apps/mobile --save-dev jest-expo@~57.0.0 jest@^29 @types/jest@^29
+```
+
+`jest-expo@57.0.5` resolved — matches this project's Expo SDK 57.x, same versioning
+convention already used for every other `expo-*` dependency in `apps/mobile/package.json`.
+A `--dry-run` was run first and showed no ERESOLVE conflicts; the real install completed
+with 209 packages added, only an unrelated `EBADENGINE` warning (this environment's
+Node 24.16.0 vs. the pinned `>=22.13.0` — informational, not a failure) and the usual
+transitive-dependency `npm audit` noise from the Jest ecosystem (18 findings, all in
+dev-only tooling, not runtime code — not investigated further, matching the same
+threshold this session has applied to other pre-existing, out-of-scope tooling gaps).
+
+### Config
+
+`bakeflow-frontend/jest.config.js` — `preset: 'jest-expo'` (not a lighter plain-TS
+transform): `docs/TESTING-STRATEGY.md`'s own Component-testing row already names React
+Native Testing Library, which needs Jest regardless, so one preset now serves both the
+unit layer this pass builds and the component layer later, rather than adopting two
+tools. `roots: ['apps/mobile', 'packages']` runs the whole workspace from one `npm test`
+at the repo root, matching how `typecheck`/`lint` already work. Root `package.json`
+gained `"test": "jest"` and `ci:verify` now includes it.
+
+**Deliberately did not hand-write a custom `transformIgnorePatterns`.** A first draft
+copied a common community regex; reading `node_modules/jest-expo/jest-preset.js` showed
+it already builds one from `@react-native/jest-preset` correctly for the installed RN
+version, and a hand-copied override could only make it wrong. Removed before writing any
+tests.
+
+### The first 39 tests
+
+`packages/types/__tests__/scalars.test.ts` — `isZeroDecimalString`, `isNegativeDecimalString`,
+`compareDecimalStrings`, including the exact precision scenario `scalars.ts`'s own header
+warns about (`12345678901234.5678` vs. `...5679` — a pair `Number()` cannot tell apart,
+correctly ordered here).
+`packages/validation/__tests__/decimal.test.ts` — every schema in `decimal.ts`
+(`nonNegativeMoneySchema`, `positiveMoneySchema`, `signedMoneySchema`, the three quantity
+variants, `uuidSchema`, `timestamptzSchema`), including the money schema's own tripwire:
+a bare JS number fails with an actionable message rather than being silently coerced.
+
+### A real tsconfig gap, found getting the suite to typecheck
+
+First `npm run typecheck` run after adding the test files failed with `TS2593: Cannot
+find name 'describe'` across both new files — `@types/jest` was correctly installed
+(confirmed at `bakeflow-frontend/node_modules/@types/jest`) but its ambient globals were
+not being auto-included into the program. Isolated by adding a single `/// <reference
+types="jest" />` line to one file and re-running `tsc --showConfig`/`--noEmit` — the
+referenced file's errors cleared immediately, confirming this project's
+`moduleDetection: "force"` + `moduleResolution: "bundler"` tsconfig (inherited from
+`expo/tsconfig.base`) does not perform the conventional automatic `@types/*` inclusion.
+Added the same reference line to the second file; `npm run typecheck` (root, both
+workspaces) returned to exit 0. Documented in `docs/TESTING-STRATEGY.md` so the next
+test file doesn't have to rediscover this.
+
+### CI
+
+Added an actual "Unit tests" step to `.github/workflows/ci.yml` (not only the local
+`ci:verify` script) — the workflow's own header explains why `tests/sql/*.sql` is
+excluded (needs a live database, BLOCKER-002); nothing in the new Jest suite needs one,
+so none of that reasoning applies here and it belongs in the gate.
+
+**Verified:**
+- `npm test` → **39/39 passed**, exit 0, run twice (once via `npx jest` directly, once
+  via the wired `npm test` script) to confirm both invocation paths work.
+- `npm run typecheck` (root, all workspaces) → exit 0.
+- `npm run lint --workspace apps/mobile` → exit 0. `npx eslint packages
+  --max-warnings=0` → exit 0 (no `no-undef` complaints about `describe`/`it`/`expect` —
+  consistent with this repo's existing note that `typescript-eslint` disables `no-undef`
+  and defers to `tsc`).
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed, unaffected.
+- **Not verified:** whether `.github/workflows/ci.yml`'s new step actually passes when
+  GitHub Actions runs it remotely — this environment has no way to trigger or observe a
+  real run; the existing P11.1 caveat about this workflow being locally-equivalent-only
+  applies identically to the new step.
+
+Docs: `docs/TESTING-STRATEGY.md` (new "Unit" table row + note), `BACKEND_ROADMAP.md`
+(P0.7 marked complete for the frontend half, P11.3 delivered, Current State summary
+line corrected). `CURRENT_TASK.md` gained a new top entry. Not committed yet in this
+same pass — see the commit made immediately after, once the user confirmed scope.
+
+---
+
 ## 2026-08-28 · P9.8 delivered — revenue/cash reporting (the unblocked half of P5.8)
 
 Continuing past P9.7. `BACKEND_ROADMAP.md`'s P5.8/P9.8 rows had stood since 2026-08-24

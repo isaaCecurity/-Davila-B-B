@@ -96,6 +96,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # P11.3 (2026-08-28): pure-logic unit tests (packages/validation, packages/types).
+      # No live database or device needed, unlike tests/sql/*.sql or a device build —
+      # nothing here is excluded by this workflow's own stated reasons for skipping those.
+      - name: Unit tests
+        run: npm test
+
   spec:
     name: Spec coverage (pytest)
     runs-on: ubuntu-latest

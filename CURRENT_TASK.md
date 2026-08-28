@@ -1,5 +1,47 @@
 # BakeFlow — Current Task
 
+## ✅ P11.3 DELIVERED — frontend unit-test infrastructure (2026-08-28)
+
+Continued past P9.8. Surveyed the roadmap for remaining unblocked work: P9.2/P9.3
+offline/P9.7 offline/P3.7/P10 all sit behind BLOCKER-006; P9.8's COGS half sits behind
+BLOCKER-018; P12 needs external accounts (Sentry, Play Store, production secrets) this
+environment doesn't have. The one genuinely unblocked item was P11.3 — no frontend test
+runner existed at all. Confirmed with the user before installing new project-wide
+tooling rather than assuming.
+
+Installed `jest`, `jest-expo`, `@types/jest` (matching `docs/TESTING-STRATEGY.md`'s own
+pre-existing, never-acted-on mention of `jest-expo`, and `P0.7`'s stated gap). One root
+`jest.config.js` covering both `apps/mobile` and `packages/*` from a single `npm test`,
+using the same preset the Component test layer will need later rather than adopting a
+second tool. Wrote the first 39 unit tests: `packages/types/scalars.ts`'s decimal-string
+helpers and every schema in `packages/validation/decimal.ts`.
+
+**Found and fixed a real tsconfig gap while getting the suite to typecheck**:
+`@types/jest`'s ambient globals (`describe`/`it`/`expect`) were not being auto-included —
+this project's `moduleDetection: "force"` + `moduleResolution: "bundler"` tsconfig
+doesn't pick them up the conventional way. Confirmed by removing a `/// <reference
+types="jest" />` line and reproducing `TS2593: Cannot find name 'describe'`; the fix is
+that reference line at the top of each test file, documented in
+`docs/TESTING-STRATEGY.md` §2 note so the next test file doesn't rediscover this.
+
+Wired an actual "Unit tests" step into `.github/workflows/ci.yml` (not just a local
+script) — nothing here needs a live database or device, so none of the workflow's own
+stated reasons for excluding `tests/sql/*.sql` apply.
+
+**Verified:** `npm test` → 39/39 passed, exit 0. `npm run typecheck`/`lint` (root, both
+gates) still exit 0 with the new files present. `.venv/Scripts/python.exe -m pytest -q`
+→ 12 passed (unaffected). **Not verified:** whether the new CI workflow step actually
+passes when GitHub Actions runs it remotely — this environment can only run the
+equivalent commands locally, same limitation `P11.1` already records for the rest of
+this workflow.
+
+Docs: `docs/TESTING-STRATEGY.md` (new "Unit" row + note), `BACKEND_ROADMAP.md` (P0.7,
+P11.3, and the Current State summary).
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-28.
+
+---
+
 ## ✅ P9.8 DELIVERED — revenue/cash reporting, the unblocked half of P5.8 (2026-08-28)
 
 Continued past P9.7 per "continue with the whole implementation unless something blocks
