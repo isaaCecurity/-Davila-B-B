@@ -634,6 +634,46 @@ below).
 `REJECTED unsupported_operation_type` until built); `CURSOR_TOO_OLD`/`FULL_RESYNC_REQUIRED`;
 and the gaps below that predate this slice and are unchanged by it.
 
+**Hardened 2026-08-29 — protocol-correctness pass (no new entities; tickets-slice handlers
+unchanged in behavior).**
+
+- **Fixed a real bug in `process_sync_batch_context_validated()`:** the client-facing
+	response was built from a local variable snapshotted *before* the `INSERT` that fires
+	`sync_operations_dispatch` (`AFTER INSERT`, applies synchronously). So the batch response
+	reported an operation's pre-dispatch status (`PENDING`/`CONFLICT`) regardless of its real
+	outcome — verified live before fixing: a `ticket.create` that provably created a real
+	ticket still returned `{"status":"PENDING"}` to the caller. Now the row is re-read after
+	`INSERT` and the response reflects the actual post-dispatch `status`/`error_code`/`result`.
+- **Widened the replay/idempotency immutable-context comparison** to also cover `payload`
+	(jsonb structural equality — confirmed live to be key-order-independent, unlike `json`),
+	`base_revision`, `branch_id`, `entity_type`, and `domain_operation` — previously only
+	`tenant_id`/`actor_id`/`device_id`/`entity_id`/`operation_type` were checked, so a replay
+	reusing `operation_id` with a *different* payload was silently accepted as an identical
+	retry rather than rejected. A genuine (fully-matching) replay's response now also echoes
+	the stored `result`/`error_code`, not just `status`, so a client that lost the original
+	response can fully recover it.
+- **A non-object payload is now rejected at the gateway** (`22023 invalid_request`) before
+	reaching any handler.
+- **`client_sequence`** — new nullable `bigint` column on `sync_operations`, captured
+	verbatim, never compared/enforced (per §16, see "What is missing" below).
+- **`sync_pull()` cursor validation:** negative cursor → rejected (`22023`); cursor ahead of
+	everything the caller can see → `full_resync_required:true` with an empty page, rather
+	than a silently-incomplete one. True cursor-expiry-via-retention-purge is still not
+	implemented — see "What is missing" below and `BLOCKER-023`.
+- **Security fix, incidental:** `apply_ticket_create(sync_operations)` and
+	`apply_ticket_item_update(sync_operations)` were `PUBLIC`-executable (the former even by
+	`anon`) since their creating migration never revoked the default grant. Both re-derive
+	authorization from the caller-supplied `actor_id`/`tenant_id` in their row argument —
+	correct only when reachable exclusively via the dispatch trigger, but exploitable directly
+	via PostgREST otherwise. Revoked (`p3_7_revoke_public_execute_on_internal_sync_handlers`),
+	along with the same stray grant on `apply_sync_operation()`, `trg_dispatch_sync_
+	operation()`, `bump_ticket_revision()`, and `has_role_in()` (defense in depth), and
+	`sync_pull()`'s stray `anon` grant (it keeps `authenticated`).
+- **Tests:** `tests/sql/p3_7_protocol_correctness.sql`, new, 18/18. Zero regression:
+	`tests/sql/p3_7_sync_apply_and_pull.sql` (11/11), `security_multiorg_sync.sql` (22/23,
+	same pre-existing unrelated gap), `driver_trips_rls.sql` (20/20),
+	`financial_write_rls.sql` (28/28), `driver_field_sale_rls.sql` (8/8), `pytest` (12/12).
+
 ### What the deployed schema does provide
 
 The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`:
@@ -654,30 +694,55 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 ### What is missing
 
 - ~~No pull RPC at all.~~ **Resolved 2026-08-28** — `sync_pull()` exists and is
-	live-verified (see the P3.7 section above). What's still missing from §22/§66/§67: no
-	`CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path, and no tombstone-retention guarantee
-	(last bullet below) for a client resuming after a very long gap.
-- **Idempotency lookup is not tenant-bound, though the live function does not leak
-	across tenants.** §13 says explicitly: *"Never use only `operation_id` without tenant
-	binding."* The live UNIQUE constraint and lookup are both global on `operation_id`
-	alone (`UNIQUE (operation_id)`, plus `UNIQUE (device_id, operation_id)`). **Re-read
-	live 2026-08-28:** `process_sync_batch_context_validated()` does check the found row's
-	`tenant_id` (and `actor_id`/`device_id`/`entity_id`/`operation_type`) against the
-	incoming operation and **refuses** a mismatch (`42501`) rather than returning the
-	stored result — so a cross-tenant replay collision fails closed, it does not leak
-	another tenant's `result`. The residual gap is availability, not confidentiality: two
-	different tenants can never legitimately reuse the same `operation_id` (astronomically
-	unlikely for a UUID, but structurally possible), and the lookup should still move to a
-	composite `(tenant_id, operation_id)` key so that isn't even a theoretical class of bug.
-- **No payload-immutability check** (§15). Nothing stores a payload hash, so the same `operation_id` resubmitted with a different payload cannot be detected.
-- **No `client_sequence`** (§16) and **no `depends_on_operation_id`** (§49), so device-local ordering and dependency chains (create customer → create ticket referencing it) have nowhere to live.
-- **No `ALREADY_APPLIED` status** (§24) — the CHECK allows only four values, so a replay cannot be distinguished from a first application in the stored row.
+	live-verified (see the P3.7 section above). ~~What's still missing from §22/§66/§67: no
+	`CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path~~ — **partially resolved 2026-08-29**: a
+	cursor ahead of everything the caller can see now returns `full_resync_required:true`
+	(negative cursors are rejected outright). True cursor-expiry-via-retention-purge is still
+	open — no retention/purge mechanism exists for `sync_changes` at all (confirmed live, see
+	`BLOCKER-023`), so that half of `CURSOR_TOO_OLD` cannot currently occur and is not
+	guessed at.
+- ~~Idempotency lookup is not tenant-bound, though the live function does not leak
+	across tenants.~~ **Confirmed correct 2026-08-29, not rebuilt.** §13 says explicitly:
+	*"Never use only `operation_id` without tenant binding."* The live UNIQUE constraint and
+	lookup are both global on `operation_id` alone (`UNIQUE (operation_id)`, plus `UNIQUE
+	(device_id, operation_id)`), but `process_sync_batch_context_validated()` checks the
+	found row's `tenant_id` (and every other immutable-context field, widened 2026-08-29 —
+	see above) against the incoming operation and **refuses** a mismatch (`42501`) rather
+	than returning the stored result. Live-tested 2026-08-29
+	(`tests/sql/p3_7_protocol_correctness.sql` I3/I4/P4): a same-`operation_id` request from
+	a different `tenant_id`, even with a byte-identical payload, is rejected and fails
+	closed — it does not leak another tenant's `result`. The residual gap is availability,
+	not confidentiality: two different tenants can never legitimately reuse the same
+	`operation_id` (astronomically unlikely for a UUID, but structurally possible); moving
+	to a composite `(tenant_id, operation_id)` key would remove even that theoretical case,
+	but was not done — no client can construct this scenario today, and the fix would be a
+	schema change to a UNIQUE constraint touched by every existing producer, out of scope
+	for a hardening pass that was instructed not to redesign working logic.
+- ~~No payload-immutability check~~ (§15). **Resolved 2026-08-29** — the replay comparison
+	now includes `payload` (jsonb structural equality, not a hash column — see the P3.7
+	section above for why), so the same `operation_id` resubmitted with a different payload
+	is rejected (`42501`), not silently accepted.
+- **`client_sequence`** (§16) — **resolved 2026-08-29** as a diagnostic-only column, per
+	spec: the doc itself says it is "NOT a substitute for server revisions... do not treat a
+	device sequence as global truth," with no enforcement semantics specified anywhere.
+	Captured, never enforced. **No `depends_on_operation_id`** (§49) remains genuinely open —
+	see `BLOCKER-022`: the doc gives no concrete server-side enforcement semantics to build
+	against, and existing per-handler existence checks already give correct safety for the
+	realistic case.
+- ~~No `ALREADY_APPLIED` status~~ (§24). **Resolved 2026-08-29 as a design decision, not a
+	new CHECK value.** `status` (`PENDING/APPLIED/REJECTED/CONFLICT`) describes the
+	operation's own lifecycle; the response's `replayed:true/false` (added to the replay
+	path 2026-08-29) describes whether a given call was a retry. The combination gives full
+	5-way distinguishability (newly applied / already-applied / rejected / conflict /
+	unsupported) without conflating "operation state" and "was this call a replay" into one
+	value.
 - ~~No fine-grained domain-operation type.~~ **Resolved 2026-08-28** — the new
 	`domain_operation` column (see the P3.7 section above) carries AD-021's fine-grained
 	allowlist; the coarse `operation_type` CHECK is untouched. Handlers exist today only for
 	`ticket.create`/`ticket.item_update`; every other allowlisted value is accepted by the
 	CHECK but `REJECTED unsupported_operation_type` at dispatch until its handler is built.
-- **No retention policy** for `sync_changes` tombstones (§66).
+- **No retention policy** for `sync_changes` tombstones (§66) — see `BLOCKER-023`; this is
+	also why cursor-expiry-via-purge above cannot be built yet.
 
 ## 13. Daily financial audits
 

@@ -268,6 +268,24 @@ leaking); payload-immutability hash; `client_sequence`; `depends_on_operation_id
 `ALREADY_APPLIED` status; tombstone retention. None of these are further architecture
 decisions — they follow directly from AD-021, not a re-decision of the conflict model.
 
+**Updated 2026-08-29 — protocol-correctness pass.** Closed, from the list above: `CURSOR_
+TOO_OLD`→`FULL_RESYNC_REQUIRED` for the well-defined case (cursor ahead of everything the
+caller can see — `sync_pull()` now returns `full_resync_required:true` rather than a
+silently-incomplete page; negative cursors are rejected outright); tenant-bound idempotency
+confirmed correct with live tests (not rebuilt — it already failed closed); payload-
+immutability (jsonb structural-equality comparison widened into the existing replay check,
+no hash column needed — see AD-021); `client_sequence` (captured as a diagnostic-only
+column per `OFFLINE-SYNC-MODEL.md` §16, never enforced); `ALREADY_APPLIED` semantics
+(resolved as `status` + `replayed:true/false`, not a new status value — see AD-021). Also
+fixed, found during this pass: a real bug where the batch response reported an operation's
+*pre-dispatch* status forever, so a client could never learn the true `APPLIED`/`REJECTED`
+outcome from the synchronous call; and a security defect where `apply_ticket_create`/
+`apply_ticket_item_update` were directly callable via PostgREST (the former even by `anon`),
+bypassing every check in `process_sync_batch()`. Still open, and NOT decided/guessed at —
+see **BLOCKER-022** (`depends_on_operation_id` enforcement) and **BLOCKER-023** (true
+cursor-expiry-via-retention-purge), both new. Full detail: AD-021 and
+`IMPLEMENTATION_LOG.md` 2026-08-29.
+
 ---
 
 ## ✅ BLOCKER-007 · Documentation conflict resolved (2026-08-24)
@@ -1127,6 +1145,92 @@ unassisted and (2) whether a trip-linked pickup ticket gets a shortened lifecycl
 the trigger/actor-array change (if any) follows directly. Until decided, ADR-001 Phase 5's
 "Sell" step is scoped down to ticket **creation only** (a `draft` ticket the driver hands
 off) rather than a complete, unassisted sale — see `IMPLEMENTATION_LOG.md`.
+
+---
+
+## BLOCKER-022 · `depends_on_operation_id` has no defined server-side enforcement semantics
+**Status:** OPEN · **Affects:** P3.7 (any future entity whose offline creation legitimately depends on another not-yet-confirmed offline operation, e.g. a customer created just before a ticket that references it) · **Type:** architecture decision (offline sync protocol)
+
+**What was discovered:** `OFFLINE-SYNC-MODEL.md` §49 names `depends_on_operation_id` as
+"possible dependency metadata" and says only that "the sync engine must respect dependency
+ordering" and a failed prerequisite "may also need to be rejected or placed into a
+dependency-failed state" — no concrete status value, no concrete queuing/holding mechanism,
+no concrete client contract for discovering when to retry. This is exactly the class of gap
+the P3.7 protocol-correctness pass's own instruction flagged in advance: "if the current
+architecture does not provide enough information to safely define \[this], STOP and document
+the blocker rather than inventing semantics." Inventing behavior here — e.g., holding a
+dependent operation `PENDING` until its prerequisite resolves, within `process_sync_batch()`'s
+single-transaction-per-batch model — would mean guessing at retry/timeout/expiry semantics
+none of the existing docs specify, and could silently strand a client's queued operation.
+
+**Why it isn't guessable from the live schema:** no `depends_on_operation_id` column exists
+on `sync_operations` at all (checked live, `information_schema.columns`). There is no
+precedent elsewhere in this schema for "hold this row until another row reaches a certain
+status" — every other guard in this codebase (state-machine transitions, revision checks,
+handler existence checks) evaluates synchronously against already-committed state, never
+against a *pending* sibling operation in the same or a future batch.
+
+**What already provides real safety for the realistic case, so this is lower urgency than
+it might sound:** within one batch, `process_sync_batch_context_validated()` processes
+operations sequentially in array order inside a single transaction, so operation 2 already
+sees operation 1's committed row if the client orders its own batch correctly — no explicit
+dependency field is needed for that case. Across batches (client goes offline again before
+its dependency's operation is acknowledged), every existing handler already does an
+existence check against the referenced entity (e.g. `apply_ticket_item_update`'s
+`product_variants` lookup, `RAISE EXCEPTION ... 'product variant not found'`) — a dependent
+operation submitted before its prerequisite is confirmed fails cleanly with a retryable
+error today, and a well-behaved offline client's own outbox is expected to retry a failed
+operation later, which is standard offline-queue behavior, not a gap.
+
+**What remains blocked:** any entity or workflow where the "retry later, cheaply" pattern
+above is not good enough — e.g., where re-attempting a whole batch on any single dependency
+failure is too expensive, or where the client needs an explicit signal *which* prerequisite
+it's waiting on rather than a generic not-found error.
+
+**Needed:** a decision on whether `depends_on_operation_id` enforcement is required at all
+before further entities are built (inventory/production/financial/customer are not yet
+scheduled to need it — none of AD-021's per-entity strategies currently describe a
+cross-operation dependency), and if so, the concrete semantics: what status a dependent
+operation gets while waiting, how long it waits, how the client learns to retry, and whether
+this lives inside `process_sync_batch()`'s existing single-call-per-batch model or requires a
+new mechanism.
+
+---
+
+## BLOCKER-023 · No retention/purge policy exists for `sync_changes`, so true cursor-expiry cannot be implemented
+**Status:** OPEN · **Affects:** P3.7 `sync_pull()`, P10.7 (sync client), any future storage-cost/retention decision for the sync ledger · **Type:** architecture decision (data retention)
+
+**What was discovered:** `sync_pull()`'s cursor model (`sequence_id` on `sync_changes`) was
+hardened in the 2026-08-29 protocol-correctness pass to detect a cursor value that is
+structurally invalid today — negative, or ahead of everything the caller can see (returns
+`full_resync_required:true` rather than a silently-incomplete page). The classic
+"cursor-too-old" case this was meant to also cover — a client's cursor points into history
+that has since been purged for retention/storage reasons — is **not** implemented, because
+no such purge mechanism exists to trigger it.
+
+**Evidence from the live database:** `sync_changes` has no `deleted_at`, no TTL/expiry
+column, and no archival flag of any kind (checked live via `information_schema.columns`). A
+repo-wide grep of `supabase/migrations` for `purge|retention|archive|tombstone|delete from
+sync_changes|TTL` (case-insensitive) returns zero hits. `sync_changes_pkey` is a plain
+`bigint` sequence with no partitioning or row-expiry mechanism. `sync_changes` is, as
+designed (`OFFLINE-SYNC-MODEL.md` §11: "Do not delete failed operations silently. Retain
+enough metadata to diagnose why synchronization failed"), a true append-only ledger — every
+row ever written is still there. Implementing "cursor points at purged history" detection
+would require first inventing a retention policy that does not currently exist anywhere in
+this codebase, which is exactly the "guessing" this pass's own instruction said to avoid.
+
+**What remains blocked:** nothing operationally yet — with unlimited retention, no client
+cursor can currently go stale via purge, so no user-facing gap exists today. This blocker
+exists so that if/when `sync_changes` growth becomes a real storage-cost concern and someone
+proposes a retention window or archival job, that proposal is designed *with* the
+`full_resync_required` response contract already established by this pass (reuse it, don't
+invent a second cursor-invalidity signal), rather than being designed blind.
+
+**Needed:** no immediate action. When retention/archival for `sync_changes` is proposed,
+that proposal should explicitly define: the retention window, how a client's cursor is
+checked against the retained floor (not just the ceiling this pass implemented), and
+confirm it reuses `sync_pull()`'s existing `full_resync_required:true` response shape rather
+than adding a new one.
 
 ---
 

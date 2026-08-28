@@ -4,6 +4,38 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## P3.7 protocol-correctness pass complete — one real bug and one security defect fixed, two new blockers opened (2026-08-29)
+
+Scoped pass at your instruction: harden the offline-sync protocol layer (idempotency,
+payload immutability, response-status correctness, `client_sequence`, cursor validation)
+without touching the already-working authorization/idempotency/conflict-detection layer and
+without expanding into inventory/production/financial/customer handlers yet. All done, live,
+tested. Two things surfaced that weren't on the original checklist:
+
+1. **A real bug, found before any code changed:** the sync batch RPC's response reported an
+   operation's status from *before* it was actually applied — a client calling
+   `process_sync_batch()` could never learn `APPLIED`/`REJECTED` from the synchronous
+   response at all, only `PENDING`/`CONFLICT`, even for an operation that had, by the time
+   the call returned, already created a real ticket. Fixed.
+2. **A security defect:** two internal handler functions (`apply_ticket_create`,
+   `apply_ticket_item_update`) were reachable directly via the public Supabase API — one
+   even by unauthenticated callers — bypassing every authorization/idempotency check the
+   sync gateway provides. Fixed (`p3_7_revoke_public_execute_on_internal_sync_handlers`).
+   No evidence this was exploited (`get_advisors` flagged it as a static grant issue, not an
+   incident finding), but it was live and exploitable until this pass.
+
+Two genuinely open architecture questions were found and **not** guessed at — see
+**BLOCKER-022** (`depends_on_operation_id` — no concrete enforcement semantics specified
+anywhere) and **BLOCKER-023** (no retention/purge policy exists for `sync_changes`, so true
+cursor-expiry can't be built yet). Neither blocks current work; both are documented for
+whenever they become relevant.
+
+Full detail: `ARCHITECTURE_DECISIONS.md` AD-021's 2026-08-29 postscript,
+`IMPLEMENTATION_LOG.md` 2026-08-29, `BACKEND_ROADMAP.md` P3.7. Nothing committed to git —
+awaiting explicit go-ahead per this project's standing convention.
+
+---
+
 ## RESOLVED: BLOCKER-021 — driver field-sale shortcut implemented and live-verified (2026-08-25)
 
 Decided: a driver-created, trip-linked roadside ticket takes `draft → completed` directly

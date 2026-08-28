@@ -197,7 +197,7 @@ deferred capabilities remain dormant and are not exposed by MVP workflows.
 - Customer balances and ledger views are derived from tickets, invoices, and payments;
 	they are not duplicated in a second source-of-truth ledger.
 
-## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED (tickets slice IMPLEMENTED 2026-08-28)
+## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED (tickets slice IMPLEMENTED 2026-08-28; protocol layer HARDENED 2026-08-29)
 Resolves BLOCKER-006. Completes AD-009's deferred "per-entity application and conflict
 semantics" and reaffirms AD-006 (operation-authoritative routing) rather than replacing it.
 **Last-write-wins remains prohibited everywhere**, per `OFFLINE-SYNC-MODEL.md` §32/§62.
@@ -326,7 +326,104 @@ AD-003 reads only the caller's active-organization JWT claim — silently wrong 
 cross-org case this decision exists to handle, dormant only because no prior write path
 could ever produce a mismatched `tenant_id`. Fixed via a new tenant-parameterized
 `has_role_in(actor, tenant, roles)`, the same pattern `is_authorized_for_branch()` already
-established. **Not yet built:** inventory/production/financial/customer handlers, and the
-`sync_operations.operation_type`/idempotency gaps `SCHEMA-REFERENCE.md` §12 still lists
-(tenant-bound idempotency lookup, payload-hash immutability, `client_sequence`/
+established. **Not yet built (as of 2026-08-28):** inventory/production/financial/customer
+handlers, and the `sync_operations.operation_type`/idempotency gaps `SCHEMA-REFERENCE.md`
+§12 listed (tenant-bound idempotency lookup, payload-hash immutability, `client_sequence`/
 `depends_on_operation_id`, `ALREADY_APPLIED` status, tombstone retention).
+
+**Hardened 2026-08-29 — protocol-correctness pass, tickets slice only, no new entities.**
+Instruction was explicit: do not redesign the working context-validation/authorization/
+idempotency/conflict-detection layer, and do not expand into inventory/production/financial/
+customer handlers yet. Every item below closes or narrows one of the "not yet built" gaps
+listed above; live verification live-traced first, code changed second.
+
+- **A real, previously-undiscovered bug, found before writing anything new.** Live-tested a
+	`ticket.create` that provably created a real ticket, then read the RPC's own returned
+	JSON — it reported `{"status":"PENDING"}`. Root cause:
+	`process_sync_batch_context_validated()`'s client-facing response was built from a local
+	variable snapshotted **before** the `INSERT` that fires `sync_operations_dispatch` (an
+	`AFTER INSERT` trigger applying the operation synchronously via `apply_sync_operation()`).
+	Every operation's batch response reported its pre-dispatch status
+	(`PENDING`/`CONFLICT`) forever, regardless of the real outcome — a client could never
+	learn `APPLIED`/`REJECTED` from the synchronous call at all, only from a later
+	`sync_pull()` re-read. Fixed by re-reading the row after `INSERT`. This resolves the
+	`ALREADY_APPLIED`-semantics gap: no new status value was added (`status` describes the
+	operation's own lifecycle; `replayed:true/false` — now also carried on the replay path —
+	describes whether this particular call was a retry; conflating the two would let one
+	operation carry two notions of truth), but the response now reliably distinguishes newly
+	applied / already-applied / rejected / conflict / unsupported, which it previously could
+	not do at all.
+- **Payload-hash/immutability, resolved without a hash column.** The replay/idempotency
+	comparison previously checked only `tenant_id`/`actor_id`/`device_id`/`entity_id`/
+	`operation_type` — a same-`operation_id` replay with a *different* payload,
+	`base_revision`, `branch_id`, `entity_type`, or `domain_operation` was silently accepted
+	as an identical retry. Widened to compare all of these; any mismatch raises the same
+	pre-existing `operation replay with altered immutable context` (42501), no new error
+	class invented. Payload comparison uses jsonb `=` (structural equality, confirmed live to
+	be independent of key order — Postgres canonicalizes jsonb storage, unlike plain `json`)
+	rather than a text hash: strictly correct and avoids a class of false-mismatch rejection a
+	naive hash-of-serialized-text approach would risk. A malformed (non-object) payload is now
+	rejected at the gateway boundary (22023) rather than silently reaching a handler.
+- **Tenant-bound idempotency, confirmed already correct, not rebuilt.** `operation_id` is
+	globally unique (`sync_operations_operation_id_key`), but the pre-existing tenant-mismatch
+	branch of the replay check already raised 42501 and never returned another tenant's stored
+	result — this was true before this pass and is now covered by live tests rather than only
+	asserted.
+- **`client_sequence`, added as diagnostic-only, deliberately not enforced.**
+	`OFFLINE-SYNC-MODEL.md` §16 states it is "NOT a substitute for server revisions... do not
+	treat a device sequence as global truth" and specifies no gap-detection or ordering-
+	rejection semantics anywhere. A new nullable `sync_operations.client_sequence` column
+	captures it verbatim; nothing compares, blocks, or dedupes on it. Inventing enforcement
+	semantics would have violated this pass's own guardrail against making legitimate offline
+	retries or out-of-order deliveries permanently unusable.
+- **`depends_on_operation_id` — left unbuilt, is an open blocker, not guessed at.**
+	`OFFLINE-SYNC-MODEL.md` §49 only says operations "may need to be rejected or placed into a
+	dependency-failed state" — no concrete server behaviour. Existing per-handler existence
+	checks (e.g. `apply_ticket_item_update`'s product-variant lookup) already give correct
+	safety for the realistic cross-batch case, and within one batch, sequential single-
+	transaction processing already gives correct ordering. Real blocking/queuing semantics for
+	a not-yet-applied dependency need a fresh architecture decision before being built — see
+	BLOCKERS.md.
+- **`sync_pull()` cursor validation, implemented for the well-defined cases only.** A
+	negative cursor is rejected (22023). A cursor ahead of everything the caller can see
+	returns `full_resync_required:true` with an empty page rather than a silently-incomplete
+	one. True cursor-expiry-via-retention-purge is **not** implemented: live evidence checked
+	first — `sync_changes` has no `deleted_at`/TTL/archival column, and a repo-wide grep of
+	`supabase/migrations` for purge/retention/archive/tombstone/TTL touching `sync_changes`
+	returns zero hits. It is a true append-only ledger today, so that staleness case cannot
+	currently occur; implementing detection for it would mean inventing a retention policy
+	that does not exist. Open blocker, not guessed at — see BLOCKERS.md.
+- **A security defect, incidental to the above, found and fixed.** A routine
+	`get_advisors()` security check (run as due diligence before declaring this pass done)
+	found `apply_ticket_create(sync_operations)` and `apply_ticket_item_update(sync_operations)`
+	left `PUBLIC`-executable — the former even by `anon` — since the migration that created
+	them never revoked the default grant. Both are `SECURITY DEFINER` and re-derive
+	authorization from whatever `actor_id`/`tenant_id` the caller supplies in the row
+	argument; correct when reachable only via `trg_dispatch_sync_operation()` from an
+	already-authorized row, but a caller reaching them directly via PostgREST with any valid
+	actor/tenant/role combination could have created real tickets, bypassing every check in
+	`process_sync_batch()` entirely. Revoked (`p3_7_revoke_public_execute_on_internal_sync_
+	handlers`), matching this repo's own precedent
+	(`20260813234856_revoke_anon_execute_on_internal_functions`) and the same convention
+	`security_multiorg_sync.sql`'s S11b already checks for `is_member_of()`/
+	`is_authorized_for_branch()`. `apply_sync_operation()`, `trg_dispatch_sync_operation()`,
+	`bump_ticket_revision()`, and this pass's own `has_role_in()` were fixed the same way for
+	defense in depth; `sync_pull()` keeps its `authenticated` grant but loses a stray `anon`
+	one.
+- **`operation_type` reconciliation, re-traced, unchanged.** A repo-wide search (migrations,
+	docs, tests, the frontend) found zero producers or consumers of `operation_type`/
+	`domain_operation` outside this backend work — the frontend sync client does not exist
+	yet. The additive `domain_operation` column strategy from 2026-08-28 remains fully
+	compatible; the coarse `operation_type` CHECK is untouched, guarded by a new regression
+	test asserting its exact value set.
+- **Verification:** `tests/sql/p3_7_protocol_correctness.sql` (new, 18/18, live). Re-run
+	clean, zero regression: `tests/sql/p3_7_sync_apply_and_pull.sql` (11/11),
+	`tests/sql/security_multiorg_sync.sql` (22/23 — same pre-existing unrelated
+	`rate_limit_events` gap), `tests/sql/driver_trips_rls.sql` (20/20),
+	`tests/sql/financial_write_rls.sql` (28/28), `tests/sql/driver_field_sale_rls.sql`
+	(8/8), `pytest` (12/12), `tsc --noEmit`, `eslint --max-warnings=0`, production `expo
+	export --platform web`.
+- **Still not built:** inventory/production/financial/customer handlers (deliberately, per
+	this pass's own scope instruction); `depends_on_operation_id` enforcement; true
+	cursor-expiry-via-retention-purge. All three are documented as open blockers in
+	BLOCKERS.md, not guessed at.

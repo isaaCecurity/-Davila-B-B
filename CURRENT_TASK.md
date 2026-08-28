@@ -1,5 +1,60 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 PROTOCOL-CORRECTNESS PASS DELIVERED (2026-08-29)
+
+Per explicit instruction: harden the offline-sync protocol layer (tenant-bound
+idempotency, payload-hash immutability, `ALREADY_APPLIED` semantics, `client_sequence`,
+cursor-too-old/full-resync) without redesigning the working authorization/idempotency/
+conflict-detection layer, without expanding into inventory/production/financial/customer
+handlers, and without touching `operation_type` without re-tracing every producer/
+consumer first.
+
+**A real bug was found and fixed before writing anything new:** the sync batch RPC's
+response reported an operation's *pre-dispatch* status forever — a client could never
+learn `APPLIED`/`REJECTED` from the synchronous call, only `PENDING`/`CONFLICT`, even for
+an operation that had already been fully applied by the time the call returned. Verified
+live before fixing (a `ticket.create` that provably created a real ticket still returned
+`{"status":"PENDING"}`).
+
+**A security defect was found (via a routine `get_advisors()` check) and fixed:**
+`apply_ticket_create`/`apply_ticket_item_update` were directly callable via PostgREST —
+the former even by unauthenticated `anon` — bypassing every check in
+`process_sync_batch()`. Revoked, matching this repo's own established precedent for this
+exact class of fix.
+
+**Delivered:** response-status correctness fix; replay/idempotency immutable-context
+comparison widened to include `payload` (jsonb structural equality, no hash column
+needed), `base_revision`, `branch_id`, `entity_type`, `domain_operation`; malformed-
+payload rejection at the gateway; diagnostic-only `client_sequence` column (never
+enforced, per spec); `sync_pull()` cursor validation (negative → rejected, ahead-of-
+server → `full_resync_required:true`); the security revoke above.
+`ALREADY_APPLIED` semantics resolved as `status` + `replayed:true/false`, not a new
+status value. Tenant-bound idempotency and the `operation_type`/`domain_operation`
+compatibility contract were both confirmed already correct — not rebuilt.
+
+**Two items left explicitly open, not guessed at:** `depends_on_operation_id`
+enforcement (**BLOCKER-022** — no concrete semantics specified anywhere) and true
+cursor-expiry-via-retention-purge (**BLOCKER-023** — no retention mechanism exists for
+`sync_changes` at all, confirmed live).
+
+**Verified, zero regression:** `tests/sql/p3_7_protocol_correctness.sql` (new, 18/18),
+`tests/sql/p3_7_sync_apply_and_pull.sql` (11/11), `security_multiorg_sync.sql` (22/23 —
+same pre-existing unrelated gap), `driver_trips_rls.sql` (20/20),
+`financial_write_rls.sql` (28/28), `driver_field_sale_rls.sql` (8/8), `pytest` (12/12),
+`tsc --noEmit`, `eslint --max-warnings=0`, production `expo export --platform web`.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021), `BLOCKERS.md` (BLOCKER-006 update +
+BLOCKER-022/023 new), `NOTIFICATIONS.md`, `BACKEND_ROADMAP.md`,
+`docs/SCHEMA-REFERENCE.md` §12, `docs/API-CONTRACT.md`.
+
+**Still not built, unchanged:** inventory/production/financial/customer handlers —
+allowlisted in `domain_operation`, `REJECTED unsupported_operation_type` until built.
+
+Nothing committed to git — awaiting explicit go-ahead. Full trace: `IMPLEMENTATION_LOG.md`
+2026-08-29.
+
+---
+
 ## ✅ P3.7 FIRST SLICE DELIVERED — ticket.create/item_update, sync_conflicts, sync_pull (2026-08-28)
 
 Per explicit instruction: proceed only with the P3.7 work identified from the live

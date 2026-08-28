@@ -5,6 +5,184 @@ Never record planned work here.
 
 ---
 
+## 2026-08-29 · P3.7 protocol-correctness pass — response-status bug, payload immutability, client_sequence, cursor validation, and a security fix
+
+Instruction: harden the offline-sync protocol layer (tenant-bound idempotency,
+payload-hash immutability, `ALREADY_APPLIED` semantics, `client_sequence`,
+cursor-too-old/full-resync) without redesigning the already-working context-validation/
+authorization/idempotency/conflict-detection layer, without expanding into
+inventory/production/financial/customer handlers, and without touching
+`sync_operations.operation_type` without first re-tracing every producer/consumer. Add
+live tests before declaring anything complete; do not commit to git.
+
+### Live trace before writing anything
+
+Read `information_schema.columns`/`pg_constraint` for `sync_operations`/`sync_changes`/
+`sync_conflicts`/`sync_devices`, and `pg_get_functiondef()` for
+`process_sync_batch()`, `process_sync_batch_context_validated()`, `sync_validate_device()`,
+`apply_sync_operation()`, `apply_ticket_create()`, `apply_ticket_item_update()`,
+`sync_pull()`, `has_role_in()`, `is_member_of()`, `is_authorized_for_branch()`,
+`trg_dispatch_sync_operation()`, `bump_ticket_revision()`.
+
+Confirmed: `sync_operations.operation_id` has a global `UNIQUE` constraint plus `UNIQUE
+(device_id, operation_id)`; `sync_changes`/`sync_conflicts`/`sync_operations`/
+`sync_devices` all have `relrowsecurity`/`relforcerowsecurity = true`; `sync_pull()` is
+declared without `SECURITY DEFINER` (runs as invoker, relying on RLS); no
+`operation_type`/`domain_operation` producer or consumer exists anywhere outside this
+backend work (repo-wide grep — migrations, docs, tests, `bakeflow-frontend/`: the
+frontend sync client does not exist yet), so the `domain_operation` additive-column
+strategy from 2026-08-28 needed no changes.
+
+**Found a real, previously-undiscovered bug by testing before writing code.** Ran a live
+`ticket.create` in a rolled-back transaction and read the RPC's own JSON response:
+`{"results":[{"status":"PENDING", ...}]}` — even though a real ticket had demonstrably
+been created (confirmed via a direct `sync_operations` re-query in the same transaction).
+Root cause: `process_sync_batch_context_validated()` computes `v_status`/`v_err_code`
+*before* the `INSERT INTO sync_operations`, and `sync_operations_dispatch` (`AFTER
+INSERT ... WHEN (NEW.status IN ('PENDING','CONFLICT'))`) fires `apply_sync_operation()`
+synchronously as part of that same `INSERT` — so by the time the function's loop
+continues, the row's real status may already be `APPLIED`/`REJECTED`, but the response
+was built from the stale pre-dispatch local variable. Every operation's batch response
+reported `PENDING`/`CONFLICT` regardless of outcome; a client had no way to learn
+`APPLIED`/`REJECTED` from the synchronous call at all.
+
+### Migrations applied (all dry-run in a `BEGIN;...ROLLBACK;` against real fixture data
+first, then applied for real via `apply_migration`)
+
+1. **`p3_7_add_client_sequence_column`** — `sync_operations.client_sequence bigint`,
+   nullable, `CHECK (client_sequence IS NULL OR client_sequence >= 0)`. Diagnostic-only
+   per `OFFLINE-SYNC-MODEL.md` §16 ("NOT a substitute for server revisions... do not
+   treat a device sequence as global truth" — no enforcement semantics specified
+   anywhere); captured but never compared/enforced anywhere.
+2. **`p3_7_fix_batch_response_staleness_and_immutable_context`** — `CREATE OR REPLACE
+   process_sync_batch_context_validated()`:
+   - Re-reads `status`/`error_code`/`result` from `sync_operations` *after* the `INSERT`
+     (fixing the bug above).
+   - Widens the replay/idempotency comparison from 5 fields
+     (`tenant_id`/`actor_id`/`device_id`/`entity_id`/`operation_type`) to 10
+     (adds `entity_type`, `domain_operation`, `branch_id`, `base_revision`, `payload`).
+     Payload comparison uses jsonb `=` (structural equality) — verified live first:
+     `'{"a":1,"b":2}'::jsonb = '{"b":2,"a":1}'::jsonb` → `true`, and
+     `('{"a":1,"b":2}'::jsonb)::text = ('{"b":2,"a":1}'::jsonb)::text` → `true` — jsonb
+     canonicalizes key order in storage (unlike plain `json`), so this cannot
+     false-reject a semantically-identical replay over key-ordering differences. Any
+     mismatch (payload included) raises the same pre-existing `'operation replay with
+     altered immutable context'` (`42501`) — no new error class.
+   - Rejects a non-object payload (`jsonb_typeof(payload) <> 'object'`) as `22023
+     invalid_request` at the gateway boundary, before it can reach a handler.
+   - A genuine replay's response now includes `result`/`error_code`, not just `status`,
+     so a client that lost the original response can fully recover it.
+   - Captures `client_sequence` from the operation envelope; stores it verbatim.
+3. **`p3_7_sync_pull_cursor_validation_and_full_resync`** — `CREATE OR REPLACE
+   sync_pull()`: negative `p_cursor` → `22023 invalid_request`; `p_cursor` greater than
+   `max(sequence_id)` visible to the caller (RLS-scoped, since the function is
+   `SECURITY INVOKER`) → `{"changes":[], "full_resync_required": true, ...}` instead of a
+   silently-empty/incomplete page. Verified this is the only well-defined case:
+   `sync_changes` has no `deleted_at`/TTL/archival column, and a repo-wide grep of
+   `supabase/migrations` for `purge|retention|archive|tombstone|delete from sync_changes|
+   TTL` (case-insensitive) returns zero hits — it is a true append-only ledger today, so
+   true cursor-expiry-via-purge cannot currently occur and was **not** implemented
+   (documented as `BLOCKER-023`, not guessed at).
+4. **`p3_7_revoke_public_execute_on_internal_sync_handlers`** — security fix, see below.
+
+### Security defect found via `get_advisors(type='security')`, run as due diligence before declaring the pass done
+
+`apply_ticket_create(public.sync_operations)` and `apply_ticket_item_update(public.
+sync_operations)` — both `SECURITY DEFINER` — were flagged: the former callable by
+`anon`, both callable by `authenticated`, via `/rest/v1/rpc/apply_ticket_create` etc.
+Confirmed live with `has_function_privilege()`. Both functions re-derive authorization
+from `p_operation.actor_id`/`p_operation.tenant_id` — fields supplied by the caller in
+the composite argument, not independently re-verified against `auth.uid()` or an
+authenticated session at all. Correct when reachable only via
+`trg_dispatch_sync_operation()` from an already-authorized, already-inserted
+`sync_operations` row (where `process_sync_batch_context_validated()` already did the
+real authorization upstream) — but reachable directly, any caller supplying an
+`actor_id`/`tenant_id` pair that happens to hold an appropriate role in that tenant could
+create/mutate real tickets, bypassing `auth.uid()`, `is_member_of()`,
+`is_authorized_for_branch()`, idempotency, and conflict detection entirely. Root cause:
+the migration that created these functions (`p3_7_ticket_create_and_item_update_
+handlers_and_dispatch`, 2026-08-28) never revoked the default `PUBLIC` `EXECUTE` grant
+Postgres applies to new functions — this repo has an established precedent for exactly
+this fix (`20260813234856_revoke_anon_execute_on_internal_functions`), which this new
+batch of functions simply predates.
+
+Also found `PUBLIC`-executable, lower severity (the first only acts on an already-
+existing row and re-checks that row's own status; the other two are trigger functions
+that error outside trigger context, and `sync_pull`'s `anon` grant is closed by
+`sync_validate_device()` at runtime regardless) but fixed for defense in depth to match
+the `is_member_of()`/`is_authorized_for_branch()` convention exactly:
+`apply_sync_operation(uuid)`, `trg_dispatch_sync_operation()`, `bump_ticket_revision()`,
+this pass's own `has_role_in(uuid,uuid,text[])`, and `sync_pull()`'s stray `anon` grant
+(kept `authenticated`).
+
+Verified live, dry-run first: `process_sync_batch() → ... → apply_ticket_create()`
+still succeeds end-to-end as `authenticated` after the revokes (`SECURITY DEFINER`
+functions calling each other internally is unaffected by revoking the *external*
+PostgREST/client grant), and `has_function_privilege()` confirms `anon` can no longer
+reach any of the six functions. Re-ran `ticket.create`, `ticket.item_update` (revision
+bump via the `bump_ticket_revision` trigger), and `sync_pull()` live after applying the
+migration for real — all still work.
+
+### New permanent regression suite
+
+`tests/sql/p3_7_protocol_correctness.sql` — 18/18, live, first run clean:
+- I1–I5 (tenant-bound idempotency: same-tenant replay, replay-after-commit, cross-tenant
+  rejection with and without identical payload, retry recovery)
+- P1–P4 (payload immutability: identical replay, modified-payload rejection, malformed
+  payload rejection, cross-tenant replay with identical payload still rejected)
+- A1–A4 (ALREADY_APPLIED semantics, verified from the RPC's own JSON response, not by
+  re-querying the table — this is exactly what the status-staleness bug broke)
+- S1–S5 (`client_sequence`: sequential, duplicate-across-distinct-ops, out-of-order,
+  replay, large-gap-after-reconnect — all proven non-blocking)
+- C1–C6 (cursor validation: valid, caught-up, negative, ahead-of-server/full-resync)
+- Two "security:" assertions (`has_function_privilege()` checks mirroring
+  `security_multiorg_sync.sql`'s S11b pattern)
+- One `item7` regression guard asserting `sync_operations.operation_type`'s CHECK
+  constraint definition is byte-identical to its pre-pass value (protects against a
+  future accidental widening).
+
+### Full verification, zero regression
+
+- `tests/sql/p3_7_protocol_correctness.sql` — 18/18 (new).
+- `tests/sql/p3_7_sync_apply_and_pull.sql` — 11/11, re-run clean.
+- `tests/sql/security_multiorg_sync.sql` — 22/23 (same pre-existing, unrelated
+  `rate_limit_events` "no RLS policies" gap this project has documented since before
+  this pass — reproduced and confirmed via `assert_schema_invariants()`, not caused by
+  anything in this pass).
+- `tests/sql/driver_trips_rls.sql` — 20/20, re-run clean (exercises
+  `bump_ticket_revision`-adjacent trigger paths).
+- `tests/sql/financial_write_rls.sql` — 28/28, re-run clean.
+- `tests/sql/driver_field_sale_rls.sql` — 8/8, re-run clean.
+- `.venv/Scripts/python.exe -m pytest -q` — 12 passed.
+- `npm run typecheck --workspace apps/mobile` — clean (`tsc --noEmit`, no output).
+- `npm run lint --workspace apps/mobile` — clean (`eslint . --max-warnings=0`, no
+  output).
+- `npm run deps:check --workspace apps/mobile` — reports pre-existing Expo/RN
+  patch-version drift (`expo`, `expo-router`, `react-native`, etc.), unrelated to this
+  pass — no frontend file was touched.
+- `npx expo export --platform web` (in `apps/mobile`) — succeeded, produced `dist/`
+  (web bundle + assets), confirming the production build path is unaffected.
+
+### Documentation updated
+
+`ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `BLOCKERS.md` (BLOCKER-006 update plus
+two new entries, **BLOCKER-022** `depends_on_operation_id` and **BLOCKER-023** sync
+retention/cursor-expiry — both explicitly left open with what was discovered, why it
+needs a decision, and the live evidence, not guessed at), `NOTIFICATIONS.md`,
+`BACKEND_ROADMAP.md` (P3.7 section plus both status-table rows),
+`docs/SCHEMA-REFERENCE.md` §12, `docs/API-CONTRACT.md`, `CURRENT_TASK.md`.
+
+**Not built in this pass, by instruction:** inventory/production/financial/customer
+handlers — unchanged from 2026-08-28, still `REJECTED unsupported_operation_type`.
+**Not built, left as open blockers, not guessed at:** `depends_on_operation_id`
+enforcement (BLOCKER-022); true cursor-expiry-via-retention-purge (BLOCKER-023, no
+retention mechanism exists to trigger it).
+
+Nothing committed to git — awaiting explicit authorization, per this project's standing
+convention.
+
+---
+
 ## 2026-08-28 · P3.7 first vertical slice — ticket.create/item_update, sync_conflicts, sync_pull
 
 Continuing from AD-021 (BLOCKER-006 resolved earlier today): "Proceed only with the
