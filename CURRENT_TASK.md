@@ -1,5 +1,58 @@
 # BakeFlow — Current Task
 
+## IN PROGRESS — P9.7 expense capture added; real authorization defect found and fixed (2026-08-28)
+
+Resumed from the P9.7 online finance slice (2026-08-26, cash sessions + payment entry).
+First verified that prior work actually completed: re-ran `typecheck`/`lint --workspace
+apps/mobile` and `pytest -q` fresh — all clean, working tree matched the last commit
+exactly — then backfilled a missing `IMPLEMENTATION_LOG.md` entry for that slice (the
+commit had landed without one, breaking this file's append-only evidence trail for the
+first time this project).
+
+Added expense capture: `apps/mobile/app/finance/index.tsx` gained a "Record expense"
+card (category, amount, optional paid method, optional description; a cash-method
+expense requires the currently open till, same rule the payment card already follows)
+plus a short recent-expenses list. Backing this: `Expense`/`EXPENSE_CATEGORIES`/
+`EXPENSE_PAID_METHODS` in `packages/types/finance.ts`, `expenseSchema` in
+`packages/validation/finance.ts` (new `positiveMoneySchema` in `decimal.ts` for
+`amount > 0`), `listExpenses()`/`getExpenseById()` in `packages/api/queries/finance.ts`,
+`createExpense()` in `packages/api/mutations/finance.ts`, `useExpenses`/
+`useCreateExpense` in `packages/hooks/index.ts`.
+
+**A real live authorization gap was found and fixed before any client code went live
+against it.** Investigating `expenses`' write contract (a plain PostgREST INSERT, like
+`tickets` — `authenticated` holds direct `INSERT`/`SELECT`/`UPDATE`, no RPC) found that
+`expenses_insert`'s `WITH CHECK` never constrained `created_by` at all, unlike its two
+closest precedents: `tickets` (a trigger unconditionally overwrites `created_by` from
+`auth.uid()`) and its own P5 sibling `daily_financial_audits_insert` (`submitted_by =
+auth.uid()` in the policy itself). Reproduced live in a rolled-back transaction — a
+simulated cashier inserted an expense with `created_by` set to a different profile, and
+it succeeded. Fixed by mirroring `daily_financial_audits_insert`'s exact clause
+(migration `fix_expenses_insert_created_by_forgery`); re-verified live (forged and
+omitted `created_by` both now refused, the caller's own id still succeeds) and the full
+`tests/sql/financial_write_rls.sql` suite re-run clean, 28/28 — F14/F15 (the two live
+`expenses` INSERT assertions already in that suite) unaffected, since their fixture
+`created_by` already matched the simulated actor. `createExpense()`'s signature reflects
+the fix: it takes the caller's own id as a required parameter, sourced in the screen from
+`useSessionStore().userId`.
+
+**Verified:** `npm run typecheck` (root, all workspaces) and `npx eslint packages
+--max-warnings=0` both exit 0, `npm run lint --workspace apps/mobile` exit 0,
+`.venv/Scripts/python.exe -m pytest -q` 12 passed, `npx expo export --platform web`
+0 errors (1030 modules). **Not verified:** an interactive click-through — no
+device/browser tooling in this environment. **Pre-existing, unrelated:** `npm run
+deps:check --workspace apps/mobile` reports several Expo SDK packages one patch version
+behind — present before this pass, not caused by it, not fixed here (a dependency-bump
+decision, out of this task's scope).
+
+Still outstanding for P9.7: offline queuing (needs BLOCKER-006, still open) and the
+interactive device test. Docs updated: `BACKEND_ROADMAP.md` P5.6 (third defect) and P9.7
+rows.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-28.
+
+---
+
 ## ✅ BLOCKER-021 RESOLVED — driver field-sale shortcut implemented, tested, and wired in (2026-08-25)
 
 User resolved BLOCKER-021 with an explicit decision: a driver-created, trip-linked

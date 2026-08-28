@@ -7,6 +7,7 @@ export {
   nonNegativeMoneySchema,
   nonNegativeQuantitySchema,
   nonZeroQuantitySchema,
+  positiveMoneySchema,
   positiveQuantitySchema,
   signedMoneySchema,
   signedQuantitySchema,
@@ -45,4 +46,4 @@ export { driverSchema } from './staff';
 
 export { driverTripSchema } from './driver-trip';
 
-export { cashSessionSchema } from './finance';
+export { cashSessionSchema, expenseSchema } from './finance';

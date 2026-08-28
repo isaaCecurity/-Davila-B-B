@@ -41,6 +41,7 @@ import {
   completeDriverFieldSale,
   completeDriverTrip,
   completeProductionBatch,
+  createExpense,
   createRoadsideTicket,
   departDriverTrip,
   failProductionBatch,
@@ -61,6 +62,7 @@ import {
   listProductVariants,
   listProducts,
   listCashSessions,
+  listExpenses,
   listTickets,
   listProductionBatches,
   listRecipesByIds,
@@ -83,6 +85,7 @@ import {
   type CompleteDriverTripInput,
   type CompleteProductionBatchInput,
   type CloseCashSessionInput,
+  type CreateExpenseInput,
   type CreateRoadsideTicketInput,
   type DeliveryFilters,
   type DeliveryTransition,
@@ -119,6 +122,7 @@ import type {
   ProductionBatch,
   ProductionBatchWithIngredients,
   CashSession,
+  Expense,
   Recipe,
   Ticket,
   TicketWithItems,
@@ -230,6 +234,8 @@ export const queryKeys = {
     orgScoped(tenantId, 'cash-sessions', branchId ?? 'all'),
   paymentTickets: (tenantId: string, branchId?: string): unknown[] =>
     orgScoped(tenantId, 'payment-tickets', branchId ?? 'all'),
+  expenses: (tenantId: string, branchId?: string): unknown[] =>
+    orgScoped(tenantId, 'expenses', branchId ?? 'all'),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -1221,6 +1227,51 @@ export function useRecordPayment(
       const tenant = requireTenant(tenantId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.paymentTickets(tenant) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+    },
+  });
+}
+
+export function useExpenses(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId?: string,
+): UseQueryResult<Expense[], Error> {
+  return useQuery({
+    queryKey: queryKeys.expenses(tenantId ?? 'none', branchId),
+    queryFn: () => listExpenses(client, { branchId }),
+    enabled: tenantId !== null,
+  });
+}
+
+/**
+ * `userId` is the caller's own id (`useSessionStore().userId`), required because
+ * `createExpense()` needs it as `created_by` — `expenses_insert`'s RLS now requires
+ * `created_by = auth.uid()` (fixed 2026-08-28, see `mutations/finance.ts`'s header), and
+ * there is no trigger to derive it the way `tickets` does.
+ */
+export function useCreateExpense(
+  client: BakeflowClient,
+  tenantId: string | null,
+  userId: string | null,
+): UseMutationResult<Expense, Error, { input: CreateExpenseInput }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input }) => {
+      const tenant = requireTenant(tenantId);
+      if (userId === null) {
+        throw new Error('No signed-in user id available to attribute this expense to.');
+      }
+      return createExpense(client, tenant, userId, input);
+    },
+    onSuccess: (expense) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tenant) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.expenses(tenant, expense.branch_id),
+      });
+      if (expense.cash_session_id !== null) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+      }
     },
   });
 }

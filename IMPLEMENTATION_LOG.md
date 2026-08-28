@@ -5,6 +5,183 @@ Never record planned work here.
 
 ---
 
+## 2026-08-28 · P9.7 expense capture — a real `expenses_insert` authorization gap found and fixed
+
+Resumed from the 2026-08-26 finance slice (cash sessions + payment entry). First
+confirmed that work actually completed rather than assuming it: `git status` clean,
+working tree matched commit `b979fbd4` exactly, and re-running its stated evidence
+fresh — `npm run typecheck`/`lint --workspace apps/mobile` and `.venv/Scripts/python.exe
+-m pytest -q` — all still green. Found and backfilled a real gap in the process: that
+commit had landed with no matching `IMPLEMENTATION_LOG.md` entry, the first time this
+project's append-only evidence trail was broken (see the entry directly below this one).
+
+### Investigating the write contract before writing any client code
+
+Read `expenses`' live schema, constraints, RLS policies, and triggers
+(`mcp__supabase__execute_sql` against project `tvfyxpafbpnkneujcnvr` — `information_schema.
+columns`, `pg_constraint`, `pg_policies`, `pg_trigger`, `pg_proc`) rather than trusting
+`docs/SCHEMA-REFERENCE.md` §7 alone (it lists the columns correctly but says nothing about
+grants). Findings:
+
+- `authenticated` holds direct `INSERT`/`SELECT`/`UPDATE` on `expenses` (no RPC) —
+  `expenses` is a plain-PostgREST-write table, like `tickets`, per `API-CONTRACT.md` §1's
+  own decision rule (single-row, non-atomic).
+- Constraints: `amount > 0`; `category` in the six live values; `paid_method` in
+  `cash/card/transfer/pos`; a cash `paid_method` requires `cash_session_id`
+  (`expenses_cash_needs_session`); `description` ≤ 2000 chars.
+- Only two triggers: `expenses_guard_cash_session` (validates cash/session coherence —
+  `guard_expense_cash_session()`, already read during the P5 audit) and
+  `expenses_set_updated_at`. **Neither sets `created_by`.**
+- `expenses_insert`'s live `WITH CHECK`: `tenant_id = current_tenant_id() AND
+  has_branch_access(branch_id) AND has_role(ARRAY['owner','admin','branch_manager',
+  'cashier','accountant'])` — **no clause on `created_by` at all.**
+
+### Reproduced live before fixing anything
+
+Compared against the two nearest precedents in this exact schema: `tickets`
+(`guard_order_actor_and_assignment()`, read live, unconditionally sets `NEW.created_by :=
+auth.uid()` on INSERT) and `daily_financial_audits_insert` (`submitted_by = auth.uid()`,
+inline in the policy). `expenses` has neither mechanism.
+
+Reproduced in a rolled-back transaction: a simulated cashier (real `auth.uid()` via
+`request.jwt.claims`, a disposable org/branch/profile/`user_roles`/`branch_assignments`
+fixture) inserted an expense with `created_by` set to a *different* profile's id. **The
+insert succeeded** — a live authorship-forgery gap on a financial audit-trail table,
+rolled back, nothing persisted.
+
+### Fix — migration `fix_expenses_insert_created_by_forgery`
+
+```sql
+alter policy expenses_insert on public.expenses
+  with check (
+    tenant_id = current_tenant_id()
+    and has_branch_access(branch_id)
+    and has_role(array['owner','admin','branch_manager','cashier','accountant'])
+    and created_by = auth.uid()
+  );
+```
+
+Mirrors `daily_financial_audits_insert`'s exact clause — an already-approved, already-live
+pattern in the same P5 domain, not a new authorization decision.
+
+**Verified live in a rolled-back transaction, same fixture:**
+- R1 a forged `created_by` (a different profile) is now refused — `42501`.
+- R2 an omitted (`NULL`) `created_by` is refused — `42501`.
+- R3 `created_by` = the caller's own `auth.uid()` succeeds.
+
+**Regression — the full permanent suite re-run clean afterward:**
+`tests/sql/financial_write_rls.sql`, all 28 assertions (F1–F23) executed end to end via
+`mcp__supabase__execute_sql`, **28/28 passed**. F14/F15 (the suite's two live `expenses`
+INSERT assertions) were unaffected because their fixture already sets `created_by` to the
+same profile as the simulated `sub` claim in that block (`d1000000-…0001` both places) —
+confirmed by reading the fixture before relying on it, not assumed.
+
+### Client code added
+
+- `packages/validation/decimal.ts` — `positiveMoneySchema` (`NUMERIC(19,4) CHECK (value >
+  0)`, mirrors `positiveQuantitySchema`'s shape for `expenses.amount`).
+- `packages/types/finance.ts` — `Expense`, `EXPENSE_CATEGORIES`/`ExpenseCategory`,
+  `EXPENSE_PAID_METHODS`/`ExpensePaidMethod`.
+- `packages/validation/finance.ts` — `expenseSchema`, mirroring the live constraints read
+  above.
+- `packages/api/queries/finance.ts` — `listExpenses()` (filterable by `branchId`/
+  `cashSessionId`), `getExpenseById()` (used by the mutation's read-back).
+- `packages/api/mutations/finance.ts` — `createExpense(client, tenantId, createdBy,
+  input)`. `tenantId` explicit per `CLAUDE.md` rule 3; `createdBy` explicit and required
+  because, per the defect above, it is now the one value `expenses_insert` will accept —
+  there is no trigger to derive it, unlike `tickets`. Validates the cash/session coherence
+  rule client-side for a clear error before the round trip, mirroring the live CHECK in
+  both directions (cash needs a session; a session implies cash).
+- `packages/hooks/index.ts` — `useExpenses`, `useCreateExpense` (the latter takes
+  `userId` — `useSessionStore().userId` — as a required argument for exactly the reason
+  above; invalidates the expense list and, when the expense carried a `cash_session_id`,
+  the cash-session list too, since a cash expense changes a session's expected amount).
+- `apps/mobile/app/finance/index.tsx` — a "Record expense" card (category chips, amount,
+  optional paid-method chips, optional description; a cash-method expense is disabled
+  client-side until a till is open, the same rule the existing payment card already
+  follows) plus a short recent-expenses list.
+
+### Verified
+
+- `npm run typecheck --workspace apps/mobile` → exit 0.
+- `npm run typecheck` (root, all workspaces) → exit 0.
+- `npx eslint packages --max-warnings=0` → exit 0 (one warning found and fixed along the
+  way — an unused `ExpenseFilters` import in `hooks/index.ts`).
+- `npm run lint --workspace apps/mobile` → exit 0, zero warnings.
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed.
+- `npx expo export --platform web` → 0 errors, 1030 modules bundled.
+- **Not verified:** an interactive click-through — no device/browser tooling in this
+  environment.
+- **Pre-existing, unrelated, not fixed here:** `npm run deps:check --workspace
+  apps/mobile` reports several Expo SDK packages one patch version behind. Present before
+  this pass (no `package.json`/lockfile touched); a dependency-bump decision, out of
+  scope for this task.
+
+Docs updated: `BACKEND_ROADMAP.md` P5.6 (records the third expense defect, matching the
+existing two) and P9.7 (expense capture added, date and module count refreshed).
+`CURRENT_TASK.md` gained a new top entry. Not committed — held per instruction.
+
+---
+
+## 2026-08-26 · P9.7 online finance slice — cash sessions + till-scoped payment recording
+**(backfilled 2026-08-28 — this entry was never written at the time; see note at the end)**
+
+Built the first online finance surface (`BACKEND_ROADMAP.md` P9.7 row). No migration —
+`open_cash_session()`, `close_cash_session()`, and `record_payment()` were already live
+from the P5 financial-backend audit (2026-08-24); this pass is client wiring only.
+
+**New files:**
+- `packages/types/finance.ts` — `CashSession` (all money fields as `Money`/decimal
+  strings, not numbers), `CASH_SESSION_STATUSES = ['open', 'closed']`.
+- `packages/validation/finance.ts` — `cashSessionSchema`: `opening_float`/
+  `expected_amount`/`counted_amount` via `nonNegativeMoneySchema`, `variance_amount` via
+  `signedMoneySchema` (reused from the driver-trip `cash_variance` work — a session can
+  legitimately come up short).
+- `packages/api/queries/finance.ts` — `listCashSessions()`, a plain PostgREST read
+  (`cash_sessions` grants `authenticated` `SELECT`, per the P5 audit) with the four money
+  columns forced to `::text` via `TEXT_CAST_COLUMNS`, following the existing
+  `internal/read.ts` projection pattern rather than a new one.
+- `packages/api/mutations/finance.ts` — `openCashSession()`/`closeCashSession()` call the
+  two RPCs, then re-fetch through `listCashSessions()` rather than trusting the RPC's own
+  return shape (matches the caution already applied to `completeDriverFieldSale()` after
+  the BLOCKER-001 nested-payload defect). `recordPayment()` calls `record_payment()` with
+  `p_driver_trip_id: null` (branch-till path, distinct from the trip-scoped wrapper in
+  `driver-trips.ts`), validates the amount is a non-negative, non-zero decimal string
+  client-side before the round trip, and reads `payment.id` from the RPC's nested envelope.
+
+**Edited:** `packages/hooks/index.ts` — `useCashSessions`, `useOpenCashSession`,
+`useCloseCashSession`, `usePaymentTickets` (open, non-cancelled tickets), `useRecordPayment`
+— all `orgScoped()` cache keys, payment success invalidates both the ticket list and the
+cash-session list (a cash payment changes a session's expected amount). `apps/mobile/app/
+finance/index.tsx` — one screen: session history/list, an "open a till" form (opening
+float, branch picker sourced from `useWarehouses`), a close/reconcile form per open session
+(counted amount + variance note), and payment entry (pick an eligible ticket, amount,
+method; cash is disabled client-side until a till is open, though the server is the actual
+enforcement per `record_payment()`'s existing till-required check). `apps/mobile/app/
+index.tsx` — added the Finance link from the catalog.
+
+**Verified at the time (per `CURRENT_TASK.md`'s own claim, not independently re-run until
+today):** `npm run typecheck`/`lint --workspace apps/mobile` clean. **Not done then or
+since:** no SQL suite covering this screen's read/write paths specifically (the RPCs
+themselves were already covered by `tests/sql/financial_write_rls.sql` from the P5 audit),
+no interactive device click-through — both named as outstanding in `CURRENT_TASK.md`/
+`BACKEND_ROADMAP.md` P9.7.
+
+**Re-verified live today (2026-08-28), before resuming any further work**, since this was
+the last thing done and nothing had confirmed it still held: `npm run typecheck --workspace
+apps/mobile` → exit 0, `npm run lint --workspace apps/mobile` → exit 0 (zero warnings),
+`.venv/Scripts/python.exe -m pytest -q` → 12 passed. Working tree was clean, matching the
+committed state (`b979fbd4`) exactly — nothing had drifted since the commit.
+
+**Why this entry is backfilled.** The commit (`b979fbd4`, 2026-08-26) landed with a
+`CURRENT_TASK.md` write-up but no matching entry here, breaking this file's own
+append-only evidence trail for the first time this project. Found while resuming work on
+2026-08-28 and checking the prior session actually completed. Written from the real diff
+(`git show b979fbd4`) plus the files as they exist now, not from memory of a session this
+one didn't run.
+
+---
+
 ## 2026-08-25 · BLOCKER-021 RESOLVED — driver field-sale shortcut (AD-020)
 
 User's decision, verbatim intent: a driver-created, trip-linked roadside/field-sale ticket

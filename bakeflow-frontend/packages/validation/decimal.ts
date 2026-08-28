@@ -84,6 +84,18 @@ export const nonNegativeMoneySchema = exactDecimalString
   .transform((value): Money => unsafeMoney(value));
 
 /**
+ * `NUMERIC(19,4) CHECK (value > 0)` — e.g. `expenses.amount`. Strictly positive: zero is
+ * rejected, matching `expenses_amount_check`'s live definition (read 2026-08-28).
+ */
+export const positiveMoneySchema = exactDecimalString
+  .regex(MONEY_PATTERN, MONEY_MESSAGE)
+  .refine(
+    (value) => !isNegativeDecimalString(value) && !isZeroDecimalString(value),
+    'must be > 0',
+  )
+  .transform((value): Money => unsafeMoney(value));
+
+/**
  * `NUMERIC(19,4)` with **no sign constraint** — `driver_trips.cash_variance` only, as of
  * ADR-001. See the module header for why this differs from every other money column in the
  * schema: a driver returning short of expected cash is not an error state to reject, it is

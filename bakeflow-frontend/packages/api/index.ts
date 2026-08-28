@@ -11,13 +11,15 @@
 
 export type { BakeflowClient } from './client';
 
-export { listCashSessions } from './queries/finance';
+export { getExpenseById, listCashSessions, listExpenses, type ExpenseFilters } from './queries/finance';
 export {
   closeCashSession,
+  createExpense,
   openCashSession,
   PAYMENT_METHODS,
   recordPayment,
   type CloseCashSessionInput,
+  type CreateExpenseInput,
   type OpenCashSessionInput,
   type PaymentMethod,
   type RecordPaymentInput,

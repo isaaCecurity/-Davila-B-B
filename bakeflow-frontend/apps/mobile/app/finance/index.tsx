@@ -2,13 +2,21 @@ import { getSupabaseClient } from '@bakeflow/auth';
 import {
   useCashSessions,
   useCloseCashSession,
+  useCreateExpense,
+  useExpenses,
   useOpenCashSession,
   usePaymentTickets,
   useRecordPayment,
   useWarehouses,
 } from '@bakeflow/hooks';
 import { PAYMENT_METHODS, type PaymentMethod } from '@bakeflow/api';
-import type { CashSession } from '@bakeflow/types';
+import {
+  EXPENSE_CATEGORIES,
+  EXPENSE_PAID_METHODS,
+  type CashSession,
+  type ExpenseCategory,
+  type ExpensePaidMethod,
+} from '@bakeflow/types';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from 'react-native';
@@ -21,12 +29,15 @@ export default function FinanceScreen(): React.JSX.Element {
   const client = getSupabaseClient();
   const router = useRouter();
   const tenantId = useSessionStore((state) => state.activeTenantId);
+  const userId = useSessionStore((state) => state.userId);
   const sessions = useCashSessions(client, tenantId);
   const warehouses = useWarehouses(client, tenantId);
   const openSession = useOpenCashSession(client, tenantId);
   const closeSession = useCloseCashSession(client, tenantId);
   const paymentTickets = usePaymentTickets(client, tenantId);
   const recordPayment = useRecordPayment(client, tenantId);
+  const expenses = useExpenses(client, tenantId);
+  const createExpense = useCreateExpense(client, tenantId, userId);
   const [openingFloat, setOpeningFloat] = useState('0');
   const [countedAmounts, setCountedAmounts] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -34,6 +45,10 @@ export default function FinanceScreen(): React.JSX.Element {
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentReference, setPaymentReference] = useState('');
+  const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>('other');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expensePaidMethod, setExpensePaidMethod] = useState<ExpensePaidMethod | null>(null);
+  const [expenseDescription, setExpenseDescription] = useState('');
 
   const branchOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -211,6 +226,117 @@ export default function FinanceScreen(): React.JSX.Element {
                 )}
                 {openSession.isError && (
                   <Text className="mt-2 text-sm text-red-700">{openSession.error.message}</Text>
+                )}
+              </View>
+              <View className="gap-3 rounded-xl border border-neutral-200 p-4">
+                <Text className="text-base font-semibold text-neutral-900">Record expense</Text>
+                <Text className="text-sm text-neutral-500">
+                  Cash expenses require the currently open till; other methods do not.
+                </Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {EXPENSE_CATEGORIES.map((category) => (
+                    <Pressable
+                      key={category}
+                      accessibilityRole="button"
+                      onPress={() => setExpenseCategory(category)}
+                      className={`rounded-lg border px-3 py-2 ${expenseCategory === category ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
+                    >
+                      <Text className={expenseCategory === category ? 'text-white' : 'text-neutral-900'}>
+                        {category}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  accessibilityLabel="Expense amount"
+                  value={expenseAmount}
+                  onChangeText={setExpenseAmount}
+                  keyboardType="decimal-pad"
+                  placeholder="Amount"
+                  className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
+                />
+                <View className="flex-row flex-wrap gap-2">
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setExpensePaidMethod(null)}
+                    className={`rounded-lg border px-3 py-2 ${expensePaidMethod === null ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
+                  >
+                    <Text className={expensePaidMethod === null ? 'text-white' : 'text-neutral-900'}>
+                      unspecified
+                    </Text>
+                  </Pressable>
+                  {EXPENSE_PAID_METHODS.map((method) => (
+                    <Pressable
+                      key={method}
+                      accessibilityRole="button"
+                      onPress={() => setExpensePaidMethod(method)}
+                      className={`rounded-lg border px-3 py-2 ${expensePaidMethod === method ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
+                    >
+                      <Text className={expensePaidMethod === method ? 'text-white' : 'text-neutral-900'}>
+                        {method}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {expensePaidMethod === 'cash' && openTill === undefined && (
+                  <Text className="text-sm text-amber-800">Open a till before recording a cash expense.</Text>
+                )}
+                <TextInput
+                  accessibilityLabel="Expense description"
+                  value={expenseDescription}
+                  onChangeText={setExpenseDescription}
+                  placeholder="Description (optional)"
+                  className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={
+                    createExpense.isPending ||
+                    expenseAmount.length === 0 ||
+                    branchOptions.length === 0 ||
+                    (expensePaidMethod === 'cash' && openTill === undefined)
+                  }
+                  onPress={() =>
+                    createExpense.mutate(
+                      {
+                        input: {
+                          branchId: branchOptions[0]?.branch_id ?? '',
+                          category: expenseCategory,
+                          amount: expenseAmount,
+                          paidMethod: expensePaidMethod,
+                          cashSessionId: expensePaidMethod === 'cash' ? (openTill?.id ?? null) : null,
+                          description: expenseDescription || null,
+                        },
+                      },
+                      {
+                        onSuccess: () => {
+                          setExpenseAmount('');
+                          setExpenseDescription('');
+                        },
+                      },
+                    )
+                  }
+                  className="rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70 disabled:opacity-40"
+                >
+                  {createExpense.isPending ? (
+                    <ActivityIndicator color="white" />
+                  ) : (
+                    <Text className="text-center font-semibold text-white">Record expense</Text>
+                  )}
+                </Pressable>
+                {createExpense.isError && (
+                  <Text className="text-sm text-red-700">{createExpense.error.message}</Text>
+                )}
+                {expenses.data !== undefined && expenses.data.length > 0 && (
+                  <View className="mt-2 gap-1 border-t border-neutral-200 pt-2">
+                    <Text className="text-xs font-semibold uppercase text-neutral-500">Recent expenses</Text>
+                    {expenses.data.slice(0, 5).map((expense) => (
+                      <Text key={expense.id} className="text-sm text-neutral-700">
+                        {expense.category} — {expense.amount}
+                        {expense.paid_method !== null ? ` (${expense.paid_method})` : ''}
+                      </Text>
+                    ))}
+                  </View>
                 )}
               </View>
               {openSessions.length > 0 && (

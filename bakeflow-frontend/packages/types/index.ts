@@ -125,5 +125,11 @@ export {
   isTerminalDriverTripStatus,
 } from './driver-trip';
 
-export type { CashSession, CashSessionStatus } from './finance';
-export { CASH_SESSION_STATUSES } from './finance';
+export type {
+  CashSession,
+  CashSessionStatus,
+  Expense,
+  ExpenseCategory,
+  ExpensePaidMethod,
+} from './finance';
+export { CASH_SESSION_STATUSES, EXPENSE_CATEGORIES, EXPENSE_PAID_METHODS } from './finance';
