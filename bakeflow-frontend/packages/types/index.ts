@@ -133,3 +133,5 @@ export type {
   ExpensePaidMethod,
 } from './finance';
 export { CASH_SESSION_STATUSES, EXPENSE_CATEGORIES, EXPENSE_PAID_METHODS } from './finance';
+
+export type { DailyRevenueSummary } from './reporting';

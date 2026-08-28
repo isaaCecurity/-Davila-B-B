@@ -47,3 +47,5 @@ export { driverSchema } from './staff';
 export { driverTripSchema } from './driver-trip';
 
 export { cashSessionSchema, expenseSchema } from './finance';
+
+export { dailyRevenueSummarySchema } from './reporting';

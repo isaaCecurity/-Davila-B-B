@@ -46,6 +46,7 @@ import {
   departDriverTrip,
   failProductionBatch,
   getCurrentDriverTrip,
+  getDailyRevenueSummary,
   getDeliveryById,
   getDriverTripById,
   getProductById,
@@ -122,6 +123,7 @@ import type {
   ProductionBatch,
   ProductionBatchWithIngredients,
   CashSession,
+  DailyRevenueSummary,
   Expense,
   Recipe,
   Ticket,
@@ -236,6 +238,8 @@ export const queryKeys = {
     orgScoped(tenantId, 'payment-tickets', branchId ?? 'all'),
   expenses: (tenantId: string, branchId?: string): unknown[] =>
     orgScoped(tenantId, 'expenses', branchId ?? 'all'),
+  dailyRevenueSummary: (tenantId: string, branchId: string, date?: string): unknown[] =>
+    orgScoped(tenantId, 'daily-revenue-summary', branchId, date ?? 'today'),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -1273,5 +1277,26 @@ export function useCreateExpense(
         void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
       }
     },
+  });
+}
+
+/**
+ * `date`, when omitted, is "today" — resolved server-side against the organization's own
+ * timezone (`get_daily_revenue_summary()`'s default), never the device's local date.
+ */
+export function useDailyRevenueSummary(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId: string | null,
+  date?: string,
+): UseQueryResult<DailyRevenueSummary, Error> {
+  return useQuery({
+    queryKey: queryKeys.dailyRevenueSummary(tenantId ?? 'none', branchId ?? 'none', date),
+    queryFn: () => {
+      const branch = branchId;
+      if (branch === null) throw new Error('No branch selected for this report.');
+      return getDailyRevenueSummary(client, branch, date);
+    },
+    enabled: tenantId !== null && branchId !== null,
   });
 }

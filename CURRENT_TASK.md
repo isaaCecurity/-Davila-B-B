@@ -1,5 +1,58 @@
 # BakeFlow — Current Task
 
+## ✅ P9.8 DELIVERED — revenue/cash reporting, the unblocked half of P5.8 (2026-08-28)
+
+Continued past P9.7 per "continue with the whole implementation unless something blocks
+you." P5.8/P9.8 had sat since 2026-08-24 flagged as "revenue/cash half unblocked and
+buildable independently" of BLOCKER-018 (COGS blocked — `stock_movements.unit_cost` is
+100% NULL) — never actually started. Read `docs/REPORTING-MODEL.md` in full first (it is
+genuinely decision-locked, §85) and followed its own recommended build order.
+
+**Found a real schema gap before building anything**: `tickets` had no completion/
+fulfillment timestamp at all, despite this repo's own P5 write-up already citing
+`tickets.fulfilled_at` as a settled decision — the column was never added. Added
+`tickets.completed_at`, stamped by `guard_ticket_status_transition()` at `completed`
+(chosen over `delivered`, matching the actual sale-stock-movement event per
+`STATE-MACHINES.md` §1) on both entry paths (normal lifecycle and the AD-020 field-sale
+shortcut). Full regression re-run clean: `financial_write_rls.sql` 28/28,
+`driver_field_sale_rls.sql` 8/8.
+
+Built `get_daily_revenue_summary(p_branch_id, p_date default null)`: gross/net revenue,
+recognized refunds, gross/net collected — all organization-timezone-aware, tenant/branch/
+role-scoped. `outstanding_amount` deliberately left out (refunds don't adjust
+`tickets.amount_paid`, so the obvious formula would be wrong — not built rather than
+shipping a wrong figure). COGS/gross-profit/margin stay out entirely (BLOCKER-018,
+unchanged).
+
+**A real precision defect was found and fixed before any client code read this RPC**:
+`jsonb_build_object()` embeds `numeric` as a bare JSON number, which `JSON.parse()` on
+the client would have silently truncated — the exact hazard this codebase's own
+`scalars.ts` already documents for un-cast table columns, recurring inside a jsonb RPC
+envelope this time. Fixed by casting every money field to `::text` before it enters the
+envelope; verified live via `jsonb_typeof`.
+
+Verified live in rolled-back transactions: correct organization-timezone day-boundary
+behavior (a ticket completed at 23:59 local counted for that day; one an hour later, at
+00:30 local the next day, correctly rolled to the next day, along with a same-instant
+refund), role-based authorization refusal, and tenant isolation (confirmed via the actual
+query result — a foreign-tenant branch returns an all-zero report, not another tenant's
+numbers, because the RPC's own `tenant_id` filter is the real gate, independent of
+`has_branch_access()`'s owner/admin bypass).
+
+**Shipped**: `apps/mobile/app/reports/index.tsx` — one card per branch, today's revenue
+and cash, explicit on-screen note explaining why COGS/gross-profit aren't shown yet
+rather than omitting them silently. Linked from the catalog screen.
+
+**Verified:** `npm run typecheck` (root)/`lint --workspace apps/mobile` both exit 0,
+`npx eslint packages --max-warnings=0` exit 0, `pytest -q` 12 passed, `npx expo export
+--platform web` 0 errors (1033 modules). **Not verified:** interactive device
+click-through — no tooling in this environment. Docs updated: `API-CONTRACT.md`,
+`SCHEMA-REFERENCE.md`, `STATE-MACHINES.md` §1/§6, `BACKEND_ROADMAP.md` P5.8/P9.8 rows.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-28.
+
+---
+
 ## IN PROGRESS — P9.7 expense capture added; real authorization defect found and fixed (2026-08-28)
 
 Resumed from the P9.7 online finance slice (2026-08-26, cash sessions + payment entry).

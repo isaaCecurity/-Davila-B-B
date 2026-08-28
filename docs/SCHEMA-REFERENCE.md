@@ -261,6 +261,7 @@ The customer order. **The table is `tickets`, not `orders`** — see the vocabul
 | correction_of_ticket_id | UUID FK → tickets | Set when this ticket corrects/reverses an earlier one — gated by the `tickets.correct` permission |
 | sale_customer_type | TEXT | Walk-in vs registered classification |
 | archived_at, archived_by, archive_reason | TIMESTAMPTZ / UUID / TEXT | Set by `archive_ticket()` |
+| completed_at | TIMESTAMPTZ | Added 2026-08-28 (P9.8/REPORTING-MODEL.md §78). Stamped by `guard_ticket_status_transition()` the moment `status` reaches `completed`, on both entry paths (`delivered → completed` and the AD-020 `draft → completed` shortcut). This is the revenue-recognition timestamp `get_daily_revenue_summary()` reads — chosen over `delivered` because `completed` is where the sale stock movement is actually written (§1), the same event a future COGS calculation must key off. |
 | device_created_at, server_received_at, revision | TIMESTAMPTZ / TIMESTAMPTZ / BIGINT | Offline-sync ordering — see §12 |
 | [std] + `deleted_at`, `deleted_by` | | Soft delete — see §11 |
 

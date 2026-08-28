@@ -5,6 +5,156 @@ Never record planned work here.
 
 ---
 
+## 2026-08-28 · P9.8 delivered — revenue/cash reporting (the unblocked half of P5.8)
+
+Continuing past P9.7. `BACKEND_ROADMAP.md`'s P5.8/P9.8 rows had stood since 2026-08-24
+noting the revenue/cash half of reporting was "unblocked and buildable independently" of
+BLOCKER-018 (COGS blocked by `stock_movements.unit_cost` being 100% NULL) — never
+started. Read `docs/REPORTING-MODEL.md` in full (2326 lines, decision-locked per its own
+§85) before writing anything, per its own recommended implementation order (§80: lock
+definitions → verify schema → add only missing fields → build views/RPCs).
+
+### Phase 2 (verify schema) surfaced a real gap
+
+`organizations.timezone` exists live (`NOT NULL DEFAULT 'Africa/Lagos'`) — the one hard
+prerequisite §78 names that was actually satisfied. The other: **`tickets` had no
+fulfillment/completion timestamp at all**, verified against `information_schema.columns`
+— despite `BACKEND_ROADMAP.md`'s own P5 write-up (2026-08-24) already stating "revenue
+recognition is `tickets.fulfilled_at` at delivered/completed" as a settled fact. The
+decision had been recorded; the column had never been added. Same class of gap this
+session has now found repeatedly (a decision written down that was never actually
+implemented).
+
+Also checked, before assuming either was a gap: `payments` and `refunds` both carry no
+status/success column at all — every row in both is a successful event by construction
+(append-only, `record_payment()`/`record_refund()` either fully succeed or raise and
+insert nothing). §78's "distinguish successful from failed/voided payments" concern is
+therefore already satisfied trivially, not missing.
+
+### Phase 3 — the one schema addition, and which event it stamps
+
+Migration `p9_8_add_tickets_completed_at`: `tickets.completed_at timestamptz null`,
+stamped inside `guard_ticket_status_transition()` (`CREATE OR REPLACE`, full body
+preserved from the live `pg_get_functiondef`, one `IF NEW.status = 'completed' THEN
+NEW.completed_at := now(); END IF;` added before the audit-log call) — a single choke
+point both entry paths into `completed` already pass through (the normal `delivered →
+completed` hop, and the AD-020 `draft → completed` field-sale shortcut).
+
+Named `completed_at`, not the roadmap's own `fulfilled_at`, to match this schema's
+existing convention (`production_batches.completed_at`, `deliveries.delivered_at`) over
+the doc's generic prose. Stamped at `completed`, not `delivered`: `STATE-MACHINES.md` §1
+already records that `delivered → completed` is where "Sale stock movement written"
+happens — the actual sale event — and `REPORTING-MODEL.md` §33/§36 requires a future COGS
+calculation to key off the same event that triggers revenue recognition. Stamping at
+`delivered` would split those two events apart for delivery-fulfilment tickets.
+
+**Verified live, not assumed:** a full lifecycle walk (`draft → … → delivered →
+complete_ticket()`) in a rolled-back transaction confirmed `completed_at` is `NULL`
+through `delivered` and stamped to `now()` immediately after `complete_ticket()`. Full
+regression re-run afterward: `tests/sql/financial_write_rls.sql` **28/28** (both suites
+that most directly exercise `guard_ticket_status_transition()`'s completed-status branch
+— this one drives a ticket through the whole normal lifecycle) and `tests/sql/
+driver_field_sale_rls.sql` **8/8** (the AD-020 shortcut path; S1's own JSON output
+confirms `completed_at` present on that path too). `tests/sql/driver_trips_rls.sql` was
+**not** re-run this pass — its D9–D20 scenarios create and pay a ticket but never
+complete one, so it doesn't exercise the changed branch differently; noted rather than
+silently skipped.
+
+### Phase 4 — the RPC, scoped to the revenue/cash half only
+
+Migration `p9_8_get_daily_revenue_summary` (then twice revised in place, same migration
+family — see below): `get_daily_revenue_summary(p_branch_id uuid, p_date date default
+null)`. Metrics: `gross_revenue` (sum `tickets.total_amount` for tickets whose
+`completed_at` falls in the reporting day), `recognized_refunds` (sum `refunds.amount`
+for refunds whose own `refunded_at` falls in the day — §25: a refund is recognized on its
+own event date, not the original sale's), `net_revenue`, `gross_collected` (sum
+`payments.amount` by `received_at`, independent of ticket status — §6's deposit
+example), `refunds_paid`, `net_collected`. Day boundary: half-open interval, computed by
+converting the organization's own timezone to UTC (§15/§16), never comparing raw UTC
+dates. Authorization: `has_branch_access(p_branch_id)` plus
+`owner/admin/branch_manager/cashier/accountant` — the exact role set already used for
+`expenses_insert`/`daily_financial_audits_insert` in this same P5 domain, not a new list
+invented for this RPC.
+
+**Deliberately not computed: `outstanding_amount`.** Investigated whether
+`total_amount - amount_paid` (summed over `completed` tickets) would be correct and found
+it would not: refunds do not adjust `tickets.amount_paid` (no trigger does; §20 explicitly
+forbids rewriting historical payment records), so a refunded ticket's `amount_paid` still
+reads as the original gross payment. Computing a correct "what does the customer still
+owe" figure needs a per-ticket refund rollup this pass does not build. Left out rather
+than shipping a wrong number, and stated as such in the RPC's own migration comment and
+the screen's copy.
+
+**A live precision defect found and fixed before any client code was written against
+this RPC.** `jsonb_build_object()` embeds a `numeric` argument as a bare JSON number, not
+a string — confirmed directly in this pass's own test output (`"gross_revenue":
+500.0000`, unquoted). That is exactly the hazard `packages/types/scalars.ts` documents
+for un-cast table columns: `JSON.parse()` on the client collapses it to an IEEE-754
+double, violating `CLAUDE.md` rule 5/AD-010. Fixed in the same migration family
+(`p9_8_get_daily_revenue_summary_text_cast_money`) by casting every money field to
+`::text` before it enters the `jsonb_build_object()` call. Re-verified live:
+`jsonb_typeof(...->'gross_revenue')` reads `"string"` after the fix, `"number"` would
+have been the un-cast state.
+
+A second refinement, same family (`p9_8_get_daily_revenue_summary_default_today`):
+`p_date` given a `default null`, resolving server-side to "today in the organization's
+own timezone" when omitted. Without this the mobile client would have had to compute
+"today" itself and would naturally reach for the device's local date — precisely what
+§13 forbids for accounting boundaries. Confirmed the signature stayed a true `CREATE OR
+REPLACE` (same two positional parameter types, `pg_proc` shows exactly one function named
+`get_daily_revenue_summary`, `pronargs = 2`) rather than repeating the `record_payment()`
+overload lesson from 2026-08-24 (that one added a genuinely new parameter and silently
+created a second overload).
+
+**Verified live, in rolled-back transactions, not assumed:**
+- Timezone day-boundary correctness: a ticket completed at `22:59 UTC` (`23:59` Lagos)
+  correctly counted for that Lagos calendar day; a second ticket completed one hour later
+  (`23:30 UTC` = `00:30` Lagos, the next day) correctly counted for the *next* day, along
+  with a refund at the same instant — reproducing §81's own required test case
+  ("23:30 local ⇒ current reporting day; 00:30 local ⇒ next reporting day") almost
+  exactly. A third day with no events returned all zeros.
+- Authorization: a `driver`-role caller refused (`insufficient_role`); an owner querying
+  a real branch belonging to a *different* tenant returned an all-zero report rather than
+  another tenant's data — traced to `has_branch_access()`'s live body, which bypasses
+  entirely for `owner`/`admin` regardless of the target branch's actual tenant (the same
+  precedented shape every other `has_branch_access()` call in this schema has); the
+  RPC's own `tenant_id = current_tenant_id()` filter on every sum is what actually
+  prevents a cross-tenant leak, and did — confirmed no data returned, not wrong data.
+- The `::text` fix, independently re-confirmed via `jsonb_typeof`.
+
+### Client code and docs
+
+`packages/types/reporting.ts` (`DailyRevenueSummary`), `packages/validation/reporting.ts`
+(`dailyRevenueSummarySchema` — `gross_revenue`/`recognized_refunds`/`gross_collected`/
+`refunds_paid` via `nonNegativeMoneySchema`, `net_revenue`/`net_collected` via
+`signedMoneySchema` since a day with a refund but no matching same-day sale or collection
+legitimately goes negative — confirmed by the day-16 test scenario above,
+`net_collected = -100`), `packages/api/queries/reporting.ts` (`getDailyRevenueSummary()`
+— this package's first RPC-backed *read*; explained in the module header why it lives in
+`queries/` rather than `mutations/`), `packages/hooks/index.ts`
+(`useDailyRevenueSummary`), `apps/mobile/app/reports/index.tsx` (new screen — one card
+per branch, revenue and cash sections, explicit copy stating why COGS/gross-profit/margin
+are absent rather than omitting them silently), linked from the catalog screen
+(`apps/mobile/app/index.tsx`).
+
+Docs: `docs/API-CONTRACT.md` §2 (new RPC row), `docs/SCHEMA-REFERENCE.md` (`tickets.
+completed_at`), `docs/STATE-MACHINES.md` §1 and §6 (the stamp, on both entry paths),
+`BACKEND_ROADMAP.md` (P5.8 and P9.8 rows).
+
+**Verified:**
+- `npm run typecheck --workspace apps/mobile` → exit 0.
+- `npm run typecheck` (root, all workspaces) → exit 0.
+- `npm run lint --workspace apps/mobile` → exit 0, zero warnings.
+- `npx eslint packages --max-warnings=0` → exit 0.
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed.
+- `npx expo export --platform web` → 0 errors, 1033 modules bundled (was 1030).
+- **Not verified:** an interactive click-through — no device/browser tooling in this
+  environment.
+
+Not committed — held per instruction, alongside the P9.7 expense-capture work above.
+
+---
+
 ## 2026-08-28 · P9.7 expense capture — a real `expenses_insert` authorization gap found and fixed
 
 Resumed from the 2026-08-26 finance slice (cash sessions + payment entry). First
@@ -2378,6 +2528,47 @@ npm run typecheck --workspace apps/mobile  -> exit 0
 npm run lint --workspace apps/mobile       -> exit 0
 .venv/Scripts/python.exe -m pytest -q      -> 12 passed   (from repo root)
 ```
+
+---
+
+## 2026-08-22 · P9.6 follow-up — driver assignment ("Assign a driver") built
+**(backfilled 2026-08-28 — this entry was never written at the time; found while
+resuming work and cross-checking `BACKEND_ROADMAP.md` against the live repository)**
+
+Commit `5b95770e`. Closed the one gap P9.6's own write-up named explicitly: "No 'assign
+driver' control yet — needs a driver-picker read path that doesn't exist." The write RPC
+(`transition_delivery('assigned', driverId)`) was already live and already
+smoke-tested (`scripts/smoke-signed-in.mjs`: "transition_delivery(assigned, non-driver
+assignee) is REFUSED") since P9.6's original delivery-write-path work — this pass added
+only the read path the picker needed and the UI around it.
+
+**New:** `packages/types/staff.ts` (`Driver`), `packages/validation/staff.ts`
+(`driverSchema`), `packages/api/queries/staff.ts` (`listDrivers()` — every active tenant
+member holding the `driver` role, read via `user_roles` embedded through
+`profiles!user_roles_profile_id_fkey!inner` and `roles!inner` — the explicit FK name is
+required because `user_roles` carries three separate foreign keys into `profiles`
+(`profile_id`, `created_by`, `deleted_by`), so the bare embed is ambiguous and PostgREST
+refuses it), `packages/hooks/index.ts` (`useDrivers`),
+`apps/mobile/components/DriverPicker.tsx` (collapsed-by-default list, matching
+`AdjustStockAction`'s pattern — fetches only once a dispatcher actually opens it, not on
+every render of a pending delivery's card). **Edited:**
+`apps/mobile/components/DeliveryActions.tsx` — a `pending` delivery now renders
+`DriverPicker` instead of a dead end.
+
+Deliberately tenant-wide rather than filtered to the delivery's own branch: the RPC
+itself checks nothing narrower than tenant + `driver` role for `p_driver_id`, so
+filtering client-side would invent a rule the database does not enforce.
+
+**Verified at the time (inferred from the commit landing clean in a repository whose
+gates were green before and after — not independently re-run then).** **Re-verified live
+today, 2026-08-28**, as part of confirming this backfill before writing it: `npm run
+typecheck` (root, all workspaces) and `npm run lint --workspace apps/mobile` both exit 0
+against the current tree, which includes this component unchanged since 2026-08-22.
+
+Also corrected `BACKEND_ROADMAP.md`'s P9.6 row, which still read "No 'assign driver'
+control yet" six days after this shipped — the same "backend/feature built, roadmap
+frozen, never verified" staleness pattern this session has caught repeatedly elsewhere
+(P8.1, P4.3/P4.5, P5, P9.7's own missing log entry two entries above this one).
 
 ---
 

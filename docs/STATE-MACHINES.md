@@ -32,7 +32,7 @@ draft ──► submitted ──► confirmed ──► scheduled ──► in_p
 | scheduled | in_production | owner, admin, branch_manager, baker | **Not enforced** — see note below | Via `update_ticket(p_status := 'in_production')` |
 | in_production | ready | owner, admin, branch_manager, baker | **Not enforced** — see note below | Via `update_ticket(p_status := 'ready')`. Finished stock available |
 | ready | delivered | owner, admin, branch_manager, cashier | `fulfilment_type = 'pickup'`, **or** the linked `deliveries` row for this ticket has `status = 'delivered'` | Via `update_ticket(p_status := 'delivered')` |
-| delivered | completed | owner, admin, branch_manager, cashier | — | Sale stock movement written |
+| delivered | completed | owner, admin, branch_manager, cashier | — | Sale stock movement written; `completed_at` stamped (added 2026-08-28, P9.8 — the reporting-layer revenue-recognition timestamp, see `SCHEMA-REFERENCE.md` §4) |
 | any non-terminal | cancelled | owner, admin, branch_manager | `cancelled_reason` provided; if `amount_paid > 0`, a matching `refunds` total must already exist | Unpaid invoice voided. ("Reserved stock released" was in earlier drafts — **there is no reservation mechanism in the schema**; no table, column, or `stock_movements.reason` implements it. Treat reservations as unspecified, not as an existing behaviour.) |
 | cancelled | archived | owner, admin, branch_manager | — | — |
 
@@ -358,7 +358,10 @@ It then performs the same side effects the normal lifecycle would have: recomput
 (`confirm_ticket()`'s insert, same `ON CONFLICT (ticket_id)` upsert), and writes the sale
 stock movement (`complete_ticket()`'s mechanism) — **against the driver trip's own
 warehouse**, not the branch's default, since the goods were in the vehicle's custody per
-`verify_trip_loading()`, not on the branch shelf.
+`verify_trip_loading()`, not on the branch shelf. `completed_at` is stamped here too — the
+guard trigger's revenue-recognition stamp (§1, added 2026-08-28) fires on `status =
+'completed'` regardless of which of the two entry paths reached it, so a field sale
+counts toward `get_daily_revenue_summary()` exactly like a normal completion.
 
 **Guard mechanism**: `guard_ticket_status_transition()` gained `'completed'` as a legal
 target from `'draft'`, gated by a transaction-local flag
