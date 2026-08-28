@@ -1,5 +1,56 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-006 RESOLVED — offline sync per-entity conflict strategy (2026-08-28)
+
+The user supplied the architecture decision directly (owner-level call, not guessed).
+Recorded as **AD-021** in `ARCHITECTURE_DECISIONS.md`: per-entity conflict strategy for
+tickets (event/state-machine), ticket item edits in the mutable window
+(`base_revision`-checked optimistic concurrency), inventory (append-only, never a
+synchronized absolute quantity), production (event/state-machine), payments/expenses
+(append-only + explicit reversal), customers (`base_revision`-checked), catalog
+(server-authoritative, no offline write in first scope). `sync_conflicts` decided as a
+**server table**, authoritative — this corrects `docs/OFFLINE-SYNC-MODEL.md` §10, which
+previously said the opposite. `operation_type` is a finite allowlist dispatched to
+registered handlers, never arbitrary SQL.
+
+**Reconciled, not silently accepted:** the supplied decision used "Tickets" and "Orders"
+as two separate entities. BakeFlow has no `orders` table — AD-011 already settled that
+Order means Ticket. Mapped both subsections onto the single `tickets`/`ticket_items`
+pair (creation/transitions vs. in-window item edits) and renamed operation types
+`ticket.*`, never `order.*`. Flagged explicitly in AD-021's text rather than assumed
+silently.
+
+Updated: `BLOCKERS.md` (BLOCKER-006 → RESOLVED), `ARCHITECTURE_DECISIONS.md` (new
+AD-021), `docs/OFFLINE-SYNC-MODEL.md` (§10 corrected, §21/§33 annotated),
+`BACKEND_ROADMAP.md` (P3.7 → UNBLOCKED, NOT STARTED; Current State summary; dependency
+graph; B-ID crosswalk table; the P4.4/6.x blocker table; P10.8).
+
+**This is a decision, not the build.** P3.7 is unblocked to start from AD-021, but the
+applier/dispatch/`sync_conflicts` migration is separate, substantial work — not done in
+this pass.
+
+**Correction, same day, after the user asked to re-check this work for quality and
+security:** the first pass of this entry (and `BLOCKERS.md`/`BACKEND_ROADMAP.md`) cited
+`SCHEMA-REFERENCE.md` §12's claim that `process_sync_batch_context_validated()` is a stub
+without re-verifying it live — exactly the mistake this project's own discipline exists
+to prevent. Read live via `mcp__supabase__execute_sql`: it is **not** a stub. Migration
+`20260810182203` (the same one AD-006 already cites as its own evidence) implemented real
+idempotency, per-operation authorization (`is_member_of()`/`is_authorized_for_branch()`,
+both re-read and confirmed correct, matching AD-008's branch-before-owner order), and
+stale-`base_revision` conflict detection into `sync_operations`. `SCHEMA-REFERENCE.md`
+§12's claim predated that migration's own audit note by 18 days and was never corrected —
+a genuine, pre-existing documentation staleness, not something introduced today. What
+*is* still missing, confirmed live: `sync_conflicts` doesn't exist, nothing writes to
+`sync_changes` or increments revision, there's no per-entity dispatch, no pull RPC, and
+`sync_operations.operation_type`'s CHECK only allows six coarse values, not AD-021's
+fine-grained allowlist. Also corrected in the same pass: `sync_devices` genuinely has no
+`tenant_id`/`branch_id` (confirmed live, matches AD-005 — `SCHEMA-REFERENCE.md` and
+`API-CONTRACT.md` both listed stale columns/signatures for it and `sync_validate_device()`).
+All five files touched by the original BLOCKER-006 pass, plus `API-CONTRACT.md`, were
+corrected. Full trace: IMPLEMENTATION_LOG.md 2026-08-28.
+
+Full trace: IMPLEMENTATION_LOG.md 2026-08-28.
+
 ## ✅ P11.3 DELIVERED — frontend unit-test infrastructure (2026-08-28)
 
 Continued past P9.8. Surveyed the roadmap for remaining unblocked work: P9.2/P9.3

@@ -196,3 +196,109 @@ deferred capabilities remain dormant and are not exposed by MVP workflows.
 	payments minus cash expenses. Non-cash expenses do not reduce expected drawer cash.
 - Customer balances and ledger views are derived from tickets, invoices, and payments;
 	they are not duplicated in a second source-of-truth ledger.
+
+## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED
+Resolves BLOCKER-006. Completes AD-009's deferred "per-entity application and conflict
+semantics" and reaffirms AD-006 (operation-authoritative routing) rather than replacing it.
+**Last-write-wins remains prohibited everywhere**, per `OFFLINE-SYNC-MODEL.md` §32/§62.
+
+**Terminology correction applied to the source decision.** The decision as given uses
+"Tickets" and "Orders" as two separate entities with two separate strategies. BakeFlow has
+no `orders` table — AD-011 is explicit that Order means Ticket and forbids the word in code.
+Read together, the two subsections describe two strategies for the **same** `tickets`/
+`ticket_items` entity pair, not two entities: ticket **creation and lifecycle transitions**
+are event/state-machine-validated (the "Tickets" strategy below), while **in-place edits to
+an existing ticket's items/amounts during the window `STATE-MACHINES.md` already allows**
+(confirmed/scheduled/in_production — see `TESTING-STRATEGY.md` §6) are revision-checked (the
+"Orders" strategy below, renamed). Operation types are named accordingly — `ticket.create`,
+`ticket.transition`, `ticket.item_update`, never `order.*`.
+
+**Per-entity strategy:**
+
+- **Tickets** — operation-based + server state-machine validation. Creation is idempotent
+	on `operation_id`. `tenant_id`/`branch_id` are immutable on the operation and route
+	independently of the actor's current active organization (AD-006, restated). Lifecycle
+	transitions are validated against `guard_ticket_status_transition()`; an invalid or stale
+	transition is a conflict, never a silent overwrite.
+- **Ticket item/amount edits within the permitted mutable window** — optimistic concurrency
+	via `base_revision`. No automatic field-level merge in MVP: `base_revision != current
+	revision` is always a conflict, never a merge attempt.
+- **Inventory** — append-only domain operations (`inventory.adjust`, `.receive`, `.consume`,
+	`.waste`, `.transfer`), never a synchronized absolute quantity. Concurrent legitimate
+	adjustments both apply; only a server-side rule violation (e.g. resulting negative stock)
+	becomes a conflict/rejection.
+- **Production** — operation-based + state-machine validation, same shape as tickets
+	(`production.start`, `.complete`, `.cancel`, `.record_output`, `.record_waste`), validated
+	against `guard_production_batch_transition()`.
+- **Financial records (payments, expenses)** — append-only + compensating operation.
+	Creation is idempotent; posted records are immutable; corrections are explicit reversal
+	operations (`payment.reverse`, `expense.reverse`), never an in-place amount edit.
+- **Customers** — optimistic concurrency via `base_revision`, explicit conflict on mismatch,
+	no automatic field-level merge in MVP.
+- **Products/catalog** — server-authoritative; offline read/cache only. Offline catalog
+	create/edit is out of first sync scope. Historical ticket items keep their frozen price
+	(AD-017) regardless of later catalog price changes.
+
+**`sync_conflicts` is a server table, authoritative — not only a client projection.**
+This **corrects** `OFFLINE-SYNC-MODEL.md` §10, which previously said a conflict is recorded
+only as `sync_operations.status = 'CONFLICT'` with no dedicated table and explicitly said a
+server table was "not required." That guidance is superseded: a conflict must survive device
+loss, reinstall, local DB corruption, and an organization switch, and must remain visible to
+another authorized device or an administrator. Minimum contract: `id`, `tenant_id`,
+`branch_id`, `entity_type`, `entity_id`, `operation_id`, `actor_id`, `device_id`,
+`operation_type`, `operation_payload` (the original attempted operation, preserved —
+never discarded in favour of a message string), `base_revision`, `current_revision`,
+`conflict_code`, `conflict_status` (`OPEN | RESOLVED | DISMISSED`), `created_at`,
+`resolved_at`, `resolved_by`, `resolution_type`, `resolution_payload`. The client may keep a
+local projection for UX; it is not the record of truth.
+
+**`operation_type` is a finite, allowlisted set of domain operations, dispatched to
+registered handlers — never arbitrary CRUD/SQL.** Unknown types are rejected outright. The
+payload is typed domain data (`{"quantity": 5, "reason": "waste"}`), never an instruction
+(`{"sql": "UPDATE ..."}`). The envelope's authoritative fields — `operation_id`,
+`operation_type`, `tenant_id`, `branch_id`, `entity_id`, `base_revision`,
+`device_created_at` — reuse the immutable-context fields AD-007 already established; this is
+not a second competing routing model.
+
+**Conflict outcomes:** `APPLIED`, `DUPLICATE`/`ALREADY_APPLIED`, `REJECTED`, `CONFLICT`,
+`RETRYABLE_FAILURE` (transient/network — distinct from a business conflict). A `CONFLICT`
+operation is preserved and stops retrying automatically; it does not disappear and does not
+loop.
+
+**Organization routing and the authorization chain apply to every entity above, not only
+tickets.** AD-006's rule — an operation's immutable `tenant_id`/`branch_id` decides its
+destination, never the actor's active organization, never the device — governs inventory,
+production, financial, customer, and catalog operations identically. Re-verified live
+2026-08-28 rather than assumed: `sync_devices` carries no `tenant_id`/`branch_id` at all
+(AD-005), so per-operation authorization is the only mechanism that can exist. The chain is
+`is_member_of(actor, operation.tenant_id)` (live membership, active profile) then, where a
+branch applies, `is_authorized_for_branch()` — which checks the branch belongs to that same
+tenant **before** any owner/admin shortcut, matching AD-008. Both functions were read live
+and are correct. Conflict *resolution* must not weaken this chain: resolving or dismissing a
+conflict is itself an operation against the entity's tenant/branch and needs the same
+authorization, not a lesser one — this was implicit in the source decision and is made
+explicit here.
+
+**`sync_conflicts` is tenant-owned data and gets RLS like every other table (CLAUDE.md rule
+4), not a special case.** Not stated by the source decision, added here because it is
+non-negotiable project-wide, not optional per table: RLS enabled, policies scoped by
+`tenant_id` (and `branch_id` where the underlying entity is branch-scoped), `tenant_id` set
+explicitly on insert. Visibility should follow the same membership the entity itself would —
+an actor sees a conflict on an operation they could see the entity for, not every conflict
+in the tenant by default; the exact role gate for viewing/resolving/dismissing (owner/admin
+only, or wider) is implementation detail, not decided here, but "RLS exists and is
+tenant-scoped" is not optional and must not be deferred to "later."
+
+**Not decided by this entry — implementation, not architecture:** exact `sync_conflicts`
+column types/indexes and RLS role gate, the final operation-type allowlist beyond the
+entities above, and the pull-RPC contract. Re-verified live 2026-08-28 rather than trusting
+prior documentation: `process_sync_batch_context_validated()` is **not** a stub — migration
+`20260810182203` (the same one AD-006 already cites) implemented real idempotency,
+authorization, and stale-revision conflict detection; only the pull RPC and the actual
+per-entity write to `sync_changes`/business tables remain unbuilt
+(`SCHEMA-REFERENCE.md` §12, corrected in the same pass as this entry). One further
+reconciliation is now open, not decided here: `sync_operations.operation_type`'s live CHECK
+allows only six coarse values (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION`), not
+this decision's fine-grained allowlist (`ticket.create`, `inventory.adjust`, etc.) — whether
+that becomes a new column or a widened CHECK is P3.7 implementation work. Do not re-litigate
+the conflict model itself while building any of this.

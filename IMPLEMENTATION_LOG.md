@@ -5,6 +5,160 @@ Never record planned work here.
 
 ---
 
+## 2026-08-28 · BLOCKER-006 resolution corrected — sync gateway is not a stub
+
+The user asked to re-check the BLOCKER-006 resolution below for quality and security
+before treating it as final. Re-reading my own AD-021 text against the actual gateway
+authorization chain (§10/§11 of the original supplied decision — org routing must be
+universal, and conflict handling must never weaken the actor/device/membership/branch
+chain), I found I had repeated `SCHEMA-REFERENCE.md` §12's claim that
+`process_sync_batch_context_validated()` is a stub without independently checking it
+live, in five files (`ARCHITECTURE_DECISIONS.md`, `BLOCKERS.md`, `BACKEND_ROADMAP.md`,
+`IMPLEMENTATION_LOG.md`, `CURRENT_TASK.md`) — exactly the failure mode this project's own
+discipline exists to prevent ("query the live database directly... the live database
+outranks every document in this repo").
+
+### What was verified live, via `mcp__supabase__execute_sql`
+
+- `select column_name... from information_schema.columns where table_name='sync_devices'`
+  → `id, user_id, device_label, platform, app_version, last_seen_at, revoked_at,
+  created_at, updated_at`. **No `tenant_id`, no `branch_id`** — matches AD-005
+  (IMPLEMENTED) exactly; `SCHEMA-REFERENCE.md`'s device column list and cross-org-binding
+  FK claim were both stale.
+- `select table_name from information_schema.tables where table_name like 'sync_%'` →
+  `sync_changes, sync_devices, sync_operations`. `sync_conflicts` confirmed **not** to
+  exist, as already documented.
+- `pg_get_functiondef` on `sync_validate_device` → returns `uuid` (the owning `user_id`),
+  checks device ownership (`d.user_id = auth.uid()`) and `revoked_at IS NULL` only. Does
+  **not** check `user_roles` membership — `SCHEMA-REFERENCE.md`'s §47 claim was wrong
+  about which function does this.
+- `pg_get_functiondef` on `process_sync_batch` → delegates to
+  `process_sync_batch_context_validated(p_device_id, p_operations, v_actor)` after
+  resolving the actor via `sync_validate_device()`.
+- `pg_get_functiondef` on `process_sync_batch_context_validated` → **fully implemented**,
+  not a stub: extracts each operation's immutable context; on `operation_id` replay,
+  refuses (`42501`) a mismatch in `tenant_id`/`actor_id`/`device_id`/`entity_id`/
+  `operation_type` rather than returning the stored `result` (fails closed, does not leak
+  cross-tenant); calls `is_member_of(p_actor, v_tenant)` then, for a branch-scoped
+  operation, `is_authorized_for_branch(p_actor, v_tenant, v_branch)`; compares
+  `v_base_rev` against `max(sync_changes.revision)` for the entity and marks `CONFLICT`
+  on staleness; inserts into `sync_operations` as `PENDING`/`CONFLICT`. Does **not** write
+  `sync_changes`, apply any business-table mutation, or increment revision — that part of
+  the "stub" characterization was directionally right, just attached to the wrong
+  function.
+- `pg_get_functiondef` on `is_member_of`/`is_authorized_for_branch` → both correct:
+  `is_member_of` requires a live (`deleted_at IS NULL`) `user_roles` row and an `active`,
+  non-deleted profile; `is_authorized_for_branch` checks the target branch's own
+  `tenant_id` matches **before** consulting any owner/admin shortcut — the exact ordering
+  AD-008 requires, confirmed live rather than assumed from the AD's own text.
+- `pg_get_constraintdef` on `sync_operations` → `status` CHECK is genuinely only
+  `PENDING/APPLIED/REJECTED/CONFLICT` (no `ALREADY_APPLIED` — that part of
+  `SCHEMA-REFERENCE.md`'s "what's missing" list was accurate); `operation_type` CHECK is
+  genuinely only six coarse values, **not** AD-021's fine-grained allowlist — a real,
+  previously-unnoticed reconciliation gap between AD-021 and the live schema.
+- `select count(*) from sync_operations` / `sync_changes` → both zero, consistent with
+  "nothing has ever been pushed through this," not "nothing can succeed."
+- `list_migrations` → `20260810182203_multiorg_08_operation_authoritative_sync_processor`
+  is the exact migration AD-006 already cites as ITS OWN implementation evidence,
+  confirming `SCHEMA-REFERENCE.md` §12's stub claim was stale from the day it was written,
+  not something that regressed later.
+
+### Corrections made
+
+`docs/SCHEMA-REFERENCE.md` §12 — rewrote the "gateway is non-functional" callout to
+describe what the live function actually does and does not do; corrected the
+`sync_devices` column list, the `sync_changes`/`sync_operations` descriptions, the
+`process_sync_batch_context_validated()` and `sync_validate_device()` signatures, the
+§47/§21 rows in the "what's provided" table, the tenant-binding idempotency bullet (fails
+closed, not leaks), and added a new bullet for the `operation_type` granularity gap.
+`docs/API-CONTRACT.md` — corrected `sync_validate_device`'s documented return type.
+`ARCHITECTURE_DECISIONS.md` AD-021 — added the explicit organization-routing/authorization-
+chain restatement (applies to every entity, not just tickets) and the `sync_conflicts`
+RLS requirement (CLAUDE.md rule 4, not stated by the source decision), corrected the
+"not decided by this entry" section. `BLOCKERS.md` BLOCKER-006 and `BACKEND_ROADMAP.md`
+P3.7 — corrected to describe the narrower, more-accurate remaining gap. `CURRENT_TASK.md`
+— added a correction note in place (it is a rolling doc, not append-only).
+
+**Net effect on the decision itself:** none — AD-021's per-entity strategy, the
+`sync_conflicts`-as-server-table decision, and the `ticket.*`-not-`order.*` naming all
+stand unchanged. What changed is the accuracy of the surrounding "current state of the
+world" claims, and P3.7's remaining build is now known to be smaller than first stated —
+the gateway's authorization/idempotency/conflict-detection layer is real and live-verified
+sound; only per-entity application (`sync_changes` emission, business-table writes,
+revision increment, handler dispatch) and the pull RPC remain unbuilt.
+
+**Verified:** `pytest -q` → 12 passed, unaffected by documentation-only changes. No
+migration, no code change — this pass corrected documentation to match already-live
+database state; nothing in the database was touched.
+
+## 2026-08-28 · BLOCKER-006 resolved — offline sync per-entity conflict strategy (AD-021)
+
+Asked the user which open blocker to work next; surveyed the three genuinely open ones
+(BLOCKER-006, BLOCKER-010(c), BLOCKER-018) and reported them. The user supplied the
+architecture decision for BLOCKER-006 directly — an owner-level call on conflict
+strategy, not something to guess per CLAUDE.md's Blocker rule.
+
+### What was recorded, and where
+
+**`ARCHITECTURE_DECISIONS.md`** — new **AD-021**. Per-entity conflict strategy: tickets
+(creation/lifecycle transitions) use operation-based + server state-machine validation;
+ticket item/amount edits within the existing mutable window
+(`STATE-MACHINES.md` §6 — confirmed/scheduled/in_production) use
+`base_revision`-checked optimistic concurrency with no field-level merge; inventory uses
+append-only domain operations (`inventory.adjust`/`.receive`/`.consume`/`.waste`/`.transfer`)
+and never synchronizes an absolute quantity; production mirrors tickets
+(event/state-machine); payments/expenses are append-only with explicit reversal
+operations, never an in-place amount edit; customers use `base_revision`-checked
+optimistic concurrency; products/catalog stay server-authoritative with offline
+read/cache only, no offline write in the first sync scope. `sync_conflicts` decided as a
+**server table**, authoritative, with a minimum column contract that preserves the
+original `operation_payload` rather than discarding it for a message string.
+`operation_type` is a finite allowlist dispatched to registered handlers; unknown types
+are rejected; payloads carry typed domain data, never SQL/imperative instructions.
+Last-write-wins remains prohibited everywhere, unchanged from prior decisions.
+
+**Terminology reconciliation, done explicitly rather than silently.** The decision as
+supplied used "Tickets" and "Orders" as two separate entities with two separate
+strategies. BakeFlow has no `orders` table — AD-011 already settled that Order means
+Ticket and forbids the word in code/operation names. Read the two subsections as
+describing the same `tickets`/`ticket_items` pair (event-based creation/transitions vs.
+revision-checked in-window item edits), not two entities, and named operation types
+`ticket.*` throughout, never `order.*`. This reconciliation is recorded in AD-021's own
+text, not just made and left implicit, so it can be corrected if the reading is wrong.
+
+**`docs/OFFLINE-SYNC-MODEL.md`** — §10 **corrected**, not just annotated: it previously
+stated `sync_conflicts` was "a local client projection... not required to exist as a
+server table," the opposite of AD-021's decision. Replaced with the server-table
+contract. §21 gained the resolved per-entity strategy list. §33 (ticket event semantics)
+gained a note distinguishing the event-only creation/transition rule from the separate,
+narrower in-window revision-checked item-edit case, so a future reader doesn't read §33
+as forbidding all ticket mutation.
+
+**`BLOCKERS.md`** — BLOCKER-006 marked ✅ RESOLVED with the full decision summary, the
+terminology reconciliation, and an explicit "what this does not resolve" section pointing
+at `SCHEMA-REFERENCE.md` §12's existing finding that the sync gateway is deployed but
+non-functional (`process_sync_batch_context_validated()` is a stub, no `sync_conflicts`
+table exists yet, no pull RPC exists at all) — so the next reader doesn't mistake a
+decided architecture for a working implementation.
+
+**`BACKEND_ROADMAP.md`** — P3.7 status changed from BLOCKED to **UNBLOCKED, NOT
+STARTED** in five places: the Current State summary, the dependency graph, the legacy
+B-ID crosswalk table (B5 row), the P4.4/6.x blocker table, and P10.8. Each edit states
+explicitly that P3.7's actual build (allowlisted handler dispatch, the `sync_conflicts`
+migration, tenant-bound idempotency, payload-hash immutability, `client_sequence`/
+`depends_on_operation_id`, `ALREADY_APPLIED` status, and the pull RPC) is separate,
+substantial follow-on work, not completed by this decision.
+
+**Verified:** no code or live database was touched — this is a documentation/decision
+pass. Re-read `docs/API-CONTRACT.md` and `docs/SCHEMA-REFERENCE.md` §12 before writing,
+to ground the "what's missing" claims in the current live-schema findings already on
+record rather than re-asserting them from memory.
+
+**Not done in this pass, deliberately:** no migration, no `sync_conflicts` table, no
+handler dispatch code. AD-021 itself says implementation "follows directly... do not
+re-litigate the conflict model while building them" — recording the decision and
+building the gateway are different-sized tasks, and the second was not requested here.
+
 ## 2026-08-28 · P11.3 delivered — frontend unit-test infrastructure (Jest/jest-expo)
 
 Continuing past P9.8, per "continue with the whole implementation unless something

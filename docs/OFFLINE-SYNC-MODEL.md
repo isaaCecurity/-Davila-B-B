@@ -338,10 +338,20 @@ device_context
 ```
 
 The exact local schema may differ by implementation, but these responsibilities must remain clear.
-`sync_conflicts` is a local client projection for user-facing conflict handling; it is
-not required to exist as a server table. On the server, a conflict is recorded on the
-corresponding `sync_operations` row with status `CONFLICT`, `conflict_details`, and
-diagnostic error metadata.
+
+**Corrected 2026-08-28 (AD-021, resolving BLOCKER-006).** `sync_conflicts` IS a
+server-side table, authoritative — not only a client projection, and not merely
+`sync_operations.status = 'CONFLICT'` with a message string. A conflict must survive
+device loss, reinstall, local database corruption, and an organization switch, and must
+remain visible to another authorized device or an administrator; a client-only record
+cannot guarantee that. Minimum server contract: `id`, `tenant_id`, `branch_id`,
+`entity_type`, `entity_id`, `operation_id`, `actor_id`, `device_id`, `operation_type`,
+`operation_payload` (the original attempted operation, preserved for audit/recovery —
+never discarded in favour of a human-readable message alone), `base_revision`,
+`current_revision`, `conflict_code`, `conflict_status` (`OPEN | RESOLVED | DISMISSED`),
+`created_at`, `resolved_at`, `resolved_by`, `resolution_type`, `resolution_payload`. The
+client may still keep a local projection of server conflicts for UX; it is not the
+record of truth. See AD-021 in `ARCHITECTURE_DECISIONS.md` for the full decision.
 
 ---
 
@@ -667,6 +677,20 @@ idempotency requirements
 Do not assume all four tables use the same conflict strategy.
 
 The domain determines the synchronization behavior.
+
+**Resolved 2026-08-28 (AD-021, BLOCKER-006).** Per-entity strategy for the initial syncable
+scope: tickets (creation + lifecycle transitions) — operation-based, state-machine
+validated; ticket item/amount edits within the mutable window (`STATE-MACHINES.md` §6) —
+`base_revision`-checked optimistic concurrency, no field-level merge; inventory — append-only
+domain operations (`inventory.adjust`/`.receive`/`.consume`/`.waste`/`.transfer`), never a
+synchronized absolute quantity; production — operation-based, state-machine validated;
+payments/expenses — append-only + explicit reversal, never an in-place amount edit;
+customers — `base_revision`-checked optimistic concurrency; products/catalog —
+server-authoritative, offline read/cache only, no offline create/edit in first scope.
+`operation_type` is a finite allowlist of domain operations (`ticket.create`,
+`ticket.transition`, `ticket.item_update`, `inventory.adjust`, `production.start`,
+`payment.reverse`, etc. — never `order.*`; AD-011 forbids "order" naming in code) dispatched
+to registered handlers; unknown types are rejected. Full decision: AD-021.
 
 ---
 
@@ -1071,6 +1095,14 @@ CREATE_CORRECTION_TICKET
 referencing the original.
 
 This makes ticket synchronization significantly safer.
+
+**Note (AD-021):** this event-only rule governs ticket *creation and lifecycle
+transitions*. It does not forbid the separate, narrower case of editing an existing
+ticket's items/amounts while `STATE-MACHINES.md` §6 still permits mutation (confirmed,
+scheduled, in_production) — that case uses `base_revision`-checked optimistic concurrency
+instead (§21, AD-021), not an event, and not a field-level merge. Once a ticket leaves the
+mutable window, no further edit path exists offline or online; only a correction ticket
+does.
 
 ---
 

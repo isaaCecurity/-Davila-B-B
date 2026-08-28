@@ -488,19 +488,80 @@ Core rule 8 in `CLAUDE.md` forbids hard-deleting business data. The live mechani
 
 > **Policy resolved 2026-08-10:** offline-first is the product rule; the old `API-CONTRACT.md` §6 prohibition is withdrawn. See `docs/OFFLINE-SYNC-MODEL.md` for the full protocol.
 >
-> ### ⚠️ The sync gateway is deployed but non-functional
+> ### Corrected 2026-08-28, while recording AD-021 (BLOCKER-006): the "stub" claim below was stale, not current
 >
-> **`process_sync_batch()` cannot succeed.** It performs its context validation correctly — resolves the device via `sync_validate_device()`, rejects a device whose tenant differs from the caller's, and walks the batch rejecting any operation whose payload smuggles a different `tenant_id` or `branch_id`. It then delegates to `process_sync_batch_context_validated()`, **which is a stub whose entire body raises** `'sync worker migration requires deployment of the existing sync operation implementation'`.
+> This section previously said `process_sync_batch_context_validated()` was a stub that
+> raised unconditionally on every call, and that claim was repeated without re-verification
+> in several other documents while resolving BLOCKER-006 today. **Re-read live from
+> `pg_proc`, it is not a stub.** Migration `20260810182203_multiorg_08_operation_
+> authoritative_sync_processor` — the same migration AD-006 already cites as its own
+> IMPLEMENTED evidence — replaced the stub body a full 18 days before this section's own
+> claim was written, and nothing since ever corrected this section to match. The two
+> documents contradicted each other about the identical function the whole time.
 >
-> So every offline push fails unconditionally. The operation processor — idempotency lookup, revision checks, domain mutation, `sync_changes` emission — **does not exist in the database**. Migration `20260809194312_enforce_multi_organization_device_context` wrapped the gateway for multi-organization safety but its replacement worker was never deployed. `sync_operations` holds zero rows, consistent with nothing ever having been processed.
+> **What the live function actually does**, confirmed by reading its body: authenticates
+> the caller and resolves the device via `sync_validate_device()` (ownership + not-revoked
+> only — see below); for each operation, looks up `sync_operations` by `operation_id` and,
+> if found, refuses a replay whose immutable context (`tenant_id`/`actor_id`/`device_id`/
+> `entity_id`/`operation_type`) differs from the stored row rather than silently returning
+> another tenant's or another operation's result; authorizes the operation's own
+> `tenant_id`/`branch_id` (never the caller's active organization) via `is_member_of()` and
+> `is_authorized_for_branch()` — both re-read live and confirmed to match AD-008's
+> branch-before-owner ordering; compares `base_revision` against the current max
+> `sync_changes.revision` for that entity and records `CONFLICT` rather than applying a
+> stale write; then inserts the operation into `sync_operations` as `PENDING` or
+> `CONFLICT`. `sync_operations` holds zero rows because nothing has been pushed through it
+> yet, not because the function cannot succeed.
 >
-> This is the single largest gap between the specifications and the deployed system: offline operation is described throughout the docs as a core product differentiator, and none of it can currently run.
+> **What is still genuinely missing — this is the real, narrower P3.7 gap**: nothing
+> writes to `sync_changes`, nothing applies the operation to a business table, no revision
+> is ever incremented, and there is no dispatch to a per-entity handler at all — the
+> function only *records* a validated, conflict-checked intent. This matches AD-009's
+> gateway boundary exactly ("authenticates, authorizes, preserves context, enforces
+> idempotency, and records operations... does not write business tables"). AD-021 (2026-08-28)
+> decided the per-entity handler contract this gap needs; building the handlers,
+> `sync_changes` emission, and revision increment is P3.7's remaining, unstarted work.
+>
+> **One further, real gap surfaced by this re-read**: `sync_operations.operation_type` is
+> constrained to six coarse values (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION` —
+> confirmed via `pg_constraint`), not the fine-grained domain-operation allowlist AD-021
+> defines (`ticket.create`, `inventory.adjust`, etc.). There is no live column for the
+> fine-grained type yet. AD-021 did not decide how to reconcile this — a new column, or
+> widening this CHECK — and that decision is still open for P3.7 implementation.
 
-- **`sync_devices`** — `tenant_id`, `user_id`, `branch_id`, `device_label`, `platform`, `app_version`, `last_seen_at`, `revoked_at`. A registered client device. `revoked_at` disables it. Contains **no push token** — notifications need their own table.
-- **`sync_changes`** — the server-side change feed, ordered by the `sync_change_seq` sequence. Clients must never be able to `setval()` that sequence.
-- **`sync_operations`** — inbound client operations, status `PENDING | APPLIED | REJECTED | CONFLICT`.
-- **`process_sync_batch(device_id, operations jsonb)`** and **`process_sync_batch_context_validated(device_id, operations, tenant_id, branch_id)`** — the gateway RPCs. The second exists to enforce multi-organization device context.
-- **`sync_validate_device(device_id)`** — returns the `(tenant_id, branch_id)` a device is bound to.
+- **`sync_devices`** — `id`, `user_id`, `device_label`, `platform`, `app_version`,
+	`last_seen_at`, `revoked_at`, `created_at`, `updated_at`. **Confirmed live 2026-08-28: no
+	`tenant_id`, no `branch_id`** — this row previously listed both; that was stale and
+	contradicted AD-005 (IMPLEMENTED), which already correctly states the columns were
+	dropped. A registered client device is user-owned, not organization-bound; one device
+	may serve several organizations (AD-005). Contains **no push token** — notifications
+	need their own table.
+- **`sync_changes`** — the server-side change feed, ordered by the `sequence_id` bigint
+	primary key (not a separately named sequence — corrected 2026-08-28, confirmed live).
+	Columns: `sequence_id, tenant_id, branch_id, entity_type, entity_id, operation_type,
+	revision, changed_at, changed_by, payload`. Zero rows — nothing has ever been applied.
+- **`sync_operations`** — inbound client operations, status `PENDING | APPLIED | REJECTED |
+	CONFLICT`. Columns also include `applied_sequence_id`/`applied_at` (present but unused
+	today — the future link to the `sync_changes` row an operation produced once applied)
+	and `result jsonb`. `sync_validate_device()` returns the device's owning `user_id`
+	only, **not** `TABLE(tenant_id, branch_id)` as `API-CONTRACT.md`'s RPC table still
+	states — confirmed live 2026-08-28; a device has no tenant/branch to resolve since
+	AD-005. `API-CONTRACT.md` needs the same correction; not made in this pass, flagged
+	here per the spec-contradiction rule so it isn't lost.
+- **`process_sync_batch(p_device_id uuid, p_operations jsonb)`** and
+	**`process_sync_batch_context_validated(p_device_id uuid, p_operations jsonb, p_actor
+	uuid)`** — the gateway RPCs, implemented (see the corrected note above). Signature
+	corrected 2026-08-28 — previously documented as taking `(device_id, operations, tenant_id,
+	branch_id)`, which does not match the live function and cannot: each operation in the
+	batch carries its own `tenant_id`/`branch_id`, since one batch may legitimately span
+	organizations (AD-006).
+- **`sync_validate_device(p_device_id uuid)`** — returns `uuid`, the device's owning
+	`user_id`, after confirming the caller owns it and it is not revoked. Corrected
+	2026-08-28 — previously documented as returning `TABLE(tenant_id, branch_id)`, which is
+	impossible now that `sync_devices` carries neither column (AD-005). It does **not**
+	check organization membership; that happens in
+	`process_sync_batch_context_validated()` via `is_member_of()`/`is_authorized_for_branch()`
+	against each operation's own `tenant_id`/`branch_id`, not in this function.
 - Ordering columns on `tickets`: `device_created_at` (client clock), `server_received_at` (server clock), `revision` (monotonic counter). `cash_sessions` also carries a revision, bumped by `bump_cash_session_revision()`.
 
 ### What the deployed schema does provide
@@ -517,16 +578,33 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 | §73 three distinct times | `device_created_at` (capture) vs `received_at` (server) vs `sync_changes.changed_at` |
 | §33/§65 event semantics and tombstones | `operation_type` CHECK includes `CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION` |
 | §45/§46 device identity and revocation | `sync_devices.revoked_at`, enforced by `sync_validate_device()` |
-| §47 permission recheck at sync time | `sync_validate_device()` re-verifies `user_roles` membership on every call |
-| §21 cross-org binding | composite FK `sync_devices (tenant_id, branch_id) → branches (tenant_id, id)` — a device cannot bind to another tenant's branch |
+| §47 permission recheck at sync time | corrected 2026-08-28 — not `sync_validate_device()` (device ownership/revocation only). `process_sync_batch_context_validated()` re-verifies live `user_roles` membership and branch access per operation via `is_member_of()`/`is_authorized_for_branch()`, re-read live and confirmed to match AD-008's branch-before-owner order |
+| §21 cross-org binding | corrected 2026-08-28 — no FK on `sync_devices` (it has no `tenant_id`/`branch_id` to bind, per AD-005). Enforced instead per-operation: `is_authorized_for_branch()` requires the target branch's own `tenant_id` to match the operation's `tenant_id` before any owner/admin shortcut is consulted, so a branch id from another tenant is never authorized |
 
 ### What is missing
 
-- **No pull RPC at all.** §22 describes two RPCs, push *and* pull. The deployed functions are `process_sync_batch`, `process_sync_batch_context_validated` (stub) and `sync_validate_device` — all push-side. There is no `next_cursor`/`has_more` contract (§25, §28) and no `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path (§66, §67).
-- **Idempotency is not tenant-bound.** §13 says explicitly: *"Never use only `operation_id` without tenant binding."* The live uniqueness is global on `operation_id`. Since `sync_operations` also stores `result`, an implementation that looks up a replay by `operation_id` alone could return **another tenant's stored result**. The processor must key its lookup on `(tenant_id, operation_id)` regardless of what the constraint allows.
+- **No pull RPC at all.** §22 describes two RPCs, push *and* pull. The deployed functions are `process_sync_batch`, `process_sync_batch_context_validated` (implemented — see the corrected note above) and `sync_validate_device` — all push-side. There is no `next_cursor`/`has_more` contract (§25, §28) and no `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path (§66, §67).
+- **Idempotency lookup is not tenant-bound, though the live function does not leak
+	across tenants.** §13 says explicitly: *"Never use only `operation_id` without tenant
+	binding."* The live UNIQUE constraint and lookup are both global on `operation_id`
+	alone (`UNIQUE (operation_id)`, plus `UNIQUE (device_id, operation_id)`). **Re-read
+	live 2026-08-28:** `process_sync_batch_context_validated()` does check the found row's
+	`tenant_id` (and `actor_id`/`device_id`/`entity_id`/`operation_type`) against the
+	incoming operation and **refuses** a mismatch (`42501`) rather than returning the
+	stored result — so a cross-tenant replay collision fails closed, it does not leak
+	another tenant's `result`. The residual gap is availability, not confidentiality: two
+	different tenants can never legitimately reuse the same `operation_id` (astronomically
+	unlikely for a UUID, but structurally possible), and the lookup should still move to a
+	composite `(tenant_id, operation_id)` key so that isn't even a theoretical class of bug.
 - **No payload-immutability check** (§15). Nothing stores a payload hash, so the same `operation_id` resubmitted with a different payload cannot be detected.
 - **No `client_sequence`** (§16) and **no `depends_on_operation_id`** (§49), so device-local ordering and dependency chains (create customer → create ticket referencing it) have nowhere to live.
 - **No `ALREADY_APPLIED` status** (§24) — the CHECK allows only four values, so a replay cannot be distinguished from a first application in the stored row.
+- **No fine-grained domain-operation type.** `sync_operations.operation_type` CHECK allows
+	only six coarse values (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION` — confirmed
+	live 2026-08-28), not the finite domain-operation allowlist AD-021 decided
+	(`ticket.create`, `inventory.adjust`, `payment.reverse`, etc.). AD-021 did not decide
+	how these reconcile — a new column for the fine-grained type, or widening this CHECK —
+	and that is now open work for P3.7, not a re-litigation of AD-021's conflict model.
 - **No retention policy** for `sync_changes` tombstones (§66).
 
 ## 13. Daily financial audits

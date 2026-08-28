@@ -69,12 +69,13 @@ organization → catalog (P8.1) plus catalog detail, inventory, production, and 
 strongest verification available without a physical device/emulator, which this
 environment does not have. Full detail: P8.1 section under Phase 8.
 
-**Open blockers requiring a human decision, as of 2026-08-24:** BLOCKER-006
-(no per-entity sync conflict strategy, gating P3.7) and BLOCKER-010(c) (catalog write
-mechanism confirmation). Every other blocker previously summarized on this page —
-BLOCKER-001, 002, 003, 004, 005, 007, 008, 009, 011, 012, 013, 014, 015, 016, 017 — is
-**RESOLVED**; see `BLOCKERS.md` for the
-evidence behind each.
+**Open blockers requiring a human decision, as of 2026-08-28:** BLOCKER-010(c) (catalog
+write mechanism confirmation) and BLOCKER-018 (ingredient cost capture workflow, gating
+COGS/gross-profit reporting only — revenue/cash reporting already shipped in P9.8).
+BLOCKER-006 (per-entity sync conflict strategy, was gating P3.7) is now **RESOLVED** —
+see AD-021. Every other blocker previously summarized on this page —
+BLOCKER-001, 002, 003, 004, 005, 006, 007, 008, 009, 011, 012, 013, 014, 015, 016, 017,
+019, 020, 021 — is **RESOLVED**; see `BLOCKERS.md` for the evidence behind each.
 
 **✅ P8.0 is CLOSED — P8.1 was delivered 2026-08-15 and re-verified live 2026-08-24.**
 This line previously read "P8.0 remains open... P8.1 was and is available to start",
@@ -112,7 +113,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | BLOCKED (BLOCKER-006; downstream of P4.1/P4.4) |
+| B5 Per-entity apply | P3.7 | UNBLOCKED, NOT STARTED (BLOCKER-006 resolved via AD-021; downstream of P4.1/P4.4) |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
 | B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
@@ -135,8 +136,8 @@ P2 Auth & authorization ───────────────── COMP
       │            │                │
       │            └──► P4.4 Sales/Tickets ──► P4.5 Delivery
       │            │
-      │            └──► P3 Multi-org & sync ── P3.1-3.6 COMPLETE / P3.7 BLOCKED
-      │                       │                 (P3.7 needs P4.1/P4.4 per entity)
+      │            └──► P3 Multi-org & sync ── P3.1-3.6 COMPLETE / P3.7 UNBLOCKED, NOT STARTED
+      │                       │                 (BLOCKER-006 resolved via AD-021; P3.7 still needs P4.1/P4.4 per entity)
       │                       └── P3.8 pending-sync UX ── BLOCKED (needs P3.7)
       │
       ├── P5 Financial backend ────────── BLOCKED (rules unspecified)
@@ -340,7 +341,7 @@ Verified 2026-08-10 by executed queries; see `IMPLEMENTATION_LOG.md`.
 **Deliverables:** stale `base_revision` recorded as `CONFLICT`, never overwritten, never discarded.
 **Gap:** detection only; resolution is P3.7.
 
-## P3.7 · Per-entity sync application — **BLOCKED** *(formerly B5)*
+## P3.7 · Per-entity sync application — **UNBLOCKED, NOT STARTED** *(formerly B5)*
 **Objective:** Apply recorded operations to business tables, per entity, with explicit conflict semantics.
 **Dependencies:** P3.1–P3.6 (met), **P4.1** and/or **P4.4** for the target entity —
 P3.7 is *downstream* of those milestones, never upstream of them (BLOCKER-008b,
@@ -354,8 +355,19 @@ resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
   dropped; every ticket status is now reachable and `subtotal_amount` is frozen once a
   ticket leaves `draft`. This line was still listing it as an open blocker eight days after
   resolution — corrected here while auditing BLOCKER-009 in the same neighborhood.
-- **BLOCKER-006** — no per-entity conflict strategy; `sync_conflicts` referenced by the spec does not exist; operation-type/payload contract undefined. **The sole remaining blocker for P3.7.**
-**Parallelizable:** P4.1, P4.2, P6 can all proceed while this is blocked.
+- ~~**BLOCKER-006**~~ — **RESOLVED 2026-08-28.** Per-entity conflict strategy decided,
+  `sync_conflicts` confirmed as a server table, `operation_type` allowlist contract set —
+  see **AD-021**. **No blocker remains for P3.7.** `SCHEMA-REFERENCE.md` §12 was re-read
+  live while resolving this and turned out to be stale itself — the gateway is **not** a
+  stub (that claim predated migration `20260810182203` by 18 days and was never corrected):
+  idempotency, per-operation authorization, and stale-revision conflict detection are real
+  and live-verified. What still needs building is narrower than previously stated:
+  allowlisted handler dispatch, the `sync_conflicts` table/migration, `sync_changes`
+  emission and revision increment, reconciling `sync_operations.operation_type`'s six-value
+  CHECK with AD-021's fine-grained allowlist, tenant-bound idempotency lookup, payload-hash
+  immutability check, `client_sequence`/`depends_on_operation_id`, `ALREADY_APPLIED` status,
+  and the pull RPC (absent entirely).
+**Parallelizable:** P4.1, P4.2, P6 can all proceed independently of this.
 
 ## P3.8 · Pending-sync behaviour — BLOCKED
 **Objective:** A user sees their own pending operations across authorized organizations.
@@ -898,7 +910,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P6.2 invitations | BLOCKER-001 |
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
-| P3.7 per-entity sync | BLOCKER-006 (BLOCKER-009 resolved 2026-08-22) |
+| P3.7 per-entity sync | UNBLOCKED, NOT STARTED — BLOCKER-006 resolved via AD-021 2026-08-28 (BLOCKER-009 resolved 2026-08-22) |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
 **Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to
@@ -1005,7 +1017,7 @@ remaining offline/mobile decisions are not yet implemented.
 | P10.5 | Recovery state | NOT_STARTED | never silently re-key; show pending count before any reset |
 | P10.6 | Pending operations & outbox | NOT_STARTED | encrypted; immutable org/branch context |
 | P10.7 | Synchronization client | BLOCKED | needs P3.7 |
-| P10.8 | Conflict handling (client) | BLOCKED | needs BLOCKER-006 |
+| P10.8 | Conflict handling (client) | BLOCKED | needs P3.7's server `sync_conflicts` (BLOCKER-006 resolved via AD-021; P3.7 itself not yet built) |
 | P10.9 | Reconnect behaviour | NOT_STARTED | on-reconnect, no background task in spec |
 | P10.10 | Device replacement | NOT_STARTED | unsynced work on a lost device is unrecoverable — must be stated in-product |
 

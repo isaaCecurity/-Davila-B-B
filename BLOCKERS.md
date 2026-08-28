@@ -199,24 +199,60 @@ restricted to `draft -> submitted` only and nothing further.~~
 
 ---
 
-## BLOCKER-006 · No per-entity conflict strategy, and no place to record a conflict
-**Status:** OPEN · **Affects:** B5 (all entities) · **Type:** architecture decision
+## ✅ BLOCKER-006 · Per-entity conflict strategy decided (2026-08-28)
+**Status:** RESOLVED · **Affects:** P3.7 (ticket sync), B5 (all entities) · **Type:** architecture decision
 
-`docs/OFFLINE-SYNC-MODEL.md` §1018 forbids generic last-write-wins, §1047 says ticket
-sync must not resolve conflicts by overwriting fields, and §663 says "do not assume
-all four tables use the same conflict strategy" - but no per-entity strategy is
-defined anywhere. §335 refers to a `sync_conflicts` table; **it does not exist in the
-live database** (verified).
+**Resolution:** see **AD-021** in `ARCHITECTURE_DECISIONS.md` for the full decision, and
+`docs/OFFLINE-SYNC-MODEL.md` §10/§21/§33 (all corrected/annotated in the same pass) for the
+protocol-level detail. Summary:
 
-The applier contract is also unspecified: which `operation_type` values are valid per
-entity, the payload shape each carries, how `revision` increments, and when a
-`sync_changes` row is written.
+- **Per-entity strategy set**, owner-approved: tickets (creation/lifecycle) —
+	operation-based + state-machine validation; ticket item/amount edits within the existing
+	mutable window — `base_revision`-checked optimistic concurrency, no field-level merge;
+	inventory — append-only domain operations, never a synchronized absolute quantity;
+	production — operation-based + state-machine validation; payments/expenses — append-only
+	+ explicit reversal, never an in-place amount edit; customers — `base_revision`-checked
+	optimistic concurrency; products/catalog — server-authoritative, offline read-only in
+	first scope. **Last-write-wins remains prohibited everywhere**, unchanged from
+	`OFFLINE-SYNC-MODEL.md` §32/§62.
+- **`sync_conflicts` IS a server table, authoritative** — corrects
+	`OFFLINE-SYNC-MODEL.md` §10, which previously said the opposite (a client-only
+	projection, server side folded into `sync_operations.status='CONFLICT'`). Minimum
+	contract recorded in AD-021: `operation_payload` must be preserved on every conflict row,
+	not discarded for a message string.
+- **`operation_type` is a finite, allowlisted set of domain operations**
+	(`ticket.create`, `ticket.transition`, `ticket.item_update`, `inventory.adjust`,
+	`production.start`, `payment.reverse`, etc.), dispatched to registered handlers.
+	Unknown types are rejected. Payloads are typed domain data, never SQL/imperative
+	instructions.
 
-Inventing any of this would be the guessing the directive forbids, and would bake a
-conflict strategy into 37 tables by accident.
+**Terminology correction made during recording, not a re-opened question:** the decision
+as supplied used "Tickets" and "Orders" as two separate entities. BakeFlow has no `orders`
+table — AD-011 already settled that Order means Ticket and forbids the word in code. The
+two strategies map onto the single `tickets`/`ticket_items` pair (creation/transitions vs.
+in-window item edits), not two entities — see AD-021 for the reasoning. Operation-type
+names use `ticket.*`, never `order.*`.
 
-**Needed:** per-entity conflict strategy for the first entities in scope, a decision
-on whether `sync_conflicts` is created, and the operation-type/payload contract.
+**What this does not resolve, and is not architecture:** `SCHEMA-REFERENCE.md` §12 was
+re-read live while writing this resolution and turned out to itself be stale — it had
+called `process_sync_batch_context_validated()` a stub that raises unconditionally,
+which was true before migration `20260810182203` and false ever since (§12 is corrected
+in the same pass as this entry). **The gateway actually authenticates, enforces
+idempotency, authorizes each operation against its own `tenant_id`/`branch_id` via
+`is_member_of()`/`is_authorized_for_branch()` (re-read live, confirmed correct and
+matching AD-008's branch-before-owner order), detects a stale `base_revision` as
+`CONFLICT`, and records the operation** — that part of P3.7's foundation already exists
+and is sound. What is still genuinely missing: `sync_conflicts` does not exist yet,
+nothing writes to `sync_changes`, no revision is ever incremented, there is no dispatch
+to a per-entity handler at all, there is no pull RPC, and several other concrete gaps
+(tenant-bound idempotency lookup — currently global on `operation_id` but fails closed
+rather than leaking, per §12's correction; payload-immutability hash;
+`client_sequence`; `depends_on_operation_id`; `ALREADY_APPLIED` status; tombstone
+retention; and a new finding — `sync_operations.operation_type`'s live CHECK only
+allows six coarse values, not AD-021's fine-grained domain-operation allowlist) are
+unchanged by this decision. Building those is P3.7's remaining, narrower-than-previously-
+stated implementation work, not a further architecture decision — proceed directly from
+AD-021 rather than re-deciding the conflict model while building it.
 
 ---
 
