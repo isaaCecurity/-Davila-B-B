@@ -562,7 +562,77 @@ Core rule 8 in `CLAUDE.md` forbids hard-deleting business data. The live mechani
 	check organization membership; that happens in
 	`process_sync_batch_context_validated()` via `is_member_of()`/`is_authorized_for_branch()`
 	against each operation's own `tenant_id`/`branch_id`, not in this function.
-- Ordering columns on `tickets`: `device_created_at` (client clock), `server_received_at` (server clock), `revision` (monotonic counter). `cash_sessions` also carries a revision, bumped by `bump_cash_session_revision()`.
+- Ordering columns on `tickets`: `device_created_at` (client clock), `server_received_at` (server clock), `revision` (monotonic counter, now actually incremented — see below). `cash_sessions` also carries a revision, bumped by `bump_cash_session_revision()`.
+
+### P3.7, first vertical slice — implemented and live-verified 2026-08-28
+
+`tests/sql/p3_7_sync_apply_and_pull.sql`, 11/11. Builds on the gateway above without
+modifying it (its own body is byte-identical except one additive field capture, noted
+below).
+
+- **`sync_conflicts`** — the server table AD-021 decided, not a client-only projection.
+	`id, tenant_id, branch_id, entity_type, entity_id, operation_id (UNIQUE, FK to
+	sync_operations), actor_id, device_id, operation_type, operation_payload, base_revision,
+	current_revision, conflict_code, conflict_status (OPEN|RESOLVED|DISMISSED), created_at,
+	resolved_at, resolved_by, resolution_type, resolution_payload`. RLS forced: visible to
+	the operation's own `actor_id` or to `owner/admin/branch_manager` in that tenant;
+	resolution (`UPDATE`) restricted to the same manager tier, `WITH CHECK (resolved_by =
+	auth.uid())` — the same authorship-forgery class of bug fixed on `expenses_insert`
+	earlier this project. No `INSERT` grant for `authenticated` at all — written only by the
+	`SECURITY DEFINER` apply path.
+- **`domain_operation`** — new nullable `text` column on both `sync_operations` and
+	`sync_changes`, CHECK-constrained to AD-021's finite allowlist. Added rather than
+	widening the existing coarse `operation_type` CHECK (`CREATE/UPDATE/SOFT_DELETE/EVENT/
+	COMMAND/CORRECTION`), which stays exactly as it was — `archive_ticket()`, its only other
+	producer, is untouched. `process_sync_batch_context_validated()` gained one additive
+	line capturing this field from the operation envelope; every pre-existing line
+	(idempotency, authorization, conflict detection) is unchanged, re-verified against
+	`tests/sql/security_multiorg_sync.sql` (22/23 — the one failure is `rate_limit_events`
+	having no RLS policies, pre-existing and unrelated).
+- **`apply_sync_operation(p_operation_id uuid)`** — the dispatcher, fired by a new `AFTER
+	INSERT ON sync_operations` trigger (`sync_operations_dispatch`, `WHEN (NEW.status IN
+	('PENDING','CONFLICT'))`). A `CONFLICT` row gets a `sync_conflicts` entry with the
+	original payload preserved; a `PENDING` row with a known `domain_operation` dispatches
+	to a handler; anything else — no handler built yet, or no `domain_operation` supplied —
+	becomes `REJECTED` with `error_code = 'unsupported_operation_type'`, never left silently
+	`PENDING`. **Never lets a handler's exception escape**: one bad operation in a batch
+	cannot roll back the others (OFFLINE-SYNC-MODEL.md §23).
+- **`apply_ticket_create(p_operation sync_operations)`** and
+	**`apply_ticket_item_update(p_operation sync_operations)`** — the first two handlers.
+	Both are `SECURITY DEFINER` and re-implement the equivalent of `tickets_insert`/
+	`ticket_items_insert`'s RLS role gate themselves, via the new `has_role_in(actor,
+	tenant, roles)` — **not** by relying on that RLS, which keys off `current_tenant_id()`/
+	`has_role()`, both scoped to the caller's *active* organization (AD-003) and therefore
+	wrong for a cross-org offline operation. `apply_ticket_item_update()` does not insert
+	`ticket_items.line_total` — confirmed live via `information_schema.columns.is_generated`
+	that it is `GENERATED ALWAYS AS (round(quantity * unit_price, 4)) STORED`, not a plain
+	column; a first attempt that included it failed `428C9`.
+- **`has_role_in(p_actor uuid, p_tenant uuid, p_role_keys text[])`** — new, mirrors
+	`is_authorized_for_branch()`'s existing owner/admin query shape. Also fixed a real,
+	previously-dormant bug this surfaced: `guard_driver_created_order_assignment()` called
+	`has_role(['driver'])` (active-org-scoped) instead of a tenant-parameterized check —
+	silently wrong only for a `tenant_id != current_tenant_id()` write, which no path could
+	produce before P3.7's handlers existed. Fixed to call `has_role_in(auth.uid(),
+	NEW.tenant_id, ...)`; re-verified against `tests/sql/driver_field_sale_rls.sql` (8/8,
+	no regression) plus a direct online-case check (driver-created ticket still
+	self-assigns).
+- **`bump_ticket_revision()`** — new `BEFORE UPDATE ON tickets` trigger, named
+	`tickets_bump_revision` to sort alphabetically ahead of `tickets_guard_status_
+	transition`/`tickets_set_updated_at`, mirroring `bump_cash_session_revision()`'s exact
+	body and trigger-ordering precedent. `tickets.revision` defaulted to `1` and was never
+	incremented by anything before this — confirmed live via `pg_proc` grep (only
+	`archive_ticket()` referenced it, and only to read it).
+- **`sync_pull(p_device_id uuid, p_cursor bigint DEFAULT 0, p_page_size int DEFAULT 200)`**
+	— the previously-entirely-absent pull RPC. Deliberately `SECURITY INVOKER`: it does not
+	reimplement authorization. Device ownership/revocation is checked by calling the
+	existing, unmodified `sync_validate_device()`; tenant membership, branch access, and
+	"caller has a live device" are enforced by the existing, unmodified `sync_changes_select`
+	RLS policy, inherited by running as the caller. Returns
+	`{changes: [...], next_cursor, has_more}`.
+
+**Not built by this slice:** inventory/production/financial/customer handlers (each
+`REJECTED unsupported_operation_type` until built); `CURSOR_TOO_OLD`/`FULL_RESYNC_REQUIRED`;
+and the gaps below that predate this slice and are unchanged by it.
 
 ### What the deployed schema does provide
 
@@ -583,7 +653,10 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 
 ### What is missing
 
-- **No pull RPC at all.** §22 describes two RPCs, push *and* pull. The deployed functions are `process_sync_batch`, `process_sync_batch_context_validated` (implemented — see the corrected note above) and `sync_validate_device` — all push-side. There is no `next_cursor`/`has_more` contract (§25, §28) and no `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path (§66, §67).
+- ~~No pull RPC at all.~~ **Resolved 2026-08-28** — `sync_pull()` exists and is
+	live-verified (see the P3.7 section above). What's still missing from §22/§66/§67: no
+	`CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED` path, and no tombstone-retention guarantee
+	(last bullet below) for a client resuming after a very long gap.
 - **Idempotency lookup is not tenant-bound, though the live function does not leak
 	across tenants.** §13 says explicitly: *"Never use only `operation_id` without tenant
 	binding."* The live UNIQUE constraint and lookup are both global on `operation_id`
@@ -599,12 +672,11 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 - **No payload-immutability check** (§15). Nothing stores a payload hash, so the same `operation_id` resubmitted with a different payload cannot be detected.
 - **No `client_sequence`** (§16) and **no `depends_on_operation_id`** (§49), so device-local ordering and dependency chains (create customer → create ticket referencing it) have nowhere to live.
 - **No `ALREADY_APPLIED` status** (§24) — the CHECK allows only four values, so a replay cannot be distinguished from a first application in the stored row.
-- **No fine-grained domain-operation type.** `sync_operations.operation_type` CHECK allows
-	only six coarse values (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTION` — confirmed
-	live 2026-08-28), not the finite domain-operation allowlist AD-021 decided
-	(`ticket.create`, `inventory.adjust`, `payment.reverse`, etc.). AD-021 did not decide
-	how these reconcile — a new column for the fine-grained type, or widening this CHECK —
-	and that is now open work for P3.7, not a re-litigation of AD-021's conflict model.
+- ~~No fine-grained domain-operation type.~~ **Resolved 2026-08-28** — the new
+	`domain_operation` column (see the P3.7 section above) carries AD-021's fine-grained
+	allowlist; the coarse `operation_type` CHECK is untouched. Handlers exist today only for
+	`ticket.create`/`ticket.item_update`; every other allowlisted value is accepted by the
+	CHECK but `REJECTED unsupported_operation_type` at dispatch until its handler is built.
 - **No retention policy** for `sync_changes` tombstones (§66).
 
 ## 13. Daily financial audits

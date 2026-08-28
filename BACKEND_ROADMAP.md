@@ -113,7 +113,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | UNBLOCKED, NOT STARTED (BLOCKER-006 resolved via AD-021; downstream of P4.1/P4.4) |
+| B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28 (BLOCKER-006 resolved via AD-021); other entities not started |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
 | B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
@@ -136,8 +136,8 @@ P2 Auth & authorization ───────────────── COMP
       │            │                │
       │            └──► P4.4 Sales/Tickets ──► P4.5 Delivery
       │            │
-      │            └──► P3 Multi-org & sync ── P3.1-3.6 COMPLETE / P3.7 UNBLOCKED, NOT STARTED
-      │                       │                 (BLOCKER-006 resolved via AD-021; P3.7 still needs P4.1/P4.4 per entity)
+      │            └──► P3 Multi-org & sync ── P3.1-3.6 COMPLETE / P3.7 PARTIAL (tickets slice done)
+      │                       │                 (BLOCKER-006 resolved via AD-021; other entities not started)
       │                       └── P3.8 pending-sync UX ── BLOCKED (needs P3.7)
       │
       ├── P5 Financial backend ────────── BLOCKED (rules unspecified)
@@ -341,15 +341,29 @@ Verified 2026-08-10 by executed queries; see `IMPLEMENTATION_LOG.md`.
 **Deliverables:** stale `base_revision` recorded as `CONFLICT`, never overwritten, never discarded.
 **Gap:** detection only; resolution is P3.7.
 
-## P3.7 · Per-entity sync application — **UNBLOCKED, NOT STARTED** *(formerly B5)*
+## P3.7 · Per-entity sync application — **PARTIAL: tickets slice IMPLEMENTED, others not started** *(formerly B5)*
 **Objective:** Apply recorded operations to business tables, per entity, with explicit conflict semantics.
 **Dependencies:** P3.1–P3.6 (met), **P4.1** and/or **P4.4** for the target entity —
 P3.7 is *downstream* of those milestones, never upstream of them (BLOCKER-008b,
 resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
-**Tasks (not started):** define the applier contract per entity; implement per-entity handlers; conflict recording; revision increment; `sync_changes` emission.
-**Deliverables:** none — stopped at PLAN.
-**Tests:** none executed.
-**Completion criteria:** every in-scope entity has a contract, an applier, and passing idempotency + authorization + conflict tests.
+**Tasks:** ~~define the applier contract per entity~~ (AD-021); ~~implement handler dispatch~~;
+tickets: ~~`ticket.create`~~, ~~`ticket.item_update`~~ done; inventory/production/financial/
+customer handlers not started; `sync_changes` emission and revision increment done for
+tickets only; the pull RPC (`sync_pull`) is generic, done for all entities.
+**Deliverables (2026-08-28):** `sync_conflicts` table + RLS; `domain_operation` columns;
+`apply_sync_operation()` dispatcher; `apply_ticket_create()`/`apply_ticket_item_update()`;
+`has_role_in()`; `bump_ticket_revision()`; `sync_pull()`. See AD-021 and
+`IMPLEMENTATION_LOG.md` 2026-08-28 for the full build record, including two real defects
+found and fixed as prerequisites (`ticket_items.line_total` is `GENERATED ALWAYS`;
+`guard_driver_created_order_assignment()`'s active-org-scoped role check).
+**Tests:** `tests/sql/p3_7_sync_apply_and_pull.sql` — 11/11, live. Re-verified with zero
+regression: `tests/sql/security_multiorg_sync.sql` (22/23 — one pre-existing, unrelated
+`rate_limit_events` RLS gap), `tests/sql/driver_field_sale_rls.sql` (8/8).
+**Completion criteria:** every in-scope entity has a contract, an applier, and passing
+idempotency + authorization + conflict tests. **Tickets meets this. Inventory, production,
+financial, and customer entities do not yet** — each is allowlisted in `domain_operation`'s
+CHECK per AD-021 but has no handler, so an operation of that type is recorded then
+`REJECTED unsupported_operation_type`, never silently left `PENDING`.
 **Blockers:**
 - ~~**BLOCKER-005**~~ — **RESOLVED 2026-08-14.** `prevent_submitted_ticket_update()` was
   dropped; every ticket status is now reachable and `subtotal_amount` is frozen once a
@@ -357,16 +371,11 @@ resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
   resolution — corrected here while auditing BLOCKER-009 in the same neighborhood.
 - ~~**BLOCKER-006**~~ — **RESOLVED 2026-08-28.** Per-entity conflict strategy decided,
   `sync_conflicts` confirmed as a server table, `operation_type` allowlist contract set —
-  see **AD-021**. **No blocker remains for P3.7.** `SCHEMA-REFERENCE.md` §12 was re-read
-  live while resolving this and turned out to be stale itself — the gateway is **not** a
-  stub (that claim predated migration `20260810182203` by 18 days and was never corrected):
-  idempotency, per-operation authorization, and stale-revision conflict detection are real
-  and live-verified. What still needs building is narrower than previously stated:
-  allowlisted handler dispatch, the `sync_conflicts` table/migration, `sync_changes`
-  emission and revision increment, reconciling `sync_operations.operation_type`'s six-value
-  CHECK with AD-021's fine-grained allowlist, tenant-bound idempotency lookup, payload-hash
-  immutability check, `client_sequence`/`depends_on_operation_id`, `ALREADY_APPLIED` status,
-  and the pull RPC (absent entirely).
+  see **AD-021**. **No blocker remains for P3.7.**
+**Remaining, not a blocker — implementation work:** inventory/production/financial/customer
+handlers; `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED`; tenant-bound idempotency lookup;
+payload-hash immutability check; `client_sequence`/`depends_on_operation_id`;
+`ALREADY_APPLIED` status; tombstone retention.
 **Parallelizable:** P4.1, P4.2, P6 can all proceed independently of this.
 
 ## P3.8 · Pending-sync behaviour — BLOCKED
@@ -910,7 +919,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P6.2 invitations | BLOCKER-001 |
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
-| P3.7 per-entity sync | UNBLOCKED, NOT STARTED — BLOCKER-006 resolved via AD-021 2026-08-28 (BLOCKER-009 resolved 2026-08-22) |
+| P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); other entities not started |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
 **Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to

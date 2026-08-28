@@ -242,17 +242,31 @@ idempotency, authorizes each operation against its own `tenant_id`/`branch_id` v
 `is_member_of()`/`is_authorized_for_branch()` (re-read live, confirmed correct and
 matching AD-008's branch-before-owner order), detects a stale `base_revision` as
 `CONFLICT`, and records the operation** — that part of P3.7's foundation already exists
-and is sound. What is still genuinely missing: `sync_conflicts` does not exist yet,
-nothing writes to `sync_changes`, no revision is ever incremented, there is no dispatch
-to a per-entity handler at all, there is no pull RPC, and several other concrete gaps
-(tenant-bound idempotency lookup — currently global on `operation_id` but fails closed
-rather than leaking, per §12's correction; payload-immutability hash;
-`client_sequence`; `depends_on_operation_id`; `ALREADY_APPLIED` status; tombstone
-retention; and a new finding — `sync_operations.operation_type`'s live CHECK only
-allows six coarse values, not AD-021's fine-grained domain-operation allowlist) are
-unchanged by this decision. Building those is P3.7's remaining, narrower-than-previously-
-stated implementation work, not a further architecture decision — proceed directly from
-AD-021 rather than re-deciding the conflict model while building it.
+and is sound.
+
+**Updated 2026-08-28, same day: the first vertical slice is now built and live-verified**
+(`tests/sql/p3_7_sync_apply_and_pull.sql`, 11/11) — `sync_conflicts` (server table, RLS
+forced), a new `domain_operation` column (additive, not a widened CHECK — see AD-021),
+`apply_sync_operation()` dispatch with exception-safe handlers, `ticket.create` and
+`ticket.item_update`, `tickets.revision` now actually incrementing
+(`bump_ticket_revision()`, nothing bumped it before), and `sync_pull()` (the previously
+entirely-absent pull side, `SECURITY INVOKER`, inherits existing RLS rather than
+reimplementing it). Two real defects surfaced and fixed as prerequisites, both
+re-verified against the existing regression suites with zero regression:
+`ticket_items.line_total` is a `GENERATED ALWAYS` column, not a plain field a handler may
+insert into; and `guard_driver_created_order_assignment()` used `has_role()`, which per
+AD-003 is scoped to the caller's *active* organization — silently wrong only for the
+cross-org write this blocker exists to handle, dormant until this slice's handlers were
+the first code path able to produce one. Fixed via a new tenant-parameterized
+`has_role_in()`. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-28.
+
+**Still genuinely missing, unchanged by this pass:** inventory/production/financial/
+customer handlers (allowlisted in `domain_operation`'s CHECK but `REJECTED
+unsupported_operation_type` until built); `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED`;
+tenant-bound idempotency lookup (currently global on `operation_id` but fails closed, not
+leaking); payload-immutability hash; `client_sequence`; `depends_on_operation_id`;
+`ALREADY_APPLIED` status; tombstone retention. None of these are further architecture
+decisions — they follow directly from AD-021, not a re-decision of the conflict model.
 
 ---
 

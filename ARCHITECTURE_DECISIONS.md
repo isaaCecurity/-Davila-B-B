@@ -197,7 +197,7 @@ deferred capabilities remain dormant and are not exposed by MVP workflows.
 - Customer balances and ledger views are derived from tickets, invoices, and payments;
 	they are not duplicated in a second source-of-truth ledger.
 
-## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED
+## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED (tickets slice IMPLEMENTED 2026-08-28)
 Resolves BLOCKER-006. Completes AD-009's deferred "per-entity application and conflict
 semantics" and reaffirms AD-006 (operation-authoritative routing) rather than replacing it.
 **Last-write-wins remains prohibited everywhere**, per `OFFLINE-SYNC-MODEL.md` §32/§62.
@@ -302,3 +302,31 @@ allows only six coarse values (`CREATE/UPDATE/SOFT_DELETE/EVENT/COMMAND/CORRECTI
 this decision's fine-grained allowlist (`ticket.create`, `inventory.adjust`, etc.) — whether
 that becomes a new column or a widened CHECK is P3.7 implementation work. Do not re-litigate
 the conflict model itself while building any of this.
+
+**Implemented 2026-08-28 — first vertical slice: tickets only.** `sync_conflicts` exists
+live with RLS (visible to the operation's own actor and to owner/admin/branch_manager,
+resolution pinned to `resolved_by = auth.uid()`, no client INSERT grant). The
+operation-type reconciliation above was resolved by addition, not by widening the coarse
+CHECK: a new nullable `domain_operation` column on both `sync_operations` and
+`sync_changes`, carrying this decision's fine-grained allowlist as its own CHECK
+constraint — the coarse column and its sole two producers (`process_sync_batch_context_
+validated()`, `archive_ticket()`) are unchanged. `apply_sync_operation()` dispatches by
+`domain_operation`; an unbuilt or missing value is `REJECTED` with
+`unsupported_operation_type`, never left silently `PENDING`. Built and live-verified
+(`tests/sql/p3_7_sync_apply_and_pull.sql`, 11/11): `ticket.create`, `ticket.item_update`,
+and `sync_pull` (cursor/`has_more` pagination, `SECURITY INVOKER` so it inherits the
+existing `sync_changes_select` RLS rather than reimplementing it). `tickets.revision` is
+now actually incremented (`bump_ticket_revision()`, mirroring `bump_cash_session_
+revision()` — nothing had ever bumped it before). Two pre-existing defects surfaced and
+fixed as prerequisites, both re-verified with zero regression against
+`tests/sql/driver_field_sale_rls.sql` and `tests/sql/security_multiorg_sync.sql`:
+`ticket_items.line_total` is a `GENERATED ALWAYS` column, not a plain field a handler may
+insert into; and `guard_driver_created_order_assignment()` called `has_role()`, which per
+AD-003 reads only the caller's active-organization JWT claim — silently wrong for the
+cross-org case this decision exists to handle, dormant only because no prior write path
+could ever produce a mismatched `tenant_id`. Fixed via a new tenant-parameterized
+`has_role_in(actor, tenant, roles)`, the same pattern `is_authorized_for_branch()` already
+established. **Not yet built:** inventory/production/financial/customer handlers, and the
+`sync_operations.operation_type`/idempotency gaps `SCHEMA-REFERENCE.md` §12 still lists
+(tenant-bound idempotency lookup, payload-hash immutability, `client_sequence`/
+`depends_on_operation_id`, `ALREADY_APPLIED` status, tombstone retention).

@@ -1,5 +1,43 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 FIRST SLICE DELIVERED — ticket.create/item_update, sync_conflicts, sync_pull (2026-08-28)
+
+Per explicit instruction: proceed only with the P3.7 work identified from the live
+schema; don't redesign the working gateway (context-validation/authorization/
+idempotency/conflict-detection); trace `operation_type` producers/consumers before
+touching it; verify handler contracts against the live database before writing them;
+add live tests before declaring anything complete.
+
+**Trace result:** exactly two producers of `operation_type` existed
+(`process_sync_batch_context_validated()`, `archive_ticket()`), zero other consumers.
+Added a new `domain_operation` column instead of widening the CHECK — zero compatibility
+impact on either producer.
+
+**Two real defects found and fixed as prerequisites** (both re-verified with zero
+regression against the existing suites): `ticket_items.line_total` is a `GENERATED
+ALWAYS` column, not insertable; `guard_driver_created_order_assignment()` used an
+active-org-scoped role check that would have silently misbehaved for the exact cross-org
+case this whole blocker exists to handle.
+
+**Built and live-verified (`tests/sql/p3_7_sync_apply_and_pull.sql`, 11/11):**
+`sync_conflicts` (server table + RLS), `apply_sync_operation()` dispatcher (never lets a
+handler exception abort the batch), `ticket.create`, `ticket.item_update`,
+`bump_ticket_revision()` (revision was never incremented before), `sync_pull()` (the
+pull side, previously absent entirely). Re-verified zero regression:
+`security_multiorg_sync.sql` (22/23 — one pre-existing unrelated gap),
+`driver_field_sale_rls.sql` (8/8), full end-to-end check.
+
+**Not built — honestly scoped, not declared complete:** inventory/production/financial/
+customer handlers (allowlisted, `REJECTED unsupported_operation_type` until built);
+`CURSOR_TOO_OLD`/`FULL_RESYNC_REQUIRED`; tenant-bound idempotency; payload-immutability
+hash; `client_sequence`/`depends_on_operation_id`; `ALREADY_APPLIED` status; tombstone
+retention.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md`, `BLOCKERS.md`, `BACKEND_ROADMAP.md` (P3.7 in
+every location), `docs/SCHEMA-REFERENCE.md` §12, `docs/API-CONTRACT.md`.
+
+Full trace: IMPLEMENTATION_LOG.md 2026-08-28.
+
 ## ✅ BLOCKER-006 RESOLVED — offline sync per-entity conflict strategy (2026-08-28)
 
 The user supplied the architecture decision directly (owner-level call, not guessed).

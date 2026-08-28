@@ -5,6 +5,155 @@ Never record planned work here.
 
 ---
 
+## 2026-08-28 · P3.7 first vertical slice — ticket.create/item_update, sync_conflicts, sync_pull
+
+Continuing from AD-021 (BLOCKER-006 resolved earlier today): "Proceed only with the
+remaining P3.7 implementation identified from the live schema. Do not redesign the
+already-working context-validation, authorisation, idempotency, or conflict-detection
+layer. Before changing sync_operations.operation_type, trace every existing producer/
+consumer and document the compatibility impact. Implement per-entity writes,
+business-table mutation, revision increments, handler dispatch, and the pull RPC only
+after verifying their contracts against the live database. Add live RLS/idempotency/
+conflict tests before declaring P3.7 complete."
+
+### `operation_type` compatibility trace (required before touching it)
+
+`select proname from pg_proc where prosrc ilike '%operation_type%'` → exactly two
+producers: `process_sync_batch_context_validated()` (writes `sync_operations.
+operation_type`) and `archive_ticket()` (writes `sync_changes.operation_type`, literal
+`'UPDATE'`). Both columns share an identical CHECK — six coarse values (`CREATE/UPDATE/
+SOFT_DELETE/EVENT/COMMAND/CORRECTION`). Zero other consumers. **Decision: add a new,
+separate, nullable `domain_operation` column on both tables** rather than widen the
+existing CHECK — zero compatibility impact on either producer (neither writes the new
+column; both keep writing `operation_type` exactly as before), and it keeps AD-021's
+fine-grained dispatch key (`ticket.create`, `inventory.adjust`, ...) as a distinct
+concept from the coarse CRUD/EVENT/COMMAND/CORRECTION classification `archive_ticket()`
+already depends on. `process_sync_batch_context_validated()` gained exactly one
+additive line (extract and store `domain_operation` from the envelope) — every existing
+line (idempotency lookup, replay-context check, `is_member_of`/`is_authorized_for_branch`
+authorization, stale-revision detection, the INSERT's other columns) is byte-identical
+to the version read live before this change. Re-verified against
+`tests/sql/security_multiorg_sync.sql`: 22/23 (the one failure, `rate_limit_events` has
+no RLS policies, is pre-existing and unrelated — confirmed `sync_conflicts` itself has
+2 policies, not the same gap).
+
+### Two real defects found while verifying handler contracts against the live schema
+
+1. **`ticket_items.line_total` is `GENERATED ALWAYS AS (round(quantity * unit_price, 4))
+   STORED`.** `information_schema.columns.column_default` shows `null` for a generated
+   column — it does not surface the generation expression the way it does an ordinary
+   default — so this was missed until a first live dry-run INSERT failed with `428C9
+   cannot insert a non-DEFAULT value into column "line_total"`. Confirmed via
+   `information_schema.columns.is_generated`/`generation_expression`. Fixed by removing
+   `line_total` from the handler's INSERT column list; the database now enforces
+   TESTING-STRATEGY.md §4's line-total invariant structurally, which is actually stronger
+   than a manually-maintained check.
+2. **`guard_driver_created_order_assignment()` called `has_role(['driver'])`, scoped to
+   the caller's active organization only (AD-003).** `tickets_insert`/`ticket_items_
+   insert` RLS gate on `current_tenant_id()`/`has_role()`/`has_branch_access()` — all
+   three read the JWT's active-org claim, so they can only ever be correct when
+   `tenant_id = current_tenant_id()`. That has held for every write path until now,
+   because RLS itself has always required it — a sync-apply handler is the first path
+   that can legitimately write a ticket whose `tenant_id` differs from the actor's
+   active organization (the entire point of AD-006/AD-021). Traced the specific trigger
+   this breaks: `guard_driver_created_order_assignment()`'s auto-assign branch would
+   silently answer the wrong organization's "is this actor a driver" question. Fixed by
+   adding `has_role_in(p_actor uuid, p_tenant uuid, p_role_keys text[])` — a new,
+   tenant-parameterized sibling to `is_authorized_for_branch()`'s existing query shape —
+   and swapping the two `has_role()` calls in that one trigger for it. Every other line
+   unchanged. Verified this is a no-op for the online case (`NEW.tenant_id ==
+   current_tenant_id()` there, so both forms agree by construction): re-ran
+   `tests/sql/driver_field_sale_rls.sql` (8/8, no regression) plus a direct check that a
+   driver-created ticket still auto-assigns to themselves online.
+
+### What was built, in order, each verified live in a rolled-back transaction before
+### being applied for real via `mcp__supabase__apply_migration`
+
+1. `has_role_in()` — new function.
+2. `guard_driver_created_order_assignment()` — the fix above, `CREATE OR REPLACE`.
+   Re-verified: `tests/sql/driver_field_sale_rls.sql` 8/8; direct online-case check.
+3. `bump_ticket_revision()` + `tickets_bump_revision` trigger — `tickets.revision`
+   defaulted to `1` and nothing had ever incremented it (confirmed live: only
+   `archive_ticket()` referenced the column, only to read it). Mirrors
+   `bump_cash_session_revision()`'s exact body and the same alphabetical
+   trigger-naming trick (`tickets_bump_revision` sorts before `tickets_guard_status_
+   transition`/`tickets_set_updated_at`, so it reads NEW/OLD before `updated_at` is
+   touched). Re-verified: `archive_ticket()` still works and now returns a genuinely
+   bumped revision (1→2, previously always static at whatever value the ticket was
+   created with); `complete_driver_field_sale()` still completes and revision bumps
+   (1→4 across its internal updates).
+4. `sync_conflicts` table — AD-021's server table. RLS forced: `SELECT` visible to the
+   operation's own `actor_id` (mirrors `sync_operations_select`'s shape) or to
+   `owner/admin/branch_manager` in that tenant (mirrors `sync_changes_select`'s
+   manager-tier shape); `UPDATE` (resolve/dismiss) restricted to the same manager tier,
+   `WITH CHECK (resolved_by = auth.uid())` — the same authorship-forgery class of bug
+   fixed on `expenses_insert` earlier this project, applied here pre-emptively rather
+   than found live. No `INSERT` grant for `authenticated` — written only via the
+   `SECURITY DEFINER` apply path. `CHECK` ties `conflict_status`/`resolved_at`/
+   `resolved_by`/`resolution_type` together so a row can't claim `OPEN` with a
+   resolution already recorded, or `RESOLVED` with one missing.
+5. `domain_operation` columns on `sync_operations`/`sync_changes` — the compatibility
+   trace above, applied.
+6. `process_sync_batch_context_validated()` — the one-line additive capture, applied.
+7. `apply_ticket_create()`, `apply_ticket_item_update()`, `apply_sync_operation()`
+   (dispatcher), `trg_dispatch_sync_operation()` + `sync_operations_dispatch` trigger
+   (`AFTER INSERT ON sync_operations FOR EACH ROW WHEN (NEW.status IN
+   ('PENDING','CONFLICT'))`). The dispatcher never lets a handler's exception escape —
+   catches internally and writes `REJECTED`/`SQLSTATE`/`SQLERRM` — because
+   `process_sync_batch_context_validated()` may process several operations in one
+   transaction, and one bad operation raising here would roll back every operation in
+   the batch (OFFLINE-SYNC-MODEL.md §23: "a batch must not assume every operation
+   succeeds"). Handlers do not rely on `tickets_insert`/`ticket_items_insert` RLS at
+   all (see defect 2 above) — each re-implements the equivalent role gate via
+   `has_role_in()` against the *operation's* tenant.
+8. `sync_pull(p_device_id, p_cursor, p_page_size)` — the pull side, previously absent
+   entirely (`SCHEMA-REFERENCE.md` §12). `SECURITY INVOKER` deliberately: calls the
+   existing, unmodified `sync_validate_device()` for device ownership/revocation, then
+   a plain `SELECT` against `sync_changes` that inherits the existing, unmodified
+   `sync_changes_select` RLS policy by running as the caller — authorization is not
+   reimplemented anywhere in this function.
+
+### Verification
+
+`tests/sql/p3_7_sync_apply_and_pull.sql` (new, 11/11, executed against the real applied
+functions, not a rolled-back sandbox copy): `ticket.create` → `APPLIED` with a real
+ticket; `ticket.item_update` → `APPLIED`, generated `line_total` correct, revision
+bumped; an allowlisted-but-unbuilt `domain_operation` (`inventory.adjust`) →
+`REJECTED unsupported_operation_type`, never silently `PENDING`; a `PENDING` operation
+with no `domain_operation` at all → the same; a handler exception (missing required
+payload field) → `REJECTED` with the real `SQLSTATE`/message, batch not aborted; a
+genuinely stale `base_revision` (bumped to 2, submitted against 1) → a `sync_conflicts`
+row with `conflict_status='OPEN'`, the original `operation_payload` preserved verbatim,
+`base_revision`/`current_revision` recorded; idempotent replay → second call reports
+`replayed: true`, exactly one ticket exists; `sync_conflicts` RLS → visible to the
+operation's own actor and to a `branch_manager`, invisible to an unrelated caller with
+no membership row in that tenant; `sync_pull` → returns the new change with a correct
+`next_cursor`/`has_more`, and independently refuses a revoked device.
+
+Also re-ran, zero regression: `tests/sql/security_multiorg_sync.sql` (22/23, the one
+pre-existing `rate_limit_events` gap unrelated to this work), `tests/sql/driver_field_
+sale_rls.sql` (8/8), plus one final full-stack check combining everything applied today
+(`complete_driver_field_sale()` still completes end-to-end with the new revision trigger
+live: `completed`, revision 4). `pytest -q` → 12 passed, unaffected.
+
+### Explicitly not built in this pass, per the instruction to scope this to what was
+
+Inventory/production/financial/customer handlers — each `domain_operation` value is
+already allowlisted in the CHECK constraint per AD-021, but has no handler yet, so an
+operation of that type reaches `apply_sync_operation()`, finds no matching branch, and
+is recorded as `REJECTED unsupported_operation_type` (never silently `PENDING`, never
+guessed at). Also not built: `CURSOR_TOO_OLD` → `FULL_RESYNC_REQUIRED`, tenant-bound
+idempotency lookup (currently global on `operation_id`, fails closed rather than
+leaking — unchanged from this morning's finding), payload-immutability hash,
+`client_sequence`/`depends_on_operation_id`, `ALREADY_APPLIED` status, tombstone
+retention.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021 status line + implementation
+postscript), `BLOCKERS.md` (BLOCKER-006), `BACKEND_ROADMAP.md` (P3.7 in all locations
+that referenced it), `docs/SCHEMA-REFERENCE.md` §12 (new table/columns/functions, "what's
+missing" corrected), `docs/API-CONTRACT.md` (`sync_pull` row, `process_sync_batch`'s
+`domain_operation` field noted).
+
 ## 2026-08-28 · BLOCKER-006 resolution corrected — sync gateway is not a stub
 
 The user asked to re-check the BLOCKER-006 resolution below for quality and security
