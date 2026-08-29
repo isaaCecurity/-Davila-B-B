@@ -197,7 +197,7 @@ deferred capabilities remain dormant and are not exposed by MVP workflows.
 - Customer balances and ledger views are derived from tickets, invoices, and payments;
 	they are not duplicated in a second source-of-truth ledger.
 
-## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED (tickets slice IMPLEMENTED 2026-08-28; protocol layer HARDENED 2026-08-29)
+## AD-021 — Offline sync: per-entity conflict strategy, server-authoritative `sync_conflicts` · APPROVED (tickets slice IMPLEMENTED 2026-08-28; protocol layer HARDENED 2026-08-29; CUSTOMER slice IMPLEMENTED 2026-08-29)
 Resolves BLOCKER-006. Completes AD-009's deferred "per-entity application and conflict
 semantics" and reaffirms AD-006 (operation-authoritative routing) rather than replacing it.
 **Last-write-wins remains prohibited everywhere**, per `OFFLINE-SYNC-MODEL.md` §32/§62.
@@ -427,3 +427,80 @@ listed above; live verification live-traced first, code changed second.
 	this pass's own scope instruction); `depends_on_operation_id` enforcement; true
 	cursor-expiry-via-retention-purge. All three are documented as open blockers in
 	BLOCKERS.md, not guessed at.
+
+**Implemented 2026-08-29, later same day — second vertical slice: CUSTOMER.** Instruction:
+build `customer.create`/`customer.update` on the existing pipeline, reuse everything already
+working, don't guess business rules, leave `customer.soft_delete` and every other entity
+untouched. Live schema traced first, as with every prior step of this decision.
+
+- **Live schema confirmed the surface before any code was written.** `public.customers` is
+	tenant-scoped only — no `branch_id`, no `revision` column, no credit/balance column (credit
+	is derived elsewhere, from tickets/payments, never stored on the customer row).
+	`sync_operations.domain_operation`'s CHECK constraint already allowlisted
+	`'customer.create'` and `'customer.update'` from the 2026-08-28 migration that added the
+	column, unused until now — and conspicuously did **not** allowlist any
+	`customer.soft_delete` value, which independently confirms create/update is the intended
+	surface for this entity, not delete.
+- **A live discrepancy between two authorization sources, resolved with evidence, not a
+	coin flip.** `customers_insert`/`customers_update` RLS (the raw-table policies) admit only
+	owner/admin/branch_manager/cashier — no driver, no supervisor. `docs/ROLES-AND-
+	PERMISSIONS.md`'s live `role_permissions` grants (owner/admin/branch_manager/supervisor/
+	cashier/driver for both `customers.create` and `customers.update`) disagree, and that
+	document explicitly states the live grants table — not a hand-maintained RLS array —
+	"reflects current intent," citing the identical, already-accepted gap for
+	`tickets.create`/driver (§4, point 3 of its own "surprising things" list).
+	`docs/ADR-001-Driver-Workflow-Redesign-MVP.md` (Approved 2026-08-24) independently and
+	explicitly describes driver-created customers as a required product flow (§7, point 9 of
+	its trip walkthrough), settling the question a second, unrelated way. `apply_customer_
+	create`/`apply_customer_update` use `has_role_in()` — the same handler-level primitive
+	`apply_ticket_create` already established, not the raw RLS array and not
+	`has_permission()` — with the role set the permissions catalog and ADR-001 agree on:
+	owner/admin/branch_manager/supervisor/cashier/driver. The RLS array itself was left
+	unchanged: it is a separate, pre-existing staleness that does not affect the sync handler
+	(SECURITY DEFINER, does not consult table RLS), out of scope for this pass.
+- **`customer.update` authorization: the established grant was implemented; an
+	ownership restriction was NOT invented.** `apply_ticket_item_update` has a real precedent
+	for scoping a driver's write access to rows they created or are assigned to
+	(`created_by = actor OR assigned_to = actor`) — but nothing in the schema,
+	`role_permissions`, or ADR-001 extends that pattern to customers, and `customers` has no
+	`assigned_to`-equivalent column to express it against even if it were wanted. Rather than
+	guessing whether product wants the same restriction here, the handler implements exactly
+	the literal, unscoped grant the permissions catalog states. Flagged for a product decision,
+	not blocking — see BLOCKERS.md BLOCKER-024.
+- **Full-value replacement, not a field-level merge.** `customer.update` overwrites
+	`full_name`/`phone`/`email`/`address_line`/`notes`/`is_walk_in` wholesale from the payload
+	every call, per `OFFLINE-SYNC-MODEL.md`'s stated no-field-level-merge principle for this
+	architecture (the same doc that specifies ticket item/amount edits as
+	`base_revision`-checked, not merged) — a partial-patch interpretation was considered and
+	rejected as inconsistent with that stated principle, not chosen as a default.
+- **Revision tracking needed no new column.** The generic gateway already computes
+	conflict-relevant revision from `sync_changes.revision` keyed by `entity_id`, independent
+	of whatever the entity's own table stores — this is how the existing conflict check in
+	`process_sync_batch_context_validated()` already works for every entity type, tickets
+	included. `apply_customer_create` writes `sync_changes.revision = 1`; `apply_customer_
+	update` computes `max(revision)+1` from `sync_changes` for that `entity_id`. No revision
+	column was added to `customers` itself, since nothing else needs to read one there.
+- **`customer.create` then `ticket.create` referencing the new customer: the honest
+	two-call path works, tested; the single-batch case remains BLOCKER-022, not worked around.**
+	`customer.create` does not accept a client-supplied id (matching `apply_ticket_create`'s
+	own precedent — the real id is server-generated, returned in the result), so a client
+	cannot construct one offline batch containing both operations before either applies; it
+	must complete the customer sync, receive the real `customer_id`, then submit the ticket
+	sync as a separate call. Tested and passing (`tests/sql/p3_7_customer_sync.sql` T1). No
+	`depends_on_operation_id`-style workaround was invented for the single-batch case — see
+	BLOCKERS.md BLOCKER-022, updated with this finding.
+- **Security, checked the same way as the 2026-08-29 protocol pass.** `apply_customer_
+	create(sync_operations)` and `apply_customer_update(sync_operations)` were `REVOKE`d from
+	`PUBLIC`/`anon`/`authenticated` in the same migration that created them, not as an
+	afterthought — confirmed via `has_function_privilege()` and independently via a clean
+	`get_advisors(type: 'security')` run (neither function appears among the anon- or
+	authenticated-executable findings; the one expected finding, `process_sync_batch` itself
+	being `authenticated`-executable, is by design, matching the existing pattern).
+- **Verification:** `tests/sql/p3_7_customer_sync.sql` (new, 18/18, live). Re-run clean, zero
+	regression: `tests/sql/p3_7_protocol_correctness.sql` (17/17 — its header's prior "18/18"
+	was a pre-existing miscount, corrected the same pass this was noticed), `tests/sql/p3_7_
+	sync_apply_and_pull.sql` (11/11); full matrix in `IMPLEMENTATION_LOG.md` 2026-08-29.
+- **Still not built:** inventory/production/financial handlers, `customer.soft_delete`
+	(deliberately — not in `domain_operation`'s CHECK constraint), `depends_on_operation_id`
+	enforcement, true cursor-expiry-via-retention-purge. `customer.update` ownership-scoping
+	is a new, non-blocking open item (BLOCKER-024). None of these are guessed at.

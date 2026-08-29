@@ -286,6 +286,18 @@ see **BLOCKER-022** (`depends_on_operation_id` enforcement) and **BLOCKER-023** 
 cursor-expiry-via-retention-purge), both new. Full detail: AD-021 and
 `IMPLEMENTATION_LOG.md` 2026-08-29.
 
+**Updated 2026-08-29, later same day — CUSTOMER vertical slice.** `customer.create` and
+`customer.update` are now built and live-verified (`tests/sql/p3_7_customer_sync.sql`,
+18/18) — `apply_customer_create`/`apply_customer_update`, dispatched from the same
+`apply_sync_operation()` used by tickets, both `REVOKE`d from `anon`/`authenticated` the
+same way the 2026-08-29 security fix did for the ticket handlers. Confirms the AD-021
+per-entity strategy above ("customers — `base_revision`-checked optimistic concurrency") is
+correct and buildable as stated. Still genuinely missing: inventory/production/financial
+handlers and `customer.soft_delete` (deliberately not in `domain_operation`'s CHECK
+constraint — see `docs/SCHEMA-REFERENCE.md` §12). One new open item from this slice:
+**BLOCKER-024** (`customer.update` ownership/creator scoping, non-blocking). Full detail:
+AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
+
 ---
 
 ## ✅ BLOCKER-007 · Documentation conflict resolved (2026-08-24)
@@ -1195,6 +1207,18 @@ operation gets while waiting, how long it waits, how the client learns to retry,
 this lives inside `process_sync_batch()`'s existing single-call-per-batch model or requires a
 new mechanism.
 
+**Updated 2026-08-29 — this blocker's own motivating example was built and tested.** The
+CUSTOMER slice (`customer.create`/`customer.update`) confirms the analysis above rather than
+changing it: `customer.create` does not accept a client-supplied id (matches
+`apply_ticket_create`'s own precedent — the real id is server-generated and returned in the
+result), so a client cannot construct a single offline batch containing both
+`customer.create` and a `ticket.create` that references the new customer — it must wait for
+the first call's real `customer_id` before constructing the second. `tests/sql/
+p3_7_customer_sync.sql` T1 tests and confirms the working two-sequential-calls path (create,
+then a separate `process_sync_batch()` call with the returned id); it deliberately does NOT
+attempt the single-batch case, since that's exactly what remains blocked here. Still open,
+still not guessed at.
+
 ---
 
 ## BLOCKER-023 · No retention/purge policy exists for `sync_changes`, so true cursor-expiry cannot be implemented
@@ -1231,6 +1255,44 @@ that proposal should explicitly define: the retention window, how a client's cur
 checked against the retained floor (not just the ceiling this pass implemented), and
 confirm it reuses `sync_pull()`'s existing `full_resync_required:true` response shape rather
 than adding a new one.
+
+---
+
+## BLOCKER-024 · `customer.update` has no ownership/creator-scoping rule, and none was invented
+**Status:** OPEN (non-blocking — the shipped handler implements the one thing that IS established) · **Affects:** P3.7 CUSTOMER slice (`apply_customer_update`), any future role-scoping decision for customer records · **Type:** business rule (authorization)
+
+**What was discovered, 2026-08-29, while implementing `customer.create`/`customer.update`:**
+live `role_permissions` grants `customers.update` to owner, admin, branch_manager,
+supervisor, cashier, and driver — unscoped, with no row-level qualifier anywhere in the
+schema. `docs/ROLES-AND-PERMISSIONS.md`'s "Live grants by role" table confirms the same six
+roles. `ADR-001` (Approved 2026-08-24) explicitly describes driver **creation** of a
+customer as a required flow (§7, and point 9 of its driver-trip walkthrough) but never once
+mentions a driver **editing** an existing customer record. Ticket has a real precedent for
+this exact question — `apply_ticket_item_update` restricts the driver role to
+`created_by = actor OR assigned_to = actor` — but nothing in the schema, ADR-001, or
+`docs/ROLES-AND-PERMISSIONS.md` extends that same ownership carve-out to customers, and
+`customers` has no `assigned_to`-equivalent column to even express it against.
+
+**What was implemented instead of guessing:** `apply_customer_update` enforces exactly the
+literal, unscoped role grant above (any of the six roles may update any customer in their
+authorized tenant/branch context) — it does not add a creator-only or assignee-only
+restriction, because doing so would be inventing a business rule with no source. This
+matches this pass's own no-guessing instruction: implement what's established, flag what
+isn't, rather than picking a plausible-sounding default.
+
+**What remains open:** whether product actually wants unrestricted driver editing of any
+customer record (e.g. a driver correcting a rival driver's typo in a shared customer's
+phone number), or whether it should be scoped to "customers the driver created" the way
+ticket items are scoped to "tickets the driver created or is assigned to." Data-safety
+impact is low — `customer.update` cannot touch `tenant_id`, `branch_id` (customers has none),
+credit/balance (customers has no such column; credit is derived elsewhere), or any audit
+field — the exposure is limited to name/phone/email/address/notes/is_walk_in on someone
+else's customer record within the same tenant.
+
+**Needed:** a product decision on whether to add ownership/creator scoping to
+`customer.update`'s driver grant, mirroring `apply_ticket_item_update`'s pattern. If yes,
+the concrete column to scope against also needs deciding — `customers.created_by` exists
+today; whether an `assigned_to`-equivalent is also wanted is a separate open question.
 
 ---
 

@@ -2,7 +2,12 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_protocol_correctness.sql
 --
--- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 18/18 passed.
+-- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 17/17 passed. (Header previously
+-- said 18/18 -- a miscount against the 17 actual `insert into _results` rows below, corrected
+-- 2026-08-29 during the CUSTOMER-slice regression re-run that caught the discrepancy. Several
+-- of the 24 named checks in the I1..C6 list below are asserted together in one combined row,
+-- e.g. "I3/I4/P4 cross-tenant replay...", so 17 rows correctly covering 24 checks is expected,
+-- not a missing assertion.)
 --
 -- This pass also found and fixed one security defect, incidental to the 8 planned items --
 -- surfaced by a routine get_advisors() security check run as due diligence before declaring

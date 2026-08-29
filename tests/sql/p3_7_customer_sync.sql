@@ -2,7 +2,7 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_customer_sync.sql
 --
--- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 21/21 passed.
+-- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 18/18 passed.
 --
 -- Scope: apply_customer_create(), apply_customer_update(), their dispatch wiring in
 -- apply_sync_operation(), and their EXECUTE grants. Does NOT re-test
@@ -46,9 +46,10 @@
 --   C4 unauthorized role (baker) cannot create -> REJECTED, 42501 insufficient_role
 --   C5 cross-tenant create (actor not a member of the operation's org) -> rejected by the
 --      existing generic gateway (is_member_of), before the handler ever runs
---   C6 branch_id belonging to a different organization than the operation's tenant ->
---      rejected by the existing generic gateway (is_authorized_for_branch); customers has no
---      branch column of its own, so there is no second branch inside the SAME tenant to test
+--   C6 branch_id belonging to a different organization than the operation's tenant -> rejected
+--      by the existing generic gateway (is_authorized_for_branch), which raises before any
+--      sync_operations row exists (same shape as C5, not a stored REJECTED row); customers has
+--      no branch column of its own, so there is no second branch inside the SAME tenant to test
 --      genuine not-assigned-to-this-branch denial against -- this is the same gap the live
 --      schema has for every other entity type in this project's single-tenant test fixtures.
 --   R1 identical replay -> replayed=true, does not create a second customer
@@ -224,21 +225,28 @@ begin
 end $$;
 
 -- =================== C6: branch belongs to a different org than the operation tenant =====
+-- is_authorized_for_branch() raises before any sync_operations row is even inserted (unlike
+-- the CONFLICT/handler-exception paths, which are caught and stored as a REJECTED row) --
+-- same shape as C5, so it needs the same exception-catching wrapper, not a status-row read.
 do $$
-declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
+declare v_opid uuid := gen_random_uuid(); v_error_seen boolean := false; v_state text;
 begin
-  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
-    jsonb_build_array(jsonb_build_object(
-      'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
-      'branch_id', 'ac000000-0000-4000-8000-00000000da02',
-      'entity_id', gen_random_uuid(), 'entity_type', 'customers',
-      'operation_type', 'CREATE', 'domain_operation', 'customer.create',
-      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Wrong Branch Org')
-    )));
-  select * into v_row from public.sync_operations where operation_id = v_opid;
-  insert into _results values ('C6 branch from a different org -> REJECTED 42501 (generic gateway)',
-    v_row.status = 'REJECTED' and v_row.error_code = '42501',
-    v_row.status || ' ' || coalesce(v_row.error_code,''));
+  begin
+    perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+      jsonb_build_array(jsonb_build_object(
+        'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+        'branch_id', 'ac000000-0000-4000-8000-00000000da02',
+        'entity_id', gen_random_uuid(), 'entity_type', 'customers',
+        'operation_type', 'CREATE', 'domain_operation', 'customer.create',
+        'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Wrong Branch Org')
+      )));
+  exception when others then
+    v_error_seen := true;
+    get stacked diagnostics v_state = returned_sqlstate;
+  end;
+  insert into _results values ('C6 branch from a different org -> rejected (generic gateway)',
+    v_error_seen and v_state = '42501',
+    'error_seen=' || v_error_seen || ' state=' || coalesce(v_state,''));
 end $$;
 
 -- =================== R1: identical replay does not duplicate ===================

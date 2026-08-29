@@ -4,6 +4,37 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## P3.7 CUSTOMER vertical slice implemented and live-verified (2026-08-29)
+
+`customer.create` and `customer.update` are now built on the same sync pipeline as tickets
+— `apply_customer_create`/`apply_customer_update`, dispatched from `apply_sync_operation()`,
+both locked down from direct PostgREST access the same way the earlier security fix did for
+the ticket handlers. `tests/sql/p3_7_customer_sync.sql`, 18/18. No regression in the
+existing ticket/protocol/RLS suites (re-run clean).
+
+One authorization question was found and resolved with concrete evidence, not guessed:
+the live `customers_insert`/`customers_update` RLS policies exclude `driver` and
+`supervisor`, but `docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants (the
+document's own stated authority for "current intent" over a hand-maintained RLS array) and
+`ADR-001` (Approved 2026-08-24, describes driver-created customers explicitly) both include
+them — the handler follows the permissions catalog/ADR, matching how `ticket.create`
+already resolved an identical gap. The RLS array itself was left as-is (out of scope, and
+the SECURITY DEFINER handler doesn't depend on it).
+
+One new, non-blocking open item — see **BLOCKER-024**: whether `customer.update` should be
+ownership-scoped to the creating driver (like `ticket.item_update` is) or stay unscoped as
+implemented. Nothing in the schema or product docs establishes an answer either way, so the
+handler implements the one thing that IS established (the unscoped role grant) and this is
+flagged for a product decision rather than picked by default.
+
+Inventory/production/financial handlers and `customer.soft_delete` remain intentionally
+unbuilt, per your instruction not to expand further this pass.
+
+Full detail: `ARCHITECTURE_DECISIONS.md` AD-021, `IMPLEMENTATION_LOG.md` 2026-08-29,
+`BACKEND_ROADMAP.md` P3.7. Nothing committed to git — awaiting explicit go-ahead.
+
+---
+
 ## P3.7 protocol-correctness pass complete — one real bug and one security defect fixed, two new blockers opened (2026-08-29)
 
 Scoped pass at your instruction: harden the offline-sync protocol layer (idempotency,

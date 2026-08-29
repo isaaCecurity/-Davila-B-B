@@ -113,7 +113,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29 (BLOCKER-006 resolved via AD-021); other entities not started |
+| B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29 (BLOCKER-006 resolved via AD-021); inventory/production/financial not started |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
 | B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
@@ -341,15 +341,17 @@ Verified 2026-08-10 by executed queries; see `IMPLEMENTATION_LOG.md`.
 **Deliverables:** stale `base_revision` recorded as `CONFLICT`, never overwritten, never discarded.
 **Gap:** detection only; resolution is P3.7.
 
-## P3.7 · Per-entity sync application — **PARTIAL: tickets slice + protocol layer IMPLEMENTED, other entities not started** *(formerly B5)*
+## P3.7 · Per-entity sync application — **PARTIAL: tickets + customer slices, plus protocol layer, IMPLEMENTED; inventory/production/financial not started** *(formerly B5)*
 **Objective:** Apply recorded operations to business tables, per entity, with explicit conflict semantics.
 **Dependencies:** P3.1–P3.6 (met), **P4.1** and/or **P4.4** for the target entity —
 P3.7 is *downstream* of those milestones, never upstream of them (BLOCKER-008b,
 resolved 2026-08-11). The former "P4 is gated behind P3.7" note is withdrawn.
 **Tasks:** ~~define the applier contract per entity~~ (AD-021); ~~implement handler dispatch~~;
-tickets: ~~`ticket.create`~~, ~~`ticket.item_update`~~ done; inventory/production/financial/
-customer handlers not started; `sync_changes` emission and revision increment done for
-tickets only; the pull RPC (`sync_pull`) is generic, done for all entities.
+tickets: ~~`ticket.create`~~, ~~`ticket.item_update`~~ done; customers: ~~`customer.create`~~,
+~~`customer.update`~~ done (2026-08-29), `customer.soft_delete` deliberately not started (not
+in `domain_operation`'s CHECK allowlist); inventory/production/financial handlers not
+started; `sync_changes` emission and revision increment done for tickets and customers;
+the pull RPC (`sync_pull`) is generic, done for all entities.
 **Deliverables (2026-08-28, tickets slice):** `sync_conflicts` table + RLS; `domain_operation`
 columns; `apply_sync_operation()` dispatcher; `apply_ticket_create()`/`apply_ticket_item_update()`;
 `has_role_in()`; `bump_ticket_revision()`; `sync_pull()`. See AD-021 and
@@ -373,20 +375,35 @@ PostgREST, the former even by `anon`, since they re-derive authorization from a 
 `p3_7_revoke_public_execute_on_internal_sync_handlers`). Tenant-bound idempotency and the
 `operation_type`/`domain_operation` compatibility contract were both confirmed already correct,
 not rebuilt. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
+**Deliverables (2026-08-29, later same day — customer slice):** `apply_customer_create()`/
+`apply_customer_update()`, dispatched from the same `apply_sync_operation()`, same
+`REVOKE`-from-`anon`/`authenticated` security pattern as the protocol pass. Role eligibility
+(owner/admin/branch_manager/supervisor/cashier/driver) resolved a live discrepancy between
+`customers_insert`/`customers_update` RLS (stale, excludes driver/supervisor) and
+`docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants plus ADR-001 (both agree
+driver-created customers are required) — handlers follow the permissions catalog/ADR, RLS
+left as-is (out of scope, doesn't affect the SECURITY DEFINER handler). `customer.update` is
+a full-value replacement (no field-level merge, per OFFLINE-SYNC-MODEL.md) and is
+role-eligible but NOT ownership-scoped to the creating driver — nothing in the schema or
+product docs establishes that restriction, so none was invented (open item, non-blocking:
+BLOCKER-024). Revision tracked purely via `sync_changes.revision` keyed by `entity_id` — no
+new column on `customers` itself. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
 **Tests:** `tests/sql/p3_7_sync_apply_and_pull.sql` — 11/11, live, re-run clean (zero
-regression). `tests/sql/p3_7_protocol_correctness.sql` — 18/18, live, new. Re-verified with
-zero regression: `tests/sql/security_multiorg_sync.sql` (22/23 — one pre-existing, unrelated
+regression). `tests/sql/p3_7_protocol_correctness.sql` — 17/17, live, re-run clean (header
+previously said 18/18, a pre-existing miscount corrected the same pass this was noticed).
+`tests/sql/p3_7_customer_sync.sql` — 18/18, live, new. Re-verified with zero regression:
+`tests/sql/security_multiorg_sync.sql` (22/23 — one pre-existing, unrelated
 `rate_limit_events` RLS gap), `tests/sql/driver_trips_rls.sql` (20/20),
 `tests/sql/financial_write_rls.sql` (28/28), `tests/sql/driver_field_sale_rls.sql` (8/8).
-Also clean: `pytest` (12/12), `tsc --noEmit`, `eslint --max-warnings=0`, production `expo
-export --platform web`.
+Also clean: `pytest` (12/12), `tsc --noEmit`, `eslint --max-warnings=0`.
 **Completion criteria:** every in-scope entity has a contract, an applier, and passing
-idempotency + authorization + conflict tests. **Tickets meets this, and the shared protocol
-layer (idempotency, payload immutability, response-status correctness, cursor validation) is
-now hardened for whichever entity comes next. Inventory, production, financial, and customer
-entities do not yet have handlers** — each is allowlisted in `domain_operation`'s CHECK per
-AD-021 but has no handler, so an operation of that type is recorded then `REJECTED
-unsupported_operation_type`, never silently left `PENDING`.
+idempotency + authorization + conflict tests. **Tickets and customers both meet this, and the
+shared protocol layer (idempotency, payload immutability, response-status correctness,
+cursor validation) is hardened for whichever entity comes next. Inventory, production, and
+financial entities do not yet have handlers** — each is allowlisted in `domain_operation`'s
+CHECK per AD-021 but has no handler, so an operation of that type is recorded then `REJECTED
+unsupported_operation_type`, never silently left `PENDING`. `customer.soft_delete` is
+deliberately not allowlisted at all yet (see `docs/SCHEMA-REFERENCE.md` §12).
 **Blockers:**
 - ~~**BLOCKER-005**~~ — **RESOLVED 2026-08-14.** `prevent_submitted_ticket_update()` was
   dropped; every ticket status is now reachable and `subtotal_amount` is frozen once a
@@ -395,13 +412,16 @@ unsupported_operation_type`, never silently left `PENDING`.
 - ~~**BLOCKER-006**~~ — **RESOLVED 2026-08-28.** Per-entity conflict strategy decided,
   `sync_conflicts` confirmed as a server table, `operation_type` allowlist contract set —
   see **AD-021**. **No blocker remains for P3.7.**
-**Remaining, not a blocker — implementation work:** inventory/production/financial/customer
-handlers; `ALREADY_APPLIED` as a status value was deliberately NOT added (see AD-021 —
-`status` + `replayed` already give full distinguishability); tombstone retention / true
-cursor-expiry-via-purge (no retention mechanism exists at all yet — see BLOCKERS.md);
-`depends_on_operation_id` enforcement (existing per-handler existence checks already give
-correct safety for the realistic case; blocking/queuing semantics are unspecified and need a
-fresh architecture decision if ever required — see BLOCKERS.md).
+**Remaining, not a blocker — implementation work:** inventory/production/financial
+handlers; `customer.soft_delete` (not yet allowlisted); `ALREADY_APPLIED` as a status value
+was deliberately NOT added (see AD-021 — `status` + `replayed` already give full
+distinguishability); tombstone retention / true cursor-expiry-via-purge (no retention
+mechanism exists at all yet — see BLOCKERS.md); `depends_on_operation_id` enforcement
+(existing per-handler existence checks already give correct safety for the realistic case —
+its own motivating example, customer-then-ticket, was tested via two sequential
+`process_sync_batch()` calls; blocking/queuing semantics for a single atomic batch are
+unspecified and need a fresh architecture decision if ever required — see BLOCKERS.md);
+`customer.update` ownership/creator scoping (BLOCKER-024, non-blocking).
 **Parallelizable:** P4.1, P4.2, P6 can all proceed independently of this.
 
 ## P3.8 · Pending-sync behaviour — BLOCKED
@@ -945,7 +965,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P6.2 invitations | BLOCKER-001 |
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
-| P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); other entities not started |
+| P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); inventory/production/financial not started |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
 **Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to
@@ -1023,7 +1043,7 @@ behaviour → tests → acceptance gate.**
 | ID | Slice | Backend dep | Offline behaviour | Status |
 |---|---|---|---|---|
 | P9.1 | Catalog browse | P4.1 | read-through cache | **COMPLETE 2026-08-15, re-verified live 2026-08-24.** `app/index.tsx` (list) + `app/product/[id].tsx` (detail with priced variants, shipped same day as the immediate P9.1 follow-on to P8.1). Money is never summarised across variants (no "from ₦X") — comparing `NUMERIC(19,4)` strings needs a decimal library not yet a dependency, and `formatNaira` truncates rather than rounds pending BLOCKER-003. |
-| P9.2 | Customer create/select | P4.4a | queued create | BLOCKED (P3.7) |
+| P9.2 | Customer create/select | P4.4a | queued create | **Backend unblocked 2026-08-29** — `customer.create`/`customer.update` sync handlers exist and are live-verified (P3.7). No frontend work done in this pass (out of scope by instruction — see `docs/API-CONTRACT.md` for the `process_sync_batch` payload/result contract this screen would call against). Still not started: screen, hooks, offline queue wiring. |
 | P9.3 | Ticket creation (driver) | P4.4 | queued, immutable | **ONLINE-COMPLETE 2026-08-25, including completion.** `apps/mobile/app/driver/sell.tsx`: cart from the catalog → `createRoadsideTicket()` (plain INSERT, RLS-verified live) → `completeDriverFieldSale()` (AD-020, resolving **BLOCKER-021**: a driver-created, trip-linked pickup ticket takes `draft → completed` directly via a narrowly-gated new RPC, instead of the seven-hop production lifecycle or adding `driver` to its actor lists) → `recordDriverTripPayment()` (unchanged, already correctly scoped). Live-verified: `tests/sql/driver_field_sale_rls.sql` 8/8, `driver_trips_rls.sql` 20/20 and `financial_write_rls.sql` 28/28 confirmed unaffected. Still BLOCKED on **BLOCKER-006** for the *offline* half (queued/sync behavior) — unchanged; the online path has no dependency on it. See `ARCHITECTURE_DECISIONS.md` AD-020, `BLOCKERS.md` §BLOCKER-021 (RESOLVED), `IMPLEMENTATION_LOG.md` 2026-08-25. |
 | P9.4 | Inventory view & adjust | P4.2 | online-only for now — queuing needs P10 | **READ PATH COMPLETE / WRITE PATH COMPLETE 2026-08-21.** `AdjustStockAction` on each stock row calls the already-existing `adjust_stock()` RPC (P4.2b) — an absolute target, not a delta; three reasons (`adjustment`, `waste`, `opening_balance`), role-gated per reason server-side. The RPC contract itself was proven live in the P9.5 smoke work (an opening-balance call against a disposable fixture); this slice is the hook + UI wiring around it |
 | P9.5 | Production batches | P4.3 | online-only for now — queuing needs P10 | **READ PATH COMPLETE 2026-08-16 / WRITE PATH COMPLETE 2026-08-21.** Detail screen shipped with transition controls, live-verified: `scheduled`'s two exits are plain PostgREST updates (`authenticated` holds `UPDATE` here, unlike `deliveries`); `in_progress`'s two exits are the SECURITY DEFINER RPCs `complete_production_batch()`/`fail_production_batch()`, which atomically write `stock_movements`. BLOCKER-017 (a raw update could reach `completed`/`failed` without the RPC) resolved 2026-08-22 with a trigger-side guard flag — see `BLOCKERS.md` |

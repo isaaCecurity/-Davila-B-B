@@ -1,5 +1,54 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 CUSTOMER VERTICAL SLICE DELIVERED (2026-08-29)
+
+Per explicit instruction: implement `customer.create`/`customer.update` on the existing
+P3.7 sync pipeline (reuse the gateway's authorization/idempotency/conflict-detection
+unchanged, don't guess business rules, don't build inventory/production/financial handlers
+or `customer.soft_delete`, don't touch mobile UI).
+
+**Live schema traced first.** `public.customers` is tenant-scoped only — no `branch_id`, no
+`revision`, no credit/balance column. `sync_operations.domain_operation`'s CHECK already
+allowlisted `customer.create`/`customer.update` (from an earlier migration, unused until
+now) but not `customer.soft_delete` — confirming create/update, not delete, was the
+intended surface.
+
+**A live authorization discrepancy was found and resolved with evidence, not a guess:**
+raw `customers_insert`/`customers_update` RLS excludes driver and supervisor.
+`docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants (which that document
+itself says "reflects current intent" over a stale RLS array, citing an identical accepted
+gap for `tickets.create`) and `ADR-001` (Approved 2026-08-24, explicitly describes
+driver-created customers) both include them. Handlers follow the permissions catalog/ADR;
+the RLS array is untouched (separate, out of scope, doesn't affect the SECURITY DEFINER
+handler).
+
+**Delivered:** `apply_customer_create()`/`apply_customer_update()`, dispatched from the
+existing `apply_sync_operation()`, both `REVOKE`d from `anon`/`authenticated` in the same
+migration that created them. `customer.update` is a full-value replacement (no field-level
+merge, per `OFFLINE-SYNC-MODEL.md`'s stated principle), role-eligible but not
+ownership-scoped to the creating driver — nothing establishes that restriction, so none was
+invented (open, non-blocking: **BLOCKER-024**). Revision tracked via `sync_changes.revision`
+keyed by `entity_id` — no new column on `customers`.
+
+**One blocker's own motivating example was tested:** `customer.create` then a separate
+`ticket.create` referencing the real returned customer id — works via two sequential
+`process_sync_batch()` calls, the only currently-safe path (customer.create can't accept a
+client-supplied id, same as `apply_ticket_create`). The single-batch case remains
+**BLOCKER-022**, not worked around.
+
+**Verified, zero regression:** `tests/sql/p3_7_customer_sync.sql` (new, 18/18),
+`tests/sql/p3_7_protocol_correctness.sql` (17/17 — header's prior "18/18" was a pre-existing
+miscount, corrected this pass), `tests/sql/p3_7_sync_apply_and_pull.sql`
+(11/11), plus the wider regression matrix (`security_multiorg_sync.sql`,
+`driver_trips_rls.sql`, `financial_write_rls.sql`, `driver_field_sale_rls.sql`, `pytest`,
+typecheck, lint) — see `IMPLEMENTATION_LOG.md` 2026-08-29 for full results.
+
+**Not built, by instruction:** inventory/production/financial handlers,
+`customer.soft_delete`, any mobile UI. **Nothing committed to git** — awaiting explicit
+go-ahead.
+
+---
+
 ## ✅ P3.7 PROTOCOL-CORRECTNESS PASS DELIVERED (2026-08-29)
 
 Per explicit instruction: harden the offline-sync protocol layer (tenant-bound

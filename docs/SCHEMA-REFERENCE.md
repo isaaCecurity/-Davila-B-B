@@ -632,7 +632,8 @@ below).
 
 **Not built by this slice:** inventory/production/financial/customer handlers (each
 `REJECTED unsupported_operation_type` until built); `CURSOR_TOO_OLD`/`FULL_RESYNC_REQUIRED`;
-and the gaps below that predate this slice and are unchanged by it.
+and the gaps below that predate this slice and are unchanged by it. (Customer handlers were
+added in a later pass the same day — see below.)
 
 **Hardened 2026-08-29 — protocol-correctness pass (no new entities; tickets-slice handlers
 unchanged in behavior).**
@@ -673,6 +674,60 @@ unchanged in behavior).**
 	`tests/sql/p3_7_sync_apply_and_pull.sql` (11/11), `security_multiorg_sync.sql` (22/23,
 	same pre-existing unrelated gap), `driver_trips_rls.sql` (20/20),
 	`financial_write_rls.sql` (28/28), `driver_field_sale_rls.sql` (8/8), `pytest` (12/12).
+
+**Second vertical slice, 2026-08-29 (later same day) — CUSTOMER: `customer.create`/
+`customer.update`.**
+
+- **`public.customers`** — tenant-scoped only: no `branch_id`, no `revision` column, no
+	credit/balance column (credit is derived elsewhere, from tickets/payments, never stored on
+	the customer row). `full_name` is `NOT NULL`, CHECK length 1-200; `phone` CHECK ≤40;
+	`email` CHECK ≤320; `notes` CHECK ≤2000. `sync_operations.domain_operation`'s CHECK
+	already allowlisted `'customer.create'`/`'customer.update'` (added 2026-08-28, unused
+	until now) but not any `customer.soft_delete` value — confirming create/update, not
+	delete, is the intended surface.
+- **`apply_customer_create(p_operation sync_operations)`** and **`apply_customer_
+	update(p_operation sync_operations)`** — new handlers, same shape as the ticket handlers:
+	`SECURITY DEFINER`, authorize via `has_role_in(actor, tenant, roles)` (owner/admin/
+	branch_manager/supervisor/cashier/driver for both operations — see the role-source
+	discrepancy note below), validate the payload server-side, write a `sync_changes` row.
+	`customer.update` looks up its target via `payload->>'customer_id'` (matching
+	`apply_ticket_item_update`'s `payload->>'ticket_id'` convention, not `p_operation.
+	entity_id`), and additionally rejects if that id doesn't match `p_operation.entity_id` —
+	a consistency guard with no ticket-handler precedent, added because a mismatch here would
+	silently conflict-track against the wrong entity's revision history.
+- **Role eligibility resolved a live discrepancy, not a guess.** `customers_insert`/
+	`customers_update` RLS (raw-table policies) admit only owner/admin/branch_manager/cashier.
+	`docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants — which that document
+	states explicitly "reflects current intent" over a stale RLS array, citing an identical
+	accepted gap for `tickets.create`/driver — include supervisor and driver for both
+	`customers.create` and `customers.update`. `docs/ADR-001-Driver-Workflow-Redesign-MVP.md`
+	(Approved 2026-08-24) independently and explicitly describes driver-created customers as
+	required. The handlers follow the permissions catalog/ADR-001; the RLS array is untouched
+	(separate, pre-existing, doesn't affect the SECURITY DEFINER handler).
+- **`customer.update` is unscoped by ownership, deliberately, not by oversight.**
+	`apply_ticket_item_update` restricts driver writes to `created_by = actor OR assigned_to
+	= actor`; nothing in the schema, `role_permissions`, or ADR-001 extends an equivalent
+	restriction to customers (which has no `assigned_to`-equivalent column to express it
+	against), so none was invented. See `BLOCKER-024` (open, non-blocking).
+- **Full-value replacement, not a field-level merge**, per §21's stated no-merge principle:
+	`customer.update` overwrites `full_name`/`phone`/`email`/`address_line`/`notes`/
+	`is_walk_in` wholesale from the payload every call.
+- **Revision tracking needed no new column.** The existing gateway conflict check already
+	computes revision from `sync_changes.revision` keyed by `entity_id`, independent of the
+	entity's own table — `apply_customer_create` writes revision `1`; `apply_customer_update`
+	computes `max(revision)+1` from `sync_changes` for that `entity_id`.
+- **Security:** both new handlers `REVOKE`d from `PUBLIC`/`anon`/`authenticated` in the same
+	migration that created them, confirmed via `has_function_privilege()` and a clean
+	`get_advisors(security)` re-run.
+- **Tests:** `tests/sql/p3_7_customer_sync.sql`, new, 18/18. Zero regression re-confirmed:
+	`tests/sql/p3_7_protocol_correctness.sql` (17/17 — header's prior "18/18" was a
+	pre-existing miscount, corrected the same pass this was noticed), `tests/sql/p3_7_sync_
+	apply_and_pull.sql` (11/11).
+- **Still not built:** inventory/production/financial handlers; `customer.soft_delete`
+	(deliberately, not in the CHECK constraint); `depends_on_operation_id` (`BLOCKER-022`,
+	whose own motivating example — customer-then-ticket — was tested via two sequential
+	`process_sync_batch()` calls, the only currently-safe path); cursor-expiry-via-retention
+	(`BLOCKER-023`).
 
 ### What the deployed schema does provide
 
@@ -738,9 +793,10 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 	value.
 - ~~No fine-grained domain-operation type.~~ **Resolved 2026-08-28** — the new
 	`domain_operation` column (see the P3.7 section above) carries AD-021's fine-grained
-	allowlist; the coarse `operation_type` CHECK is untouched. Handlers exist today only for
-	`ticket.create`/`ticket.item_update`; every other allowlisted value is accepted by the
-	CHECK but `REJECTED unsupported_operation_type` at dispatch until its handler is built.
+	allowlist; the coarse `operation_type` CHECK is untouched. Handlers exist today for
+	`ticket.create`/`ticket.item_update`/`customer.create`/`customer.update`; every other
+	allowlisted value is accepted by the CHECK but `REJECTED unsupported_operation_type` at
+	dispatch until its handler is built.
 - **No retention policy** for `sync_changes` tombstones (§66) — see `BLOCKER-023`; this is
 	also why cursor-expiry-via-purge above cannot be built yet.
 

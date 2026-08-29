@@ -5,6 +5,198 @@ Never record planned work here.
 
 ---
 
+## 2026-08-29 · P3.7 CUSTOMER vertical slice — `customer.create`/`customer.update`, live-verified
+
+Instruction: implement `customer.create` and `customer.update` on the existing P3.7 sync
+pipeline (reuse `process_sync_batch_context_validated()`/`apply_sync_operation()` unchanged
+in their generic parts, don't guess business rules, don't build inventory/production/
+financial handlers or `customer.soft_delete` this pass, don't touch the mobile Sell screen).
+Live schema traced first, per the same discipline as the earlier protocol-correctness pass.
+
+### Live trace before writing anything
+
+`information_schema.columns`/`pg_constraint` for `public.customers`: tenant-scoped only —
+`id, tenant_id, full_name, phone, email, address_line, notes, is_walk_in, created_at,
+updated_at, created_by, deleted_at, deleted_by`. No `branch_id`, no `revision`, no credit/
+balance column. Constraints: `full_name` NOT NULL + CHECK length 1-200 (two overlapping
+constraints, `customers_full_name_check` and `customers_name_length`); `phone` CHECK ≤40;
+`email` CHECK ≤320; `notes` CHECK ≤2000; `UNIQUE (tenant_id, id)`; `tenant_id` FK →
+`organizations` `ON DELETE RESTRICT`. Only trigger: `customers_set_updated_at`. Zero
+existing RPCs/functions reference `customers` at all (`pg_get_functiondef(oid) ilike
+'%customers%'` across `pg_proc` — empty).
+
+`pg_policies` for `customers`: `customers_insert`/`customers_update` admit only
+`owner/admin/branch_manager/cashier` (`has_role(ARRAY[...])`) — **no driver, no
+supervisor.** `customers_delete` is `owner/admin` only. This looked, at first read, like it
+would forbid the exact driver-creates-a-customer flow the task described.
+
+Cross-checked against `public.role_permissions`/`roles`/`permissions` (a real, populated
+permission catalog, distinct from raw RLS role arrays): `customers.create` and
+`customers.update` are both granted to owner, admin, branch_manager (role key
+`branch_manager`, display name "Manager"), supervisor, cashier, **and driver** —
+unscoped. `customers.delete` is owner/admin/branch_manager only, matching the RLS delete
+policy. `docs/ROLES-AND-PERMISSIONS.md` (the canonical, current doc per `CLAUDE.md`'s own
+routing table) confirms the identical grant table and states explicitly, discussing an
+analogous gap for `tickets.create`/driver: *"the deployed grants implement it anyway. The
+database, not that table row, reflects current intent."* `docs/ADR-001-Driver-Workflow-
+Redesign-MVP.md` (Approved 2026-08-24, §7 "Customer Creation" and point 9 of its driver-trip
+walkthrough) independently and explicitly describes a driver registering a new customer
+mid-sale as required product behavior. Both sources agree; the RLS array is the stale
+artifact — matching the same, already-accepted pattern this project has for
+`tickets.create`. Resolved: handlers authorize via `has_role_in()` (the primitive
+`apply_ticket_create` already established, not raw RLS and not `has_permission()`, for
+consistency with the existing handler convention) against
+`owner/admin/branch_manager/supervisor/cashier/driver`.
+
+Checked whether `customer.update` should be ownership-scoped like `apply_ticket_item_update`
+(`created_by = actor OR assigned_to = actor` for driver). Neither the schema (`customers`
+has no `assigned_to`-equivalent), `role_permissions` (grants are role-level, no row scoping),
+nor ADR-001 (documents driver *creation* only, never editing an existing customer)
+establishes this. Implemented the literal, unscoped grant instead of inventing a
+restriction; opened **BLOCKER-024** rather than guessing either way.
+
+`pg_constraint` on `sync_operations`: `sync_operations_domain_operation_check` already
+allowlisted `'customer.create'` and `'customer.update'` (added by the 2026-08-28 migration
+that created the `domain_operation` column, unused until today) — and, notably, **no**
+`customer.soft_delete` value anywhere in that CHECK, confirming create/update, not delete, is
+the schema's own intended surface for this entity. `apply_sync_operation()`'s dispatcher
+(read via `pg_get_functiondef`) was the exact, single point needing two new `ELSIF` branches.
+`sync_changes.branch_id` and `sync_operations.branch_id` are both nullable — customers has no
+branch of its own, so an operation's `branch_id` is optional/informational; if supplied, the
+existing generic `is_authorized_for_branch()` gate still applies with no new code needed.
+
+Checked `OFFLINE-SYNC-MODEL.md` for update-payload semantics: §21/AD-021 states ticket
+item/amount edits use "`base_revision`-checked optimistic concurrency, **no field-level
+merge**." Applied the same principle to `customer.update`: full-value replacement of every
+mutable column from the payload each call, not a per-field patch — a partial-patch design
+was considered and rejected as inconsistent with this stated principle, not chosen as a
+convenient default.
+
+Confirmed the ticket-then-customer dependency question from `BLOCKER-022`'s own text: since
+`customer.create` cannot accept a client-supplied id (matching `apply_ticket_create`'s
+existing precedent — the real id is server-generated, returned in the result), a client
+cannot construct one offline batch containing both `customer.create` and a `ticket.create`
+that references it. The only currently-safe representation is two sequential
+`process_sync_batch()` calls. Tested and documented, not worked around.
+
+### Implementation
+
+Three migrations, each dry-run tested in a `BEGIN; ... ROLLBACK;` block with live fixture
+data before being applied for real via `mcp__supabase__apply_migration`:
+
+1. `p3_7_customer_create_handler` — `apply_customer_create(p_operation sync_operations)
+   RETURNS jsonb`. Validates `full_name` (required, 1-200 chars after `btrim`), `phone`
+   (≤40), `email` (≤320), `notes` (≤2000), `is_walk_in` (boolean if present) server-side,
+   raising `22023 invalid_request` on violation rather than relying on the raw table CHECK
+   constraints to surface a less-structured error. Authorizes via `has_role_in()`. Inserts
+   into `customers` with `tenant_id`/`created_by` taken from `p_operation`, never from the
+   payload. Writes a `sync_changes` row (`revision = 1`, `entity_type = 'customers'`,
+   `entity_id = ` the real server-generated customer id). Returns `{customer_id, full_name,
+   revision: 1}`. `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` in the same
+   migration, matching the 2026-08-29 protocol-pass security-fix convention.
+2. `p3_7_customer_update_handler` — `apply_customer_update(p_operation sync_operations)
+   RETURNS jsonb`. Requires `payload.customer_id`, and additionally rejects
+   (`22023`) if it doesn't equal `p_operation.entity_id` — a new consistency guard with no
+   direct ticket-handler precedent, added because a mismatch here would let the gateway's
+   generic conflict check track revision against a different entity than the one actually
+   mutated. Looks up the target row by `id + tenant_id + deleted_at IS NULL`, `RAISE
+   EXCEPTION ... 'customer not found in this organization'` (`P0001`) if absent, matching
+   `apply_ticket_item_update`'s not-found convention. Same field validation as create.
+   Authorizes via the same `has_role_in()` role set. `UPDATE ... RETURNING *` overwrites
+   every mutable column. Computes the new revision as `coalesce(max(revision),0)+1` from
+   `sync_changes` for that `entity_id` — the same generic mechanism the gateway's own
+   conflict check already reads, so no new revision column was needed on `customers` itself.
+   Same `REVOKE EXECUTE` pattern.
+3. `p3_7_dispatch_customer_operations` — `CREATE OR REPLACE` on `apply_sync_operation()`,
+   adding exactly two `ELSIF` branches (`'customer.create'` → `apply_customer_create`,
+   `'customer.update'` → `apply_customer_update`) between the existing ticket branches and
+   the existing `unsupported_operation_type` fallback. Every other line is byte-for-byte
+   identical to the version P3.7's protocol pass left in place the previous day.
+
+### Security verification
+
+`has_function_privilege()` confirmed `anon_exec=false`/`authenticated_exec=false` for both
+new functions immediately after applying the migrations. `mcp__supabase__get_advisors(type:
+'security')` re-run afterward: neither `apply_customer_create` nor `apply_customer_update`
+appears among the `anon_security_definer_function_executable`/
+`authenticated_security_definer_function_executable` findings (grepped the full advisor
+output for `customer` — zero hits); `process_sync_batch` itself still appears once under
+`authenticated_security_definer_function_executable`, which is the expected, by-design
+finding for the intended public gateway (unchanged from the prior pass).
+
+### Tests
+
+New file `tests/sql/p3_7_customer_sync.sql`, 18 assertions, same fixture conventions as
+`p3_7_sync_apply_and_pull.sql` (single real profile `aa000000.../` org `ab000000...da01`/
+branch `ac000000...da01`/device `f8000000...0001`), plus orgs `da02`/`da03` (already live,
+from `security_multiorg_sync.sql`'s fixtures) for cross-tenant/cross-branch-org tests.
+Covers: authorized create (C1), missing/oversized `full_name` (C2/C3), unauthorized role —
+baker (C4), cross-tenant create — actor not a member of org C (C5), branch belonging to a
+different org than the operation's tenant (C6), identical replay not duplicating (R1),
+same-`operation_id`-modified-payload rejected (R2), internal handlers not directly callable
+(S1/S2), authorized update with revision bump (U1), unauthorized role — accountant (U2),
+stale `base_revision` producing a `sync_conflicts` row without overwriting (U3), identical
+update replay not duplicating `sync_changes` (U4), payload `customer_id` not matching
+`entity_id` rejected (U5), updating a nonexistent `customer_id` rejected (U6),
+`customer.create` then a separate `ticket.create` referencing the real returned id, both
+applied and linked (T1), and a regression guard on the exact `domain_operation` CHECK
+constraint text (D1). Executed live against `tvfyxpafbpnkneujcnvr`: **18/18 passed.**
+
+One test-authoring correction made during the first run: C6 (branch from a different org)
+initially assumed `is_authorized_for_branch()`'s rejection would surface as a stored
+`REJECTED` row on `sync_operations`, matching how handler-level exceptions (stale revision,
+bad payload) are caught inside `apply_sync_operation()`'s own `EXCEPTION WHEN OTHERS`
+block. It does not — `is_authorized_for_branch()` is checked by
+`process_sync_batch_context_validated()` **before** any `sync_operations` row is even
+inserted, so it raises all the way up to the caller, the same shape as the cross-tenant
+case (C5). Fixed by wrapping C6 in the same `begin ... exception when others` pattern as C5
+rather than reading a status row that was never created. Not a defect in the handler code —
+a test-authoring correction only.
+
+Re-run for regression, zero changes needed: `tests/sql/p3_7_protocol_correctness.sql`
+(17/17 — its header previously said 18/18, a pre-existing miscount against its own 17
+`insert into _results` rows, corrected in the same pass this discrepancy was noticed),
+`tests/sql/p3_7_sync_apply_and_pull.sql` (11/11) — confirms the two new `ELSIF`
+branches in `apply_sync_operation()` did not disturb the ticket dispatch path.
+
+A note on the MCP `execute_sql` tool's transaction behavior, discovered mid-session and
+worth recording for future work through this same tool: `SET LOCAL ROLE` and
+`set_config(..., true)` (transaction-local settings) do **not** reliably persist across
+separate `execute_sql` tool calls even when the surrounding `BEGIN`/`ROLLBACK` spans them on
+what appears to be the same connection — actual row-level data changes (inserts, temp
+tables) do persist across calls, but the local GUC/role context does not. Every dry run and
+every full test-suite run in this session was therefore submitted as one single `execute_sql`
+call from `begin;` through the final result-producing `select`, with `rollback;` (or a
+standalone `rollback;` call) issued afterward once results were inspected. Splitting a
+file's statements across multiple calls produced `"authentication required"` or `"device is
+invalid, not owned by the caller, or revoked"` errors partway through, from `auth.uid()`/
+`set_config` context resetting between calls.
+
+### Documentation updated
+
+`ARCHITECTURE_DECISIONS.md` (AD-021 header + new postscript section), `BLOCKERS.md`
+(BLOCKER-006 updated, BLOCKER-022 updated with the tested two-call finding, new
+BLOCKER-024), `NOTIFICATIONS.md` (new top entry), `BACKEND_ROADMAP.md` (P3.7 section +
+both crosswalk-table rows + P9.2 frontend-slice row), `docs/SCHEMA-REFERENCE.md` §12 (new
+subsection + "What is missing" bullet update),
+`tests/sql/p3_7_protocol_correctness.sql` (header count corrected 18/18 → 17/17 — a
+pre-existing miscount noticed while re-running it for regression, not a change to any
+assertion), `docs/API-CONTRACT.md` (`process_sync_batch`
+row extended with the customer payload/result contract), this file, `CURRENT_TASK.md`.
+
+### Not built this pass, by instruction
+
+Inventory/production/financial handlers; `customer.soft_delete` (not in the
+`domain_operation` CHECK allowlist); any mobile UI/screen/hook for customer creation
+(`docs/API-CONTRACT.md` now documents the contract a future screen would call against);
+`depends_on_operation_id` enforcement (BLOCKER-022, still open); cursor-expiry-via-retention
+(BLOCKER-023, still open); `customer.update` ownership scoping (BLOCKER-024, new, open,
+non-blocking).
+
+**Nothing committed to git.**
+
+---
+
 ## 2026-08-29 · P3.7 protocol-correctness pass — response-status bug, payload immutability, client_sequence, cursor validation, and a security fix
 
 Instruction: harden the offline-sync protocol layer (tenant-bound idempotency,
