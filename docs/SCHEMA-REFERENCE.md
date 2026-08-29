@@ -687,28 +687,38 @@ unchanged in behavior).**
 	delete, is the intended surface.
 - **`apply_customer_create(p_operation sync_operations)`** and **`apply_customer_
 	update(p_operation sync_operations)`** — new handlers, same shape as the ticket handlers:
-	`SECURITY DEFINER`, authorize via `has_role_in(actor, tenant, roles)` (owner/admin/
-	branch_manager/supervisor/cashier/driver for both operations — see the role-source
-	discrepancy note below), validate the payload server-side, write a `sync_changes` row.
+	`SECURITY DEFINER`, authorize via `has_role_in(actor, tenant, roles)`, validate the
+	payload server-side, write a `sync_changes` row. `create`'s role set is owner/admin/
+	branch_manager/supervisor/cashier/driver; `update`'s is narrower — see below.
 	`customer.update` looks up its target via `payload->>'customer_id'` (matching
 	`apply_ticket_item_update`'s `payload->>'ticket_id'` convention, not `p_operation.
 	entity_id`), and additionally rejects if that id doesn't match `p_operation.entity_id` —
 	a consistency guard with no ticket-handler precedent, added because a mismatch here would
 	silently conflict-track against the wrong entity's revision history.
-- **Role eligibility resolved a live discrepancy, not a guess.** `customers_insert`/
-	`customers_update` RLS (raw-table policies) admit only owner/admin/branch_manager/cashier.
-	`docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants — which that document
-	states explicitly "reflects current intent" over a stale RLS array, citing an identical
-	accepted gap for `tickets.create`/driver — include supervisor and driver for both
-	`customers.create` and `customers.update`. `docs/ADR-001-Driver-Workflow-Redesign-MVP.md`
-	(Approved 2026-08-24) independently and explicitly describes driver-created customers as
-	required. The handlers follow the permissions catalog/ADR-001; the RLS array is untouched
-	(separate, pre-existing, doesn't affect the SECURITY DEFINER handler).
-- **`customer.update` is unscoped by ownership, deliberately, not by oversight.**
-	`apply_ticket_item_update` restricts driver writes to `created_by = actor OR assigned_to
-	= actor`; nothing in the schema, `role_permissions`, or ADR-001 extends an equivalent
-	restriction to customers (which has no `assigned_to`-equivalent column to express it
-	against), so none was invented. See `BLOCKER-024` (open, non-blocking).
+- **`customer.create`'s role eligibility resolved a live discrepancy, not a guess.**
+	`customers_insert`/`customers_update` RLS (raw-table policies) admit only owner/admin/
+	branch_manager/cashier. `docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants
+	— which that document states explicitly "reflects current intent" over a stale RLS array,
+	citing an identical accepted gap for `tickets.create`/driver — include supervisor and
+	driver for both `customers.create` and `customers.update` as originally granted.
+	`docs/ADR-001-Driver-Workflow-Redesign-MVP.md` (Approved 2026-08-24) independently and
+	explicitly describes driver-created customers as required. `customer.create`'s handler
+	follows the permissions catalog/ADR-001 unchanged: owner/admin/branch_manager/supervisor/
+	cashier/driver. The RLS array is untouched (separate, pre-existing, doesn't affect the
+	SECURITY DEFINER handler).
+- **`customer.update`'s role scope was narrowed by an explicit product decision, 2026-08-29
+	(`BLOCKER-024`, resolved) — not the unscoped `role_permissions` grant `customer.create`
+	uses.** Rather than the ticket-style ownership-scoping (`apply_ticket_item_update`
+	restricts driver writes to `created_by = actor OR assigned_to = actor`) this was initially
+	compared against, the product owner specified a coarser, role-based restriction instead:
+	**owner, admin, and branch_manager may always edit an existing customer; supervisor may
+	edit only while holding the supervisor role in that tenant; driver and cashier may not
+	edit an existing customer at all** (both keep `customer.create`). `apply_customer_
+	update`'s role check is `ARRAY['owner','admin','branch_manager','supervisor']` — a real
+	narrowing from the handler's first implementation, which had matched `customer.create`'s
+	six-role set. A further per-supervisor, manager-configurable toggle was requested but has
+	no backing schema anywhere in this codebase (`docs/ROLES-AND-PERMISSIONS.md` documents
+	this exact gap as not built) — tracked separately as `BLOCKER-025`, not invented inline.
 - **Full-value replacement, not a field-level merge**, per §21's stated no-merge principle:
 	`customer.update` overwrites `full_name`/`phone`/`email`/`address_line`/`notes`/
 	`is_walk_in` wholesale from the payload every call.
@@ -717,9 +727,12 @@ unchanged in behavior).**
 	entity's own table — `apply_customer_create` writes revision `1`; `apply_customer_update`
 	computes `max(revision)+1` from `sync_changes` for that `entity_id`.
 - **Security:** both new handlers `REVOKE`d from `PUBLIC`/`anon`/`authenticated` in the same
-	migration that created them, confirmed via `has_function_privilege()` and a clean
-	`get_advisors(security)` re-run.
-- **Tests:** `tests/sql/p3_7_customer_sync.sql`, new, 18/18. Zero regression re-confirmed:
+	migration that created them (and re-confirmed after `apply_customer_update`'s role-array
+	change), confirmed via `has_function_privilege()` and a clean `get_advisors(security)`
+	re-run.
+- **Tests:** `tests/sql/p3_7_customer_sync.sql`, new, then revised to 21/21 after the
+	`customer.update` role-scope decision (driver-only and cashier-only now proven rejected;
+	branch_manager-only and supervisor-only proven accepted). Zero regression re-confirmed:
 	`tests/sql/p3_7_protocol_correctness.sql` (17/17 — header's prior "18/18" was a
 	pre-existing miscount, corrected the same pass this was noticed), `tests/sql/p3_7_sync_
 	apply_and_pull.sql` (11/11).
@@ -727,7 +740,8 @@ unchanged in behavior).**
 	(deliberately, not in the CHECK constraint); `depends_on_operation_id` (`BLOCKER-022`,
 	whose own motivating example — customer-then-ticket — was tested via two sequential
 	`process_sync_batch()` calls, the only currently-safe path); cursor-expiry-via-retention
-	(`BLOCKER-023`).
+	(`BLOCKER-023`); per-supervisor manager-configurable permission overrides
+	(`BLOCKER-025`, opened by the `customer.update` role-scope decision above).
 
 ### What the deployed schema does provide
 

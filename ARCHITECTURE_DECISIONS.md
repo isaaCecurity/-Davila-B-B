@@ -458,15 +458,23 @@ untouched. Live schema traced first, as with every prior step of this decision.
 	owner/admin/branch_manager/supervisor/cashier/driver. The RLS array itself was left
 	unchanged: it is a separate, pre-existing staleness that does not affect the sync handler
 	(SECURITY DEFINER, does not consult table RLS), out of scope for this pass.
-- **`customer.update` authorization: the established grant was implemented; an
-	ownership restriction was NOT invented.** `apply_ticket_item_update` has a real precedent
-	for scoping a driver's write access to rows they created or are assigned to
-	(`created_by = actor OR assigned_to = actor`) — but nothing in the schema,
-	`role_permissions`, or ADR-001 extends that pattern to customers, and `customers` has no
-	`assigned_to`-equivalent column to express it against even if it were wanted. Rather than
-	guessing whether product wants the same restriction here, the handler implements exactly
-	the literal, unscoped grant the permissions catalog states. Flagged for a product decision,
-	not blocking — see BLOCKERS.md BLOCKER-024.
+- **`customer.update` authorization, initially implemented, then revised by an explicit
+	product decision the same day.** First cut: the literal, unscoped `role_permissions`
+	grant (owner/admin/branch_manager/supervisor/cashier/driver) was implemented rather than
+	inventing `apply_ticket_item_update`'s ownership-scoping pattern
+	(`created_by = actor OR assigned_to = actor`), since nothing in the schema,
+	`role_permissions`, or ADR-001 established that restriction for customers, and `customers`
+	has no `assigned_to`-equivalent column to express it against — flagged as BLOCKERS.md
+	BLOCKER-024 rather than guessed. **Asked, and answered directly by the product owner the
+	same day:** not ticket-style ownership-scoping, but a role restriction narrower than
+	`customer.create` — owner/admin/branch_manager always; supervisor only while holding the
+	supervisor role in that tenant; driver and cashier excluded entirely from
+	`customer.update` (both keep `customer.create`). Implemented and live-verified: the
+	handler's role array is now `ARRAY['owner','admin','branch_manager','supervisor']`.
+	BLOCKER-024 is resolved. The decision also asked for a finer, per-supervisor
+	manager-configurable toggle beyond simple role-presence — that has no backing schema
+	anywhere in this codebase (`docs/ROLES-AND-PERMISSIONS.md` documents the identical gap as
+	not built) and was not invented; tracked as new **BLOCKER-025**.
 - **Full-value replacement, not a field-level merge.** `customer.update` overwrites
 	`full_name`/`phone`/`email`/`address_line`/`notes`/`is_walk_in` wholesale from the payload
 	every call, per `OFFLINE-SYNC-MODEL.md`'s stated no-field-level-merge principle for this
@@ -496,11 +504,34 @@ untouched. Live schema traced first, as with every prior step of this decision.
 	`get_advisors(type: 'security')` run (neither function appears among the anon- or
 	authenticated-executable findings; the one expected finding, `process_sync_batch` itself
 	being `authenticated`-executable, is by design, matching the existing pattern).
-- **Verification:** `tests/sql/p3_7_customer_sync.sql` (new, 18/18, live). Re-run clean, zero
+- **Verification:** `tests/sql/p3_7_customer_sync.sql` (new, 18/18, then revised to 21/21
+	after the `customer.update` role-scope decision — see below). Re-run clean, zero
 	regression: `tests/sql/p3_7_protocol_correctness.sql` (17/17 — its header's prior "18/18"
 	was a pre-existing miscount, corrected the same pass this was noticed), `tests/sql/p3_7_
 	sync_apply_and_pull.sql` (11/11); full matrix in `IMPLEMENTATION_LOG.md` 2026-08-29.
 - **Still not built:** inventory/production/financial handlers, `customer.soft_delete`
 	(deliberately — not in `domain_operation`'s CHECK constraint), `depends_on_operation_id`
-	enforcement, true cursor-expiry-via-retention-purge. `customer.update` ownership-scoping
-	is a new, non-blocking open item (BLOCKER-024). None of these are guessed at.
+	enforcement, true cursor-expiry-via-retention-purge, per-supervisor manager-configurable
+	permission overrides (new, non-blocking: BLOCKER-025). `customer.update`'s role scope
+	(BLOCKER-024) is RESOLVED — see the postscript below for the decision and its
+	implementation. None of these are guessed at.
+
+**Revised 2026-08-29, later same day — `customer.update` role scope decided (BLOCKER-024
+resolved).** The product owner was asked directly whether `customer.update` should be
+ownership-scoped like `apply_ticket_item_update` (driver restricted to
+`created_by = actor OR assigned_to = actor`) or left as the unscoped grant first
+implemented. The answer given was neither: a role-based restriction narrower than
+`customer.create` — **owner, admin, and branch_manager may always edit an existing
+customer; supervisor may edit only while holding the supervisor role in that tenant; driver
+and cashier may not edit an existing customer at all** (both keep `customer.create`,
+unaffected — confirmed explicitly this narrowing applies to `update` only). Implemented:
+`apply_customer_update`'s `has_role_in()` array changed from
+`['owner','admin','branch_manager','supervisor','cashier','driver']` to
+`['owner','admin','branch_manager','supervisor']`; grants re-verified `REVOKE`d from
+`anon`/`authenticated` after the change. `tests/sql/p3_7_customer_sync.sql` grew from 18 to
+21 assertions (driver-only and cashier-only now proven `REJECTED`; branch_manager-only and
+supervisor-only proven `APPLIED`) — 21/21 passed live. The decision additionally asked for a
+per-supervisor, manager-configurable toggle finer than simple role-presence; that has no
+backing schema anywhere in this codebase (`docs/ROLES-AND-PERMISSIONS.md` documents the
+identical gap explicitly as not built) and was not invented — opened as new **BLOCKER-025**
+rather than guessed at.

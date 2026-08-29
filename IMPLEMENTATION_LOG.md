@@ -5,6 +5,73 @@ Never record planned work here.
 
 ---
 
+## 2026-08-29 · `customer.update` role scope — product decision implemented, BLOCKER-024 resolved, BLOCKER-025 opened
+
+Following the CUSTOMER slice entry below, the product owner was asked directly (via
+clarifying questions, not assumed) whether `customer.update` should be ownership-scoped
+like `apply_ticket_item_update` (driver restricted to rows they created/are assigned to) or
+left unscoped as first implemented. The answer: neither — a role-based restriction narrower
+than `customer.create`. Owner, admin, and branch_manager may always edit an existing
+customer; supervisor may edit only while holding the supervisor role in that tenant (today's
+existing coarse, role-level toggle); driver and cashier may not edit an existing customer at
+all (both retain `customer.create`, confirmed unaffected). The product owner also asked for
+a per-supervisor, manager-configurable toggle finer than simple role-presence.
+
+### Live check before implementing the finer request
+
+Before building the per-supervisor toggle, checked whether any backing mechanism already
+exists: `select * from information_schema.tables where table_name ilike '%user_permission%'`
+and a search of `pg_proc`/`pg_policies` for anything keyed on `(tenant_id, profile_id,
+permission_key)` — nothing. `docs/ROLES-AND-PERMISSIONS.md` independently and explicitly
+documents this exact gap: *"The per-Supervisor override mechanism itself — a
+`user_permissions` table or equivalent — is not built; `role_permissions` is role-level
+only, so today every Supervisor in every bakery has the same set."* Confirmed with the user
+directly (via a follow-up clarifying question) that building this new schema now, versus
+shipping the coarse role-presence version and tracking the finer mechanism separately, was
+the intended scope boundary — user chose the coarse version. Opened **BLOCKER-025** for the
+override mechanism rather than designing it inline.
+
+### Implementation
+
+One migration, dry-run tested in a `BEGIN; ... ROLLBACK;` block first (driver-only update
+attempted and confirmed rejected; supervisor-only update attempted and confirmed applied),
+then applied for real: `p3_7_customer_update_role_scope_decision` — `CREATE OR REPLACE` on
+`apply_customer_update`, changing its `has_role_in()` array from
+`['owner','admin','branch_manager','supervisor','cashier','driver']` to
+`['owner','admin','branch_manager','supervisor']`. Every other line unchanged. `REVOKE
+EXECUTE ... FROM PUBLIC, anon, authenticated` re-issued in the same migration (grants are
+not reset by `CREATE OR REPLACE FUNCTION`, but re-issuing matches this pass's established
+discipline of never assuming a grant state without re-verifying it); confirmed via
+`has_function_privilege()` afterward: `anon_exec=false`, `authenticated_exec=false`,
+unchanged.
+
+### Tests
+
+`tests/sql/p3_7_customer_sync.sql` revised: the old single "U1 authorized update (driver)"
+test no longer reflects reality (driver is no longer authorized), so it was replaced with
+five tests isolating one role at a time (deleting and re-inserting `user_roles` rows for the
+single real test profile, matching this suite's existing C4/U-accountant pattern) —
+U1 driver-only → `REJECTED 42501`, U2 cashier-only → `REJECTED 42501`, U3 branch_manager-only
+→ `APPLIED`, U4 supervisor-only → `APPLIED`, U5 accountant (pre-existing, unaffected) →
+`REJECTED 42501`. The remaining update tests (stale-revision, replay, mismatch, not-found)
+needed no logic changes — they run under the suite's default driver+branch_manager fixture
+role assignment, and branch_manager alone remains sufficient under the new rule — only
+renumbered (U3–U6 → U6–U9). Suite grew from 18 to 21 assertions. Executed live: **21/21
+passed.** `customer.create`'s own tests (C1–C6) were re-run unchanged and still pass — its
+role set was not touched.
+
+### Documentation updated
+
+`BLOCKERS.md` (BLOCKER-024 marked RESOLVED with the decision and its implementation, new
+BLOCKER-025 opened), `NOTIFICATIONS.md` (new top entry), `ARCHITECTURE_DECISIONS.md` (AD-021
+postscript extended), `BACKEND_ROADMAP.md` (P3.7 deliverables + remaining-work bullet),
+`docs/SCHEMA-REFERENCE.md` §12, `docs/API-CONTRACT.md` (`customer.update` row), this file,
+`CURRENT_TASK.md`.
+
+**Nothing committed to git.**
+
+---
+
 ## 2026-08-29 · P3.7 CUSTOMER vertical slice — `customer.create`/`customer.update`, live-verified
 
 Instruction: implement `customer.create` and `customer.update` on the existing P3.7 sync
@@ -160,17 +227,21 @@ Re-run for regression, zero changes needed: `tests/sql/p3_7_protocol_correctness
 branches in `apply_sync_operation()` did not disturb the ticket dispatch path.
 
 A note on the MCP `execute_sql` tool's transaction behavior, discovered mid-session and
-worth recording for future work through this same tool: `SET LOCAL ROLE` and
-`set_config(..., true)` (transaction-local settings) do **not** reliably persist across
-separate `execute_sql` tool calls even when the surrounding `BEGIN`/`ROLLBACK` spans them on
-what appears to be the same connection — actual row-level data changes (inserts, temp
-tables) do persist across calls, but the local GUC/role context does not. Every dry run and
-every full test-suite run in this session was therefore submitted as one single `execute_sql`
-call from `begin;` through the final result-producing `select`, with `rollback;` (or a
-standalone `rollback;` call) issued afterward once results were inspected. Splitting a
-file's statements across multiple calls produced `"authentication required"` or `"device is
-invalid, not owned by the caller, or revoked"` errors partway through, from `auth.uid()`/
-`set_config` context resetting between calls.
+worth recording for future work through this same tool, corrected once during this same
+pass after further evidence: each `execute_sql` call is its own separate connection, full
+stop — an open `begin;` from one call is invisible to the next call, and this includes
+**row-level data, not just `SET LOCAL ROLE`/`set_config` GUC context.** An initial read of
+partial evidence ("rollback returned no error", "a later check saw zero leftover rows")
+looked consistent with cross-call persistence but does not actually distinguish it from
+"nothing was ever visible outside its own abandoned connection" — a direct test later in
+this same pass (customer data inserted in one call, immediately queried in the next) proved
+the latter: the fixture `sync_devices` row from an earlier call was invisible, producing
+`"device is invalid, not owned by the caller, or revoked"`. Every dry run and every full
+test-suite run in this session was therefore submitted as one single `execute_sql` call from
+`begin;` through the final result-producing `select`, with a separate `rollback;` call
+afterward that is a no-op in practice (the transaction was never visible outside its own
+connection to begin with) but costs nothing and matches this repo's established dry-run
+discipline.
 
 ### Documentation updated
 

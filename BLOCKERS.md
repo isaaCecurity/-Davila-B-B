@@ -1258,8 +1258,8 @@ than adding a new one.
 
 ---
 
-## BLOCKER-024 · `customer.update` has no ownership/creator-scoping rule, and none was invented
-**Status:** OPEN (non-blocking — the shipped handler implements the one thing that IS established) · **Affects:** P3.7 CUSTOMER slice (`apply_customer_update`), any future role-scoping decision for customer records · **Type:** business rule (authorization)
+## ✅ BLOCKER-024 · `customer.update` role scope — decided by the product owner (2026-08-29)
+**Status:** RESOLVED · **Affects:** P3.7 CUSTOMER slice (`apply_customer_update`) · **Type:** business rule (authorization)
 
 **What was discovered, 2026-08-29, while implementing `customer.create`/`customer.update`:**
 live `role_permissions` grants `customers.update` to owner, admin, branch_manager,
@@ -1289,10 +1289,68 @@ credit/balance (customers has no such column; credit is derived elsewhere), or a
 field — the exposure is limited to name/phone/email/address/notes/is_walk_in on someone
 else's customer record within the same tenant.
 
-**Needed:** a product decision on whether to add ownership/creator scoping to
-`customer.update`'s driver grant, mirroring `apply_ticket_item_update`'s pattern. If yes,
-the concrete column to scope against also needs deciding — `customers.created_by` exists
-today; whether an `assigned_to`-equivalent is also wanted is a separate open question.
+**Decision, given directly by the product owner (2026-08-29):** rather than the
+ticket-style ownership-scoping this blocker asked about, `customer.update` is restricted by
+role, more narrowly than `customer.create`: **owner, admin, and branch_manager may always
+edit an existing customer; supervisor may edit only while holding the supervisor role in
+that tenant; driver and cashier may not edit an existing customer at all** (they retain
+`customer.create`, unaffected). This is a genuine change from the initial unscoped
+implementation, not an elaboration of it — driver and cashier were previously permitted and
+are now explicitly excluded.
+
+The decision also asked for a **per-supervisor, manager-configurable toggle** ("the manager
+has a settings [control] to edit what the supervisor has access to do") beyond the
+coarse role-presence check above. That finer mechanism does not exist anywhere in this
+codebase yet — confirmed live and independently by `docs/ROLES-AND-PERMISSIONS.md` itself:
+*"The per-Supervisor override mechanism itself — a `user_permissions` table or equivalent —
+is not built; `role_permissions` is role-level only, so today every Supervisor in every
+bakery has the same set."* Building it would mean designing new schema beyond a single
+handler's authorization array. Per explicit direction, the coarse (role-presence) version
+was implemented now; the finer per-supervisor toggle is tracked separately — see
+**BLOCKER-025** — rather than being invented inline.
+
+**Implemented and live-verified 2026-08-29:** `apply_customer_update`'s role check is now
+`ARRAY['owner','admin','branch_manager','supervisor']` (previously included `cashier`,
+`driver`). `tests/sql/p3_7_customer_sync.sql` re-tests this explicitly: U1/U2 prove
+driver-only and cashier-only are now rejected (`42501`); U3/U4 prove branch_manager-only and
+supervisor-only are accepted; U5 (accountant, unaffected, still rejected) is unchanged.
+21/21 passed. `customer.create`'s role set is unchanged
+(`owner/admin/branch_manager/supervisor/cashier/driver`) — this decision applies to
+`customer.update` only, confirmed explicitly with the product owner before implementing.
+
+---
+
+## BLOCKER-025 · Per-supervisor, manager-configurable permission overrides — no schema exists
+**Status:** OPEN · **Affects:** `customer.update` (the specific trigger for this blocker), and potentially any future permission the product wants configurable per-Supervisor rather than per-role · **Type:** architecture decision (new capability, not yet designed)
+
+**What was requested, 2026-08-29:** resolving BLOCKER-024, the product owner asked for a
+Branch Manager to be able to grant or revoke customer-edit access for an **individual**
+supervisor via a settings control — not an all-or-nothing toggle for the Supervisor role
+across the whole bakery.
+
+**Why this isn't buildable today:** `role_permissions` (the live permission-grant table) is
+role-level only — every profile holding the `supervisor` role in a tenant gets an identical
+permission set; there is no row linking one specific supervisor profile to a
+narrower-or-wider grant. `docs/ROLES-AND-PERMISSIONS.md` independently documents this exact
+gap in its own words, describing per-Supervisor overrides as intended-but-**"not built."**
+No `user_permissions` table, no override table of any kind, and no UI/settings surface for
+a Branch Manager to manage this exists anywhere in the schema, the frontend, or the docs.
+
+**What was implemented in the meantime (BLOCKER-024):** the coarse, already-available
+mechanism — `customer.update` checks only whether the actor holds the `supervisor` role at
+all in that tenant, which today is itself an all-or-nothing toggle already available to
+Branch Managers only in the sense that they assign/remove the `supervisor` role from a
+profile via `user_roles` (existing, general-purpose role management — not a new mechanism,
+and not scoped to this one permission).
+
+**Needed:** a real architecture decision, not an inline guess, covering at minimum: the
+schema shape for a per-profile permission override (a new table keyed on
+`(tenant_id, profile_id, permission_key)` is the obvious candidate, but not decided here);
+whether overrides are additive-only, subtractive-only, or both; whether this generalizes
+beyond `customers.update` to other permissions Branch Managers might want to toggle
+per-supervisor; and the settings UI a Branch Manager would use (out of scope for backend
+work alone). Until this is designed, `customer.update`'s supervisor gate remains the coarse,
+role-level check described in BLOCKER-024's resolution.
 
 ---
 

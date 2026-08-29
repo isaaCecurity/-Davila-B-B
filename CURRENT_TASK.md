@@ -1,5 +1,27 @@
 # BakeFlow — Current Task
 
+## ✅ `customer.update` ROLE SCOPE DECIDED AND IMPLEMENTED (2026-08-29)
+
+Follow-up to the CUSTOMER slice below: asked the product owner directly whether
+`customer.update` should be ownership-scoped like `apply_ticket_item_update` or left
+unscoped. Decision given: narrower by role instead — owner/admin/branch_manager always;
+supervisor only while holding the supervisor role in that tenant; **driver and cashier can
+no longer edit an existing customer** (both keep `customer.create`, unaffected).
+
+**Implemented and live-verified:** `apply_customer_update`'s role array changed to
+`['owner','admin','branch_manager','supervisor']`. `tests/sql/p3_7_customer_sync.sql` grew
+from 18 to 21 assertions to prove this directly — **21/21 passed.** **BLOCKER-024 resolved.**
+
+**One new open item:** the decision also asked for a per-supervisor, manager-configurable
+toggle finer than role-presence. No backing schema exists anywhere in this codebase for
+that (confirmed live and via `docs/ROLES-AND-PERMISSIONS.md`, which documents the identical
+gap explicitly as not built) — opened **BLOCKER-025** rather than designing it inline.
+Coarse role-presence is what's live today.
+
+**Nothing committed to git.**
+
+---
+
 ## ✅ P3.7 CUSTOMER VERTICAL SLICE DELIVERED (2026-08-29)
 
 Per explicit instruction: implement `customer.create`/`customer.update` on the existing

@@ -383,15 +383,26 @@ not rebuilt. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
 `docs/ROLES-AND-PERMISSIONS.md`'s live `role_permissions` grants plus ADR-001 (both agree
 driver-created customers are required) — handlers follow the permissions catalog/ADR, RLS
 left as-is (out of scope, doesn't affect the SECURITY DEFINER handler). `customer.update` is
-a full-value replacement (no field-level merge, per OFFLINE-SYNC-MODEL.md) and is
-role-eligible but NOT ownership-scoped to the creating driver — nothing in the schema or
-product docs establishes that restriction, so none was invented (open item, non-blocking:
-BLOCKER-024). Revision tracked purely via `sync_changes.revision` keyed by `entity_id` — no
-new column on `customers` itself. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
+a full-value replacement (no field-level merge, per OFFLINE-SYNC-MODEL.md). Revision tracked
+purely via `sync_changes.revision` keyed by `entity_id` — no new column on `customers`
+itself. Full detail: AD-021 and `IMPLEMENTATION_LOG.md` 2026-08-29.
+**Deliverables (2026-08-29, later still — `customer.update` role scope decided,
+BLOCKER-024 resolved):** the product owner was asked directly whether `customer.update`
+should be ownership-scoped like `apply_ticket_item_update`, and answered with a role-based
+restriction instead, narrower than `customer.create`: owner/admin/branch_manager always;
+supervisor only while holding the supervisor role in that tenant; driver and cashier
+excluded from `customer.update` entirely (both keep `customer.create`). Implemented:
+`apply_customer_update`'s role array changed to `['owner','admin','branch_manager',
+'supervisor']`. A further per-supervisor, manager-configurable toggle was requested but has
+no backing schema anywhere in this codebase (see `docs/ROLES-AND-PERMISSIONS.md`, which
+documents the identical gap as not built) — opened as new **BLOCKER-025** rather than
+invented.
 **Tests:** `tests/sql/p3_7_sync_apply_and_pull.sql` — 11/11, live, re-run clean (zero
 regression). `tests/sql/p3_7_protocol_correctness.sql` — 17/17, live, re-run clean (header
 previously said 18/18, a pre-existing miscount corrected the same pass this was noticed).
-`tests/sql/p3_7_customer_sync.sql` — 18/18, live, new. Re-verified with zero regression:
+`tests/sql/p3_7_customer_sync.sql` — 21/21, live (grew from 18 after the role-scope
+decision: driver-only/cashier-only now proven `REJECTED`, branch_manager-only/
+supervisor-only proven `APPLIED`). Re-verified with zero regression:
 `tests/sql/security_multiorg_sync.sql` (22/23 — one pre-existing, unrelated
 `rate_limit_events` RLS gap), `tests/sql/driver_trips_rls.sql` (20/20),
 `tests/sql/financial_write_rls.sql` (28/28), `tests/sql/driver_field_sale_rls.sql` (8/8).
@@ -421,7 +432,8 @@ mechanism exists at all yet — see BLOCKERS.md); `depends_on_operation_id` enfo
 its own motivating example, customer-then-ticket, was tested via two sequential
 `process_sync_batch()` calls; blocking/queuing semantics for a single atomic batch are
 unspecified and need a fresh architecture decision if ever required — see BLOCKERS.md);
-`customer.update` ownership/creator scoping (BLOCKER-024, non-blocking).
+per-supervisor manager-configurable permission overrides (BLOCKER-025, non-blocking, opened
+by the resolved `customer.update` role-scope decision — BLOCKER-024).
 **Parallelizable:** P4.1, P4.2, P6 can all proceed independently of this.
 
 ## P3.8 · Pending-sync behaviour — BLOCKED

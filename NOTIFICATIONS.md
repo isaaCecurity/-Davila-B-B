@@ -4,6 +4,31 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## `customer.update` role scope decided and implemented — driver/cashier removed, BLOCKER-024 resolved (2026-08-29)
+
+Following up the CUSTOMER slice notification below: you decided `customer.update` should be
+narrower than `customer.create` — owner, admin, and branch_manager can always edit an
+existing customer; supervisor can edit only while holding the supervisor role in that
+tenant (today's existing role-level toggle); driver and cashier can no longer edit an
+existing customer at all (they keep `customer.create`, unaffected).
+
+Implemented and live-verified: `apply_customer_update`'s role check changed from
+`owner/admin/branch_manager/supervisor/cashier/driver` to
+`owner/admin/branch_manager/supervisor`. `tests/sql/p3_7_customer_sync.sql` grew from 18 to
+21 assertions to cover this directly (driver-only and cashier-only now proven rejected;
+branch_manager-only and supervisor-only proven accepted) — 21/21 passed.
+
+Your request also asked for a **per-supervisor manager-configurable toggle**, finer than
+"holds the role or doesn't." That mechanism doesn't exist anywhere in this codebase —
+`docs/ROLES-AND-PERMISSIONS.md` itself documents this exact gap as not built. Building it
+would mean designing new schema (a permission-override table) beyond this handler. Opened
+**BLOCKER-025** for that design decision rather than guessing at a schema for it; the coarse
+role-presence check is what's live today.
+
+Nothing committed to git.
+
+---
+
 ## P3.7 CUSTOMER vertical slice implemented and live-verified (2026-08-29)
 
 `customer.create` and `customer.update` are now built on the same sync pipeline as tickets

@@ -2,7 +2,8 @@
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_customer_sync.sql
 --
--- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 18/18 passed.
+-- EXECUTED 2026-08-29 against project tvfyxpafbpnkneujcnvr: 21/21 passed (revised after an
+-- explicit product decision changed customer.update's role scope -- see below).
 --
 -- Scope: apply_customer_create(), apply_customer_update(), their dispatch wiring in
 -- apply_sync_operation(), and their EXECUTE grants. Does NOT re-test
@@ -27,11 +28,14 @@
 --     as a required product flow. This handler follows role_permissions; the RLS array is a
 --     separate, pre-existing, out-of-scope staleness noted in BLOCKERS.md, not fixed here since
 --     the sync handler is SECURITY DEFINER and does not depend on it.
---   - customer.update has no ownership/creator-scoping mechanism anywhere in the schema or in
---     ADR-001 (which documents driver customer *creation* but never driver *editing* of an
---     existing customer). role_permissions grants customers.update to driver unscoped. This
---     handler implements exactly that literal, unscoped grant -- it does not invent a
---     creator-only restriction the way ticket_item_update does for tickets.
+--   - customer.update's role scope was an explicit product decision (2026-08-29, resolving
+--     BLOCKER-024), narrower than customer.create's: owner, admin, and branch_manager may
+--     always edit an existing customer; supervisor may edit only while holding the supervisor
+--     role in that tenant (today's existing all-or-nothing per-bakery toggle, not a
+--     per-supervisor grant -- see BLOCKER-025, opened rather than inventing the finer
+--     per-supervisor override mechanism the decision asked for, which has no backing schema
+--     anywhere in this codebase). driver and cashier -- both still granted customer.create --
+--     are deliberately EXCLUDED from customer.update.
 --   - customer.update is a full-value replacement of full_name/phone/email/address_line/
 --     notes/is_walk_in, not a field-level merge, per OFFLINE-SYNC-MODEL.md's stated
 --     no-field-level-merge principle for this architecture.
@@ -57,12 +61,15 @@
 --      gateway behaviour, re-verified through this new domain_operation)
 --   S1 apply_customer_create is not directly executable by anon or authenticated via PostgREST
 --   S2 apply_customer_update is not directly executable by anon or authenticated via PostgREST
---   U1 authorized update (driver) changes full_name/phone, revision becomes 2
---   U2 unauthorized role (accountant) cannot update -> REJECTED, 42501 insufficient_role
---   U3 stale base_revision on update -> sync_conflicts row, customer NOT overwritten
---   U4 identical update replay -> replayed=true, does not create a second sync_changes row
---   U5 customer_id in payload not matching operation entity_id -> REJECTED, 22023
---   U6 updating a customer_id that doesn't exist in this tenant -> REJECTED, P0001
+--   U1 driver-only (no longer authorized post-decision) -> REJECTED, 42501 insufficient_role
+--   U2 cashier-only (no longer authorized post-decision) -> REJECTED, 42501 insufficient_role
+--   U3 branch_manager-only -> APPLIED, revision 2, fields changed
+--   U4 supervisor-only (role held in tenant) -> APPLIED, revision 2
+--   U5 unauthorized role (accountant) cannot update -> REJECTED, 42501 insufficient_role
+--   U6 stale base_revision on update -> sync_conflicts row, customer NOT overwritten
+--   U7 identical update replay -> replayed=true, does not create a second sync_changes row
+--   U8 customer_id in payload not matching operation entity_id -> REJECTED, 22023
+--   U9 updating a customer_id that doesn't exist in this tenant -> REJECTED, P0001
 --   T1 customer.create then a SEPARATE ticket.create referencing the returned customer_id ->
 --      both APPLIED, ticket.customer_id correct -- the only currently-safe way to represent
 --      "create a customer, then a ticket for them" is two sequential process_sync_batch calls
@@ -331,7 +338,125 @@ insert into _results values ('S2 apply_customer_update not directly executable b
   'anon_exec=' || has_function_privilege('anon', 'public.apply_customer_update(public.sync_operations)', 'EXECUTE')
     || ' authenticated_exec=' || has_function_privilege('authenticated', 'public.apply_customer_update(public.sync_operations)', 'EXECUTE'));
 
--- =================== U1: authorized update changes fields, revision 2 ===================
+-- =================== U1: driver-only -> no longer authorized to update ===================
+do $$
+declare
+  v_create_opid uuid := gen_random_uuid();
+  v_update_opid uuid := gen_random_uuid();
+  v_cust_id uuid;
+  v_row public.sync_operations;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_create_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'customers',
+      'operation_type', 'CREATE', 'domain_operation', 'customer.create',
+      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Driver Update Target')
+    )));
+  select (result->>'customer_id')::uuid into v_cust_id from public.sync_operations where operation_id = v_create_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key = 'driver';
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver']
+  )::text, true);
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_update_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', v_cust_id, 'entity_type', 'customers',
+      'operation_type', 'UPDATE', 'domain_operation', 'customer.update',
+      'base_revision', 1, 'device_created_at', now()::text,
+      'payload', jsonb_build_object('customer_id', v_cust_id, 'full_name','Driver Should Not Update')
+    )));
+  select * into v_row from public.sync_operations where operation_id = v_update_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key in ('driver','branch_manager');
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver']
+  )::text, true);
+
+  insert into _results values ('U1 driver-only update -> REJECTED 42501 (no longer authorized)',
+    v_row.status = 'REJECTED' and v_row.error_code = '42501'
+      and (select full_name from public.customers where id = v_cust_id) = 'Driver Update Target',
+    v_row.status || ' ' || coalesce(v_row.error_code,''));
+end $$;
+
+-- =================== U2: cashier-only -> no longer authorized to update ===================
+do $$
+declare
+  v_create_opid uuid := gen_random_uuid();
+  v_update_opid uuid := gen_random_uuid();
+  v_cust_id uuid;
+  v_row public.sync_operations;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_create_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'customers',
+      'operation_type', 'CREATE', 'domain_operation', 'customer.create',
+      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Cashier Update Target')
+    )));
+  select (result->>'customer_id')::uuid into v_cust_id from public.sync_operations where operation_id = v_create_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key = 'cashier';
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['cashier']
+  )::text, true);
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_update_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', v_cust_id, 'entity_type', 'customers',
+      'operation_type', 'UPDATE', 'domain_operation', 'customer.update',
+      'base_revision', 1, 'device_created_at', now()::text,
+      'payload', jsonb_build_object('customer_id', v_cust_id, 'full_name','Cashier Should Not Update')
+    )));
+  select * into v_row from public.sync_operations where operation_id = v_update_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key in ('driver','branch_manager');
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver']
+  )::text, true);
+
+  insert into _results values ('U2 cashier-only update -> REJECTED 42501 (no longer authorized)',
+    v_row.status = 'REJECTED' and v_row.error_code = '42501'
+      and (select full_name from public.customers where id = v_cust_id) = 'Cashier Update Target',
+    v_row.status || ' ' || coalesce(v_row.error_code,''));
+end $$;
+
+-- =================== U3: branch_manager-only -> APPLIED, revision 2 ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -349,6 +474,18 @@ begin
     )));
   select (result->>'customer_id')::uuid into v_cust_id from public.sync_operations where operation_id = v_create_opid;
 
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key = 'branch_manager';
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['branch_manager']
+  )::text, true);
+
   perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
     jsonb_build_array(jsonb_build_object(
       'operation_id', v_update_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
@@ -359,14 +496,86 @@ begin
       'payload', jsonb_build_object('customer_id', v_cust_id, 'full_name','After Update','phone','08011112222')
     )));
   select * into v_row from public.sync_operations where operation_id = v_update_opid;
-  insert into _results values ('U1 authorized update -> APPLIED, revision 2, fields changed',
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key in ('driver','branch_manager');
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver']
+  )::text, true);
+
+  insert into _results values ('U3 branch_manager-only update -> APPLIED, revision 2, fields changed',
     v_row.status = 'APPLIED' and (v_row.result->>'revision') = '2'
       and (select full_name from public.customers where id = v_cust_id) = 'After Update'
       and (select phone from public.customers where id = v_cust_id) = '08011112222',
     v_row.status || ' ' || v_row.result::text);
 end $$;
 
--- =================== U2: unauthorized role (accountant) cannot update ===================
+-- =================== U4: supervisor-only (role held in tenant) -> APPLIED ===================
+do $$
+declare
+  v_create_opid uuid := gen_random_uuid();
+  v_update_opid uuid := gen_random_uuid();
+  v_cust_id uuid;
+  v_row public.sync_operations;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_create_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'customers',
+      'operation_type', 'CREATE', 'domain_operation', 'customer.create',
+      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Supervisor Update Target')
+    )));
+  select (result->>'customer_id')::uuid into v_cust_id from public.sync_operations where operation_id = v_create_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key = 'supervisor';
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['supervisor']
+  )::text, true);
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_update_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', v_cust_id, 'entity_type', 'customers',
+      'operation_type', 'UPDATE', 'domain_operation', 'customer.update',
+      'base_revision', 1, 'device_created_at', now()::text,
+      'payload', jsonb_build_object('customer_id', v_cust_id, 'full_name','Supervisor Updated')
+    )));
+  select * into v_row from public.sync_operations where operation_id = v_update_opid;
+
+  reset role;
+  delete from public.user_roles where profile_id='aa000000-0000-4000-8000-00000000da01'
+    and tenant_id='ab000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key in ('driver','branch_manager');
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver']
+  )::text, true);
+
+  insert into _results values ('U4 supervisor-only update -> APPLIED, revision 2',
+    v_row.status = 'APPLIED' and (v_row.result->>'revision') = '2'
+      and (select full_name from public.customers where id = v_cust_id) = 'Supervisor Updated',
+    v_row.status || ' ' || v_row.result::text);
+end $$;
+
+-- =================== U5: unauthorized role (accountant) cannot update ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -419,13 +628,13 @@ begin
     'roles', array['driver']
   )::text, true);
 
-  insert into _results values ('U2 accountant role -> REJECTED 42501, customer unchanged',
+  insert into _results values ('U5 accountant role -> REJECTED 42501, customer unchanged',
     v_row.status = 'REJECTED' and v_row.error_code = '42501'
       and (select full_name from public.customers where id = v_cust_id) = 'Accountant Target',
     v_row.status || ' ' || coalesce(v_row.error_code,''));
 end $$;
 
--- =================== U3: stale base_revision -> conflict, no overwrite ===================
+-- =================== U6: stale base_revision -> conflict, no overwrite ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -466,7 +675,7 @@ begin
     )));
 
   select * into v_conf from public.sync_conflicts where operation_id = v_stale_opid;
-  insert into _results values ('U3 stale base_revision -> sync_conflicts row, customer not overwritten',
+  insert into _results values ('U6 stale base_revision -> sync_conflicts row, customer not overwritten',
     v_conf.id is not null and v_conf.conflict_status = 'OPEN'
       and v_conf.base_revision = 1 and v_conf.current_revision >= 2
       and (select full_name from public.customers where id = v_cust_id) = 'Legit Revision 2',
@@ -474,7 +683,7 @@ begin
       || ' current=' || coalesce(v_conf.current_revision::text,'?'));
 end $$;
 
--- =================== U4: identical update replay does not duplicate sync_changes ===================
+-- =================== U7: identical update replay does not duplicate sync_changes ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -514,12 +723,12 @@ begin
   select count(*) into v_change_count from public.sync_changes
    where entity_id = v_cust_id and domain_operation = 'customer.update';
 
-  insert into _results values ('U4 identical update replay -> replayed=true, one sync_changes row',
+  insert into _results values ('U7 identical update replay -> replayed=true, one sync_changes row',
     (v_res2->'results'->0->>'replayed')::boolean = true and v_change_count = 1,
     v_res1::text || ' | ' || v_res2::text || ' | changes=' || v_change_count);
 end $$;
 
--- =================== U5: payload customer_id must match operation entity_id ===================
+-- =================== U8: payload customer_id must match operation entity_id ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -548,13 +757,13 @@ begin
       'payload', jsonb_build_object('customer_id', v_cust_id, 'full_name','Should Not Apply')
     )));
   select * into v_row from public.sync_operations where operation_id = v_update_opid;
-  insert into _results values ('U5 payload customer_id != entity_id -> REJECTED 22023',
+  insert into _results values ('U8 payload customer_id != entity_id -> REJECTED 22023',
     v_row.status = 'REJECTED' and v_row.error_code = '22023'
       and (select full_name from public.customers where id = v_cust_id) = 'Mismatch Target',
     v_row.status || ' ' || coalesce(v_row.error_code,''));
 end $$;
 
--- =================== U6: customer_id not found in this tenant ===================
+-- =================== U9: customer_id not found in this tenant ===================
 do $$
 declare
   v_opid uuid := gen_random_uuid();
@@ -571,7 +780,7 @@ begin
       'payload', jsonb_build_object('customer_id', v_missing_id, 'full_name','Nobody')
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
-  insert into _results values ('U6 nonexistent customer_id -> REJECTED P0001',
+  insert into _results values ('U9 nonexistent customer_id -> REJECTED P0001',
     v_row.status = 'REJECTED' and v_row.error_code = 'P0001',
     v_row.status || ' ' || coalesce(v_row.error_code,''));
 end $$;
