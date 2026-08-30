@@ -1,5 +1,110 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 PRODUCTION vertical slice — `production.start`/`production.cancel` DELIVERED, plus a real defect fixed (2026-08-30)
+
+Continued from the INVENTORY slice below per "make the necessary corrections if needed then
+continue" — checked for drift first (none found: migration, docs, and git state all
+consistent with what was last reported), then moved to the next unbuilt P3.7 entity per
+`BACKEND_ROADMAP.md`: production.
+
+**Live-investigated before writing anything.** `production_batches`' real 5-state machine
+(`scheduled`/`in_progress`/`completed`/`failed`/`cancelled`) and its guard trigger,
+`guard_production_batch_transition()`, were read in full. Built `apply_production_start()`/
+`apply_production_cancel()` as plain guard-validated status updates
+(`scheduled`→`in_progress`/`cancelled`), each with an explicit `has_role_in()` pre-check
+mirroring the guard trigger's own actor lists verbatim (start: owner/admin/branch_manager/
+baker; cancel: owner/admin/branch_manager, no baker) — the existing, human-approved rule,
+not invented.
+
+**A real, pre-existing security defect was found and fixed as a prerequisite, live-
+reproduced before fixing.** `guard_production_batch_transition()`'s own role check used the
+session JWT's role claim (the session's *active* organization), not the row's own
+`tenant_id` — the exact active-org-assumption bug class already fixed elsewhere for
+`is_authorized_for_branch()`/`has_role_in()` (AD-006). Live-reproduced: a session active in
+org B, holding branch_manager there, could flip an org A batch's status with zero role in
+org A. Fixed via `has_role_in(auth.uid(), new.tenant_id, actors)`; re-verified live that the
+cross-org false-accept is gone AND the existing online `complete_production_batch()` happy
+path is completely unaffected.
+
+**`production.complete`/`.record_output`/`.record_waste` deliberately NOT built.** AD-021
+names all five production operations in one line but never specifies what `.record_output`/
+`.record_waste` actually are relative to the existing `complete_production_batch()`/
+`fail_production_batch()` RPCs (which already combine a status flip with stock movements in
+one call) — and those two RPCs were found to share the *same* active-org-assumption defect
+class internally (`current_tenant_id()`), on a bigger, untested surface. Opened new,
+non-blocking **BLOCKER-027** rather than guess at either the semantics or the fix.
+
+**Verified, zero regression:** `tests/sql/p3_7_production_sync.sql` (new, 13/13 live) —
+start/cancel role gates, invalid-transition and not-found rejection, branch-mismatch
+rejection, cross-tenant denial, replay idempotency, `.complete` still correctly
+unsupported, EXECUTE grants revoked. `tests/sql/p3_7_customer_sync.sql` quick-check re-run
+clean after the dispatcher change. `get_advisors(security)` clean for both new functions
+and the patched trigger. `pytest` 12/12.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md`
+§12, `docs/API-CONTRACT.md`, `BACKEND_ROADMAP.md` (P3.7 section, both crosswalk rows),
+`BLOCKERS.md` (new BLOCKER-027).
+
+**Not yet committed** — same standing reason as the inventory slice below: no explicit
+go-ahead has been given for new work, only confirmation that the already-committed passes
+should stand.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-30.
+
+---
+
+## ✅ P3.7 INVENTORY vertical slice — `inventory.adjust`/`inventory.waste` DELIVERED (2026-08-30)
+
+Continuing P3.7 into the next entity AD-021 already scoped: inventory (append-only,
+never a synchronized absolute quantity). User instruction was open-ended ("continue on
+with the current or next task"); picked inventory as the next item explicitly marked
+"remaining, not a blocker — implementation work" in `BACKEND_ROADMAP.md`, and scoped it to
+exactly the two of five operations that had a clean precedent to mirror.
+
+**Live-investigated before writing anything.** The only existing precedent for a
+management/production stock write is the online RPC `adjust_stock()`, which accepts
+`reason IN ('adjustment','waste','opening_balance')`, gates `'adjustment'`/`'opening_balance'`
+to owner/admin/branch_manager and `'waste'` to owner/admin/branch_manager/baker, and forbids
+a positive delta under `'waste'`. Built `apply_inventory_adjust()`/`apply_inventory_waste()`
+mirroring those two reasons and their role gates verbatim — an existing, human-approved
+rule, not invented. Departed from `adjust_stock()`'s shape in one deliberate way: both new
+handlers take an explicit signed `quantity_delta` in the payload instead of an absolute
+target, since an offline-queued operation can't reliably know "current on-hand" — this
+matches AD-021's own "append-only, never a synchronized absolute quantity" framing more
+literally than the online RPC does. Reject only if applying the delta would leave on-hand
+negative (AD-021's own named example of a rejection).
+
+**`inventory.receive`/`.consume`/`.transfer` deliberately NOT built.** Each investigated
+live and found to have no clean precedent, unlike adjust/waste: `.receive` (reason
+`'purchase'`) has no writer anywhere and ties directly into the already-open BLOCKER-018
+(no purchase-cost capture exists at all); `.transfer` (`transfer_in`/`transfer_out`) is
+written exclusively by the driver-trip lifecycle, always trip-linked, with no generic
+manual warehouse-to-warehouse RPC to mirror and no decided authorization rule for one;
+`.consume` (`production_consume`) is written exclusively inside the production-batch RPCs,
+tied to a real batch — a standalone version has no defined meaning. Opened new, non-blocking
+**BLOCKER-026** rather than guessed at. All three remain allowlisted in `domain_operation`'s
+CHECK and are correctly `REJECTED unsupported_operation_type` (verified live).
+
+**Verified, zero regression:** `tests/sql/p3_7_inventory_sync.sql` (new, 14/14 live) —
+positive/negative adjust and waste, negative-stock rejection, cross-tenant/cross-branch
+denial, role gates, replay idempotency, `.consume` still correctly unsupported, EXECUTE
+grants revoked. `tests/sql/p3_7_customer_sync.sql` re-run after the dispatcher change
+(21/21, zero regression). `get_advisors(security)` clean for both new functions.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md`
+§12, `docs/API-CONTRACT.md` (`process_sync_batch` row extended), `BACKEND_ROADMAP.md` (P3.7
+section, both crosswalk rows), `BLOCKERS.md` (new BLOCKER-026).
+
+**Not yet committed.** The user's "leave the commit, i have done it" referred to the prior
+P3.7 passes already on `main` (`df8d8839`..`df7f6fa4`) — it confirmed those should stand,
+not that every future pass auto-commits. This pass's changes (migration, new test file,
+doc updates above) are live-verified and complete but sit uncommitted pending an explicit
+go-ahead, consistent with this task's original standing instruction.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-30.
+
+---
+
 ## ✅ `customer.update` ROLE SCOPE DECIDED AND IMPLEMENTED (2026-08-29)
 
 Follow-up to the CUSTOMER slice below: asked the product owner directly whether

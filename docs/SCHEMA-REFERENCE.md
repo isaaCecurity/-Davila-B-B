@@ -743,6 +743,97 @@ unchanged in behavior).**
 	(`BLOCKER-023`); per-supervisor manager-configurable permission overrides
 	(`BLOCKER-025`, opened by the `customer.update` role-scope decision above).
 
+**Third vertical slice, 2026-08-30 — INVENTORY: `inventory.adjust`/`inventory.waste`.**
+
+- **`apply_inventory_adjust(p_operation sync_operations)`** and **`apply_inventory_
+	waste(p_operation sync_operations)`**, dispatched from `apply_sync_operation()`. Both
+	insert into `public.stock_movements` (never update — stock levels are trigger-maintained
+	from the immutable ledger, per this project's own standing rule) and write a matching
+	`sync_changes` row with `operation_type='EVENT'` (not `'CREATE'` — a fact that happened,
+	not a mutable entity that was created; matches AD-021's own "tickets: event/state-machine
+	... inventory: append-only" framing) and `revision=1` always (each movement is its own
+	immutable event, never revised).
+- **Payload shape, decided here (no prior client code depends on it):**
+	`{warehouse_id, item_type: 'ingredient'|'product', item_id, quantity_delta, note?}`.
+	`quantity_delta` is signed and explicit — deliberately unlike the live online RPC
+	`adjust_stock()`, which takes an absolute `p_new_quantity` and computes the delta itself
+	against a `FOR UPDATE`-locked read of current on-hand (workable online; not reliable for
+	an operation queued while offline, which cannot know "current" for certain). Both
+	handlers instead accept the delta directly and reject only if applying it would drive
+	on-hand negative — AD-021's own named example of what becomes a rejection.
+- **Role gates mirror the live `adjust_stock()` RPC verbatim, not invented:**
+	`inventory.adjust` (reason `'adjustment'`) requires owner/admin/branch_manager;
+	`inventory.waste` (reason `'waste'`, `quantity_delta` must be negative) requires
+	owner/admin/branch_manager/baker.
+- **`inventory.receive`/`.consume`/`.transfer` remain allowlisted in `domain_operation`'s
+	CHECK (unchanged since AD-021) but unhandled**, each for a distinct reason with no clean
+	precedent to mirror — see **`BLOCKER-026`** for the full evidence (`.receive` ties into
+	`BLOCKER-018`'s purchase-cost gap; `.transfer` has no non-trip-linked manual-transfer
+	precedent or decided authorization rule; `.consume` has no standalone meaning distinct
+	from the production-batch-linked `production_consume` reason). The dispatcher fallback
+	correctly `REJECTED unsupported_operation_type`s all three (verified live).
+- **Security:** both new handlers `REVOKE`d from `PUBLIC`/`anon`/`authenticated` in the same
+	migration that created them, confirmed via `has_function_privilege()` and a clean
+	`get_advisors(security)` re-run.
+- **Tests:** `tests/sql/p3_7_inventory_sync.sql`, new, 14/14 live. Zero regression
+	re-confirmed: `tests/sql/p3_7_customer_sync.sql` (21/21, re-run after the dispatcher
+	change).
+- **Still not built:** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
+	production/financial handlers; `customer.soft_delete`; `depends_on_operation_id`
+	(`BLOCKER-022`); cursor-expiry-via-retention (`BLOCKER-023`); per-supervisor
+	manager-configurable permission overrides (`BLOCKER-025`).
+
+**Fourth vertical slice, 2026-08-30 (later same day) — PRODUCTION: `production.start`/
+`production.cancel`.**
+
+- **`apply_production_start(p_operation sync_operations)`** and **`apply_production_
+	cancel(p_operation sync_operations)`**, dispatched from `apply_sync_operation()`. Both
+	perform a plain guard-validated `UPDATE public.production_batches SET status = ...` (never
+	an insert — batch creation stays online-only, no `production.create` exists in the
+	allowlist) and write a matching `sync_changes` row (`operation_type='EVENT'`, matching
+	AD-021's own "operation-based + state-machine validation" framing for this entity;
+	`revision` computed the same `coalesce(max(revision),0)+1` way `customer.update` already
+	uses, keyed by `entity_id` — no revision column on `production_batches` itself).
+- **A real, pre-existing defect was found and fixed as a prerequisite**, live-reproduced
+	before fixing: `guard_production_batch_transition()`'s own role check read the session
+	JWT's role claim (the session's *active* org), not the row's own `tenant_id` — the same
+	active-org-assumption bug class AD-006 already fixed for `is_authorized_for_branch()`/
+	`has_role_in()` elsewhere. Fixed via migration
+	`fix_guard_production_batch_transition_tenant_scoped_role_check`
+	(`has_role_in(auth.uid(), new.tenant_id, actors)`), re-verified live against both the
+	cross-org rejection case and the existing online `complete_production_batch()` happy path
+	(unaffected).
+- **Payload:** `{batch_id (required)}` for both. Each handler additionally confirms the
+	batch's own `branch_id` matches the operation's already-authorized `branch_id` (`22023`
+	otherwise — the same consistency-guard shape `apply_inventory_adjust` uses for its
+	`warehouse_id`), and that the batch is currently `scheduled` (`P0001 invalid_transition`
+	otherwise) before checking role.
+- **Role gates mirror `guard_production_batch_transition()`'s own actor lists verbatim, not
+	invented:** `production.start` (→ `in_progress`) requires owner/admin/branch_manager/
+	baker; `production.cancel` (→ `cancelled`) requires owner/admin/branch_manager (no baker
+	— the one place `start` and `cancel` deliberately diverge).
+- **`production.complete`/`.record_output`/`.record_waste` remain allowlisted in
+	`domain_operation`'s CHECK (unchanged since AD-021) but unhandled** — AD-021 never
+	specified `.record_output`/`.record_waste`'s payload or relationship to the existing
+	`complete_production_batch()`/`fail_production_batch()` RPCs, and those two RPCs were
+	found to share the trigger's same active-org-assumption defect class (via
+	`current_tenant_id()`) on a bigger, untested surface. See **`BLOCKER-027`** for the full
+	evidence. The dispatcher fallback correctly `REJECTED unsupported_operation_type`s all
+	three (verified live).
+- **Security:** both new handlers `REVOKE`d from `PUBLIC`/`anon`/`authenticated` in the same
+	migration that created them, confirmed via `has_function_privilege()` and a clean
+	`get_advisors(security)` re-run (which also confirmed the patched trigger introduces no
+	new finding).
+- **Tests:** `tests/sql/p3_7_production_sync.sql`, new, 13/13 live. Zero regression
+	re-confirmed: `tests/sql/p3_7_customer_sync.sql` quick-check re-run after the dispatcher
+	change; the online `complete_production_batch()` path re-tested end to end after the
+	trigger fix.
+- **Still not built:** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
+	`production.complete`/`.record_output`/`.record_waste` (`BLOCKER-027`); financial
+	handlers; `customer.soft_delete`; `depends_on_operation_id` (`BLOCKER-022`);
+	cursor-expiry-via-retention (`BLOCKER-023`); per-supervisor manager-configurable
+	permission overrides (`BLOCKER-025`).
+
 ### What the deployed schema does provide
 
 The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`:

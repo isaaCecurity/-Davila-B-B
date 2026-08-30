@@ -5,6 +5,257 @@ Never record planned work here.
 
 ---
 
+## 2026-08-30 · P3.7 PRODUCTION vertical slice — `production.start`/`production.cancel`, plus a real security defect fixed
+
+Resumed on "okay make the necessary corrections if needed then continue." Checked for drift
+first: `select proname from pg_proc where proname in ('apply_inventory_adjust',
+'apply_inventory_waste')` confirmed both still live; `git status --short` matched what was
+last reported (same 8 modified files + 1 untracked); no external commits had landed. Nothing
+to correct. Proceeded to the next unbuilt P3.7 entity per `BACKEND_ROADMAP.md`: production.
+
+**Live investigation before writing anything**, via `mcp__supabase__execute_sql`:
+- `pg_proc` search for `%production%`/`%batch%` found exactly two write RPCs
+  (`complete_production_batch`, `fail_production_batch`) and no "start"/"create" RPC at all
+  — batch creation is a plain client `INSERT` (RLS-gated), same shape as tickets; batch
+  start/cancel would have to be plain `UPDATE`s too, since no RPC exists for either.
+- `production_batches`' full CHECK-constraint set read directly: 5-state machine
+  (`scheduled`/`in_progress`/`completed`/`failed`/`cancelled`), `completed`/`failed` both
+  require their own populated fields.
+- `guard_production_batch_transition()`'s full body read via `pg_get_functiondef`: allowed
+  hops `scheduled`→{`in_progress`,`cancelled`}, `in_progress`→{`completed`,`failed`};
+  `completed`/`failed` additionally gated by a `bakeflow.production_batch_rpc`
+  transaction-local flag (BLOCKER-017's own technique, confirming a direct UPDATE to either
+  can never succeed — those two statuses are out of reach for a plain-UPDATE handler,
+  correctly left alone); per-status actor lists read verbatim for reuse.
+
+**A real, pre-existing security defect was found and live-reproduced before fixing.**
+`guard_production_batch_transition()`'s role check was `has_role(actors)` — reads
+`auth.jwt()->'roles'`, the session's *active organization's* role claim — not
+`new.tenant_id`, the row's own tenant. Reproduced live in a rolled-back transaction: with
+the profile's org-A roles stripped entirely and only `branch_manager` granted in org B, a
+session whose JWT claimed `tenant_id=org B, roles=[branch_manager]` successfully flipped an
+org A batch's status (`has_role(['branch_manager'])` returned `true` regardless of which org
+that role claim actually came from). This is the identical active-org-assumption bug class
+already found and fixed for `is_authorized_for_branch()`/`has_role_in()` (AD-006) and for
+`guard_driver_created_order_assignment()` in the first P3.7 ticket slice (2026-08-28) — this
+trigger had never been touched by that fix, dormant only because no prior write path could
+ever produce a mismatched tenant_id until this sync slice's explicit-tenant model made it
+reachable.
+
+**Fixed** (migration `fix_guard_production_batch_transition_tenant_scoped_role_check`,
+applied only after the fix was proven live in a rolled-back transaction against BOTH
+directions of the bug): the check now reads
+`has_role_in(auth.uid(), new.tenant_id, actors)`. Re-verified live, same transaction as the
+fix, before applying for real: (1) the cross-org false-accept from the reproduction above no
+longer occurs — same setup, now correctly `insufficient_role`; (2) granting the actor
+`branch_manager` in org A too (the row's real tenant) succeeds, confirming the fix isn't
+simply "always reject"; (3) the existing online same-org path
+(`update ... set status='in_progress'` as `owner` in org A, then
+`complete_production_batch()` end to end, including its ingredient-consume and
+product-output stock movements) still works identically — re-tested live after the fix, not
+assumed safe from inspection alone.
+
+**Built** (migration `p3_7_production_start_cancel_handlers`, applied only after a dry run
+in a rolled-back transaction passed 13/13):
+- `apply_production_start(p_operation sync_operations)`: validates `batch_id` from the
+  payload; looks up the batch by `id`+`tenant_id`, confirms `branch_id` matches the
+  operation's own already-authorized branch (`22023` otherwise — same consistency-guard
+  shape `apply_inventory_adjust` uses for `warehouse_id`) and that `status='scheduled'`
+  (`P0001 invalid_transition` otherwise, with a friendlier message than the raw trigger
+  error since this check runs first); authorizes via
+  `has_role_in(actor, tenant, ['owner','admin','branch_manager','baker'])` (mirrors the
+  fixed trigger's own `in_progress` actors verbatim); updates `status='in_progress'`
+  (`started_at` auto-set by the trigger); inserts one `sync_changes` row
+  (`operation_type='EVENT'`, matching AD-021's own "operation-based + state-machine
+  validation" framing for this entity, `domain_operation='production.start'`,
+  `revision = coalesce(max(revision),0)+1` for that `entity_id` — the same generic
+  revision-in-`sync_changes` mechanism `customer.update` already established, no revision
+  column added to `production_batches` itself).
+- `apply_production_cancel(p_operation sync_operations)`: identical shape,
+  `status='cancelled'`, role gate `['owner','admin','branch_manager']` (mirrors the fixed
+  trigger's own `cancelled` actors verbatim — deliberately excludes baker, unlike start).
+- `apply_sync_operation()` dispatcher: two new `ELSIF` branches
+  (`domain_operation = 'production.start'`/`'production.cancel'`) inserted between the
+  existing inventory branches and the `unsupported_operation_type` fallback; every other
+  line byte-identical, verified by re-running the customer suite afterward.
+- `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` on both new functions, same
+  migration.
+
+**A transient tooling glitch, not a code defect, cost one investigation round-trip:** the
+very first live test of the finished handlers returned `unsupported_operation_type` even
+though the dispatcher's `ELSIF` branch was confirmed present via `pg_get_functiondef`
+moments earlier. Isolated by bypassing `process_sync_batch()` entirely (a direct `INSERT`
+into `sync_operations` + a direct call to `apply_sync_operation()`) — that path dispatched
+correctly on the first try. Re-running the *exact same* full script that had just failed
+succeeded cleanly on retry, confirming it was a one-off connection/session hiccup (matching
+this project's own documented history of transient cross-call state issues with the MCP SQL
+tool) rather than anything wrong with the handler or dispatcher code itself. Not chased
+further once reproducibility ruled out a real defect.
+
+**`production.complete`/`.record_output`/`.record_waste` deliberately NOT built.** AD-021's
+own text names all five production operations in one line but never specifies
+`.record_output`'s or `.record_waste`'s payload, or their relationship to the existing
+`complete_production_batch()`/`fail_production_batch()` RPCs (which already combine a status
+flip with ingredient-consume and product-output stock movements in one call). Read both RPC
+bodies in full via `pg_get_functiondef`: both derive `v_tenant := public.current_tenant_id()`
+internally — the session's active org, not an explicit parameter — the same
+active-org-assumption defect class just fixed in the trigger, but on a bigger, currently
+config-untested surface (ingredient movements, the output movement, "insufficient_stock
+rolls back the whole completion"). Fixing that speculatively, before knowing what
+`.record_output`/`.record_waste` are even meant to do, would risk guessing twice. Opened new,
+non-blocking **BLOCKER-027** (`BLOCKERS.md`) with the specific evidence for both open
+questions rather than guessing at either.
+
+**Tests, live, zero regression:**
+- `tests/sql/p3_7_production_sync.sql` (new): dry run 13/13 in a rolled-back transaction
+  before the real migrations existed (one intermediate 12/13 run caught a genuine test-fixture
+  ordering bug — P3 originally reused the shared fixture batch after P1 had already advanced
+  it past `scheduled`, so the role check was never reached; fixed by giving P3 its own
+  dedicated freshly-`scheduled` batch, matching the fix already applied to P6/P7/P8/P10 for
+  the same reason). Final file version executed end-to-end exactly as committed to disk, with
+  its own `do $verdict$` block — **13/13 passed** against the real deployed migrations. Covers:
+  branch_manager start (APPLIED, in_progress, revision 1), double-start (P0001), missing/
+  nonexistent `batch_id` (22023/P0001), branch_manager cancel (APPLIED, cancelled), driver-only
+  cannot cancel (42501), baker cannot cancel but CAN start (42501/APPLIED — proving the two
+  role sets are genuinely different, not copy-pasted), cross-tenant actor (rejected by the
+  existing generic gateway), identical replay (`replayed:true`, one `sync_changes` row),
+  `production.complete` still correctly `unsupported_operation_type`, both new handlers
+  confirmed not directly executable by `anon`/`authenticated`.
+- `tests/sql/p3_7_customer_sync.sql`: a quick regression check (`customer.create` still
+  `APPLIED`, revision 1) re-run live after the dispatcher change, confirming the two new
+  `ELSIF` branches introduced zero regression in the existing customer path.
+- `mcp__supabase__get_advisors(type: 'security')`: neither `apply_production_start`,
+  `apply_production_cancel`, nor the patched `guard_production_batch_transition()` appears
+  among the findings (pre-existing, unrelated findings for other functions unaffected).
+- `.venv/Scripts/python.exe -m pytest -q` → 12 passed, unaffected.
+
+**Docs updated:** `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md`
+§12 (new PRODUCTION subsection), `docs/API-CONTRACT.md` (`process_sync_batch` row extended
+with the production payload/result/role contract), `BACKEND_ROADMAP.md` (P3.7 section, both
+crosswalk-table rows), `BLOCKERS.md` (new BLOCKER-027), `NOTIFICATIONS.md` (new top entry),
+`CURRENT_TASK.md` (new top entry).
+
+**Not committed.** Same standing reason as the inventory slice below — no explicit go-ahead
+for new work has been given, only confirmation that the already-on-`main` passes should
+stand.
+
+---
+
+## 2026-08-30 · P3.7 INVENTORY vertical slice — `inventory.adjust`/`inventory.waste`
+
+Resumed after the git-state correction below, per the user's "leave the commit, i have done
+it. Continue on with the current or next task." Checked `BACKEND_ROADMAP.md`'s P3.7 section:
+tickets and customers done, "inventory/production/financial handlers" flagged as remaining
+implementation work, not blocked. Picked inventory — AD-021 had already locked its conflict
+strategy ("append-only... never a synchronized absolute quantity; only a server-side rule
+violation... becomes a conflict/rejection") — and scoped it to the two of five allowlisted
+operations (`inventory.adjust`, `inventory.waste`) with a clean existing precedent to mirror.
+
+**Live investigation before writing anything**, via `mcp__supabase__execute_sql`:
+- `sync_operations_domain_operation_check` already allowlists all five (`inventory.adjust`,
+  `.receive`, `.consume`, `.waste`, `.transfer`) — added by an earlier migration per AD-021,
+  none built until now.
+- `stock_movements` schema and its CHECK constraints (`item_exclusivity`,
+  `reason_check` — nine reasons — `sign_matches_reason`, `reference_pair`) read directly, not
+  assumed.
+- The only existing precedent for a management/production stock write, `adjust_stock(p_
+  warehouse_id, p_item_type, p_item_id, p_new_quantity, p_reason, p_note)` — full body read
+  via `pg_get_functiondef`. It accepts `reason IN ('adjustment','waste','opening_balance')`,
+  gates `'adjustment'`/`'opening_balance'` to owner/admin/branch_manager and `'waste'` to
+  owner/admin/branch_manager/baker, forbids a positive delta under `'waste'`, and computes
+  its delta from a `FOR UPDATE`-locked read of current on-hand against an absolute
+  `p_new_quantity` target.
+- Searched every function whose source mentions `stock_movements`
+  (`prosrc ilike '%stock_movements%'`) to find every existing writer of each `reason` value:
+  `adjust_stock` (`adjustment`/`waste`/`opening_balance`), `complete_ticket`/
+  `complete_driver_field_sale` (`sale`), `complete_production_batch`/`fail_production_batch`
+  (`production_consume`/`production_output`), `verify_trip_loading`/`return_driver_trip`
+  (`transfer_in`/`transfer_out`, always paired, always `reference_type='driver_trip'`). No
+  function anywhere writes `reason='purchase'` — only legacy/seed rows carry it, all with
+  `unit_cost` NULL (the same gap BLOCKER-018 already names). Read both driver-trip RPC bodies
+  in full to confirm the transfer pair is always trip-linked, never a generic
+  warehouse-to-warehouse move.
+- `ingredient_stock_levels`/`product_stock_levels`/`warehouses`/`ingredients`/
+  `product_variants` column shapes confirmed via `information_schema.columns` before writing
+  any lookup.
+- `apply_sync_operation()` dispatcher and `apply_customer_create()` re-read via
+  `pg_get_functiondef` immediately before writing the new handlers, to mirror the exact
+  established shape (payload validation style, `has_role_in()` authorization, `sync_changes`
+  insert, `REVOKE` pattern) rather than inventing a new one.
+- `sync_changes_operation_type_check` confirmed `'EVENT'` as a valid value, matching AD-021's
+  own text ("tickets: event/state-machine... inventory: append-only") for a fact rather than
+  a mutable created entity.
+
+**Built** (migration `p3_7_inventory_adjust_waste_handlers`, applied via
+`mcp__supabase__apply_migration` only after a full dry-run in a rolled-back transaction
+passed 10/10, then re-verified 12/12 against the real deployed migration before committing
+to it):
+- `apply_inventory_adjust(p_operation sync_operations)`: validates `warehouse_id`,
+  `item_type`, `item_id`, `quantity_delta` (required, numeric, nonzero) from the payload;
+  authorizes via `has_role_in(actor, tenant, ['owner','admin','branch_manager'])` (mirrors
+  `adjust_stock`'s own `'adjustment'` gate verbatim); looks up the warehouse by
+  `id`+`tenant_id` and confirms `branch_id` matches the operation's own already-authorized
+  branch (`22023` otherwise — the same consistency-guard shape `apply_customer_update` uses
+  for `customer_id`/`entity_id`); confirms the ingredient/product-variant exists in-tenant;
+  reads current on-hand (`coalesce(...,0)`), rejects (`P0001`, `negative_stock_rejected`) if
+  `current + quantity_delta < 0`; inserts one `stock_movements` row
+  (`reason='adjustment'`, `reference_type='manual'`, `reference_id=warehouse_id`, matching
+  `adjust_stock`'s own convention) and one `sync_changes` row
+  (`operation_type='EVENT'`, `domain_operation='inventory.adjust'`, `revision=1`).
+- `apply_inventory_waste(p_operation sync_operations)`: identical shape, `reason='waste'`,
+  additionally rejects (`22023`) a non-negative `quantity_delta`, role gate widened to
+  include `baker` (mirrors `adjust_stock`'s own `'waste'` gate verbatim).
+- `apply_sync_operation()` dispatcher: two new `ELSIF` branches
+  (`domain_operation = 'inventory.adjust'`/`'inventory.waste'`) inserted between the existing
+  customer branches and the `unsupported_operation_type` fallback; every other line
+  byte-identical to the version `pg_get_functiondef` returned immediately before this change
+  — verified by re-running the full 21-assertion customer suite afterward (see below), not
+  just by inspection.
+- `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` on both new functions, in the same
+  migration.
+
+**`inventory.receive`/`.consume`/`.transfer` deliberately NOT built** — see the live-writer
+survey above. Opened new, non-blocking **BLOCKER-026** (`BLOCKERS.md`) with the specific
+evidence for each rather than guessing at any of the three.
+
+**Tests, live, zero regression:**
+- `tests/sql/p3_7_inventory_sync.sql` (new): dry-run 10/10 in a rolled-back transaction
+  before the real migration existed; re-run 12/12 against the real deployed migration
+  (added I6 cross-tenant and I7 nonexistent-warehouse checks the dry-run's smaller scope had
+  skipped); final file version (adding the S1/S2 `has_function_privilege` checks as real
+  `_results` rows rather than a bare `select`) executed end-to-end exactly as committed to
+  disk, with its own `do $verdict$` block — **14/14 passed**. Covers: branch_manager
+  adjust +10 (APPLIED, on-hand +10, revision 1), missing `warehouse_id` (22023),
+  `quantity_delta=0` (22023), driver-only cannot adjust (42501), adjustment driving on-hand
+  negative (P0001/`negative_stock_rejected`), cross-tenant actor (rejected by the existing
+  generic gateway before any handler runs), nonexistent `warehouse_id` (P0001), identical
+  replay (`replayed:true`, one movement), `inventory.consume` still correctly
+  `unsupported_operation_type`, baker waste -2 (APPLIED, on-hand -2), driver-only cannot
+  record waste (42501), positive `quantity_delta` rejected for waste (22023), both new
+  handlers confirmed not directly executable by `anon`/`authenticated`.
+- `tests/sql/p3_7_customer_sync.sql` re-run in full (21/21) after the dispatcher change, to
+  prove the two new `ELSIF` branches introduced zero regression in the existing customer
+  path — not assumed from "the diff looks safe."
+- `mcp__supabase__get_advisors(type: 'security')`: neither `apply_inventory_adjust` nor
+  `apply_inventory_waste` appears among the findings (pre-existing, unrelated findings for
+  other functions unaffected).
+- Leftover-data check: `select count(*) from stock_movements where reference_type='manual'
+  and created_at > now() - interval '10 minutes'` → `0` after both rollbacks, confirming no
+  test data survived into the live database.
+
+**Docs updated:** `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md`
+§12 (new INVENTORY subsection), `docs/API-CONTRACT.md` (`process_sync_batch` row extended
+with the inventory payload/result/role contract), `BACKEND_ROADMAP.md` (P3.7 section, both
+crosswalk-table rows, Current State line), `BLOCKERS.md` (new BLOCKER-026), `NOTIFICATIONS.md`
+(new top entry), `CURRENT_TASK.md` (new top entry).
+
+**Not committed.** This pass's own instruction ("continue on with the current or next task")
+did not explicitly re-authorize committing new work — only the prior, already-on-`main`
+passes were confirmed to stand ("leave the commit, i have done it"). Flagged to the user in
+`NOTIFICATIONS.md`/`CURRENT_TASK.md` rather than assumed either way.
+
+---
+
 ## 2026-08-30 · Correction: git-state claims below are stale
 
 The three "Nothing committed to git" claims below (in the `customer.update` role-scope

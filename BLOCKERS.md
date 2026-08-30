@@ -1354,6 +1354,96 @@ role-level check described in BLOCKER-024's resolution.
 
 ---
 
+## BLOCKER-026 · `inventory.receive` / `.consume` / `.transfer` sync handlers — no clean precedent, not built
+**Status:** OPEN · **Affects:** P3.7 (remaining inventory domain_operation coverage) · **Type:** business rule / architecture decision, not yet specified
+
+**Context:** 2026-08-30, building the P3.7 INVENTORY vertical slice, `inventory.adjust` and
+`inventory.waste` were built (mirroring the live `adjust_stock()` RPC's own reason/role gates
+exactly — see `tests/sql/p3_7_inventory_sync.sql` and `IMPLEMENTATION_LOG.md` 2026-08-30). The
+other three inventory operations AD-021 already allowlisted (`inventory.receive`, `.consume`,
+`.transfer`) were investigated live and deliberately NOT built this pass, each for a distinct
+reason with no existing precedent to mirror:
+
+- **`inventory.receive`** would write `reason='purchase'`. No RPC anywhere in the live schema
+  writes this reason — it exists only on legacy/seed rows, all with `unit_cost` NULL. This is
+  the same gap **BLOCKER-018** already names (weighted-average COGS blocked because nothing
+  captures a purchase-cost event). Building a sync handler here would either have to guess a
+  cost-capture rule BLOCKER-018 hasn't resolved, or ship a "receive" that still can't feed
+  COGS — deferred to whatever resolves BLOCKER-018, not decided in isolation.
+- **`inventory.transfer`** would write `reason='transfer_in'/'transfer_out'`. The only live
+  writers of this reason pair are the driver-trip lifecycle RPCs (`verify_trip_loading`,
+  `return_driver_trip`), always linked to a specific trip (`reference_type='driver_trip'`).
+  There is no generic warehouse-to-warehouse manual transfer RPC to mirror, and who may move
+  stock between two warehouses with no trip involved is a real, undecided authorization
+  question — not implementation detail.
+- **`inventory.consume`** would write `reason='production_consume'`, but the only live writers
+  (`complete_production_batch`, `fail_production_batch`) always tie it to a real production
+  batch. A standalone "consume" operation with no batch link has no defined meaning and would
+  overlap unclearly with the already-built `inventory.adjust`/`inventory.waste`.
+
+All three remain allowlisted in `domain_operation`'s CHECK (added earlier, per AD-021) but
+unhandled — `apply_sync_operation()`'s dispatcher fallback correctly `REJECTED
+unsupported_operation_type`s them today (verified live, test I10), never silently leaves them
+PENDING.
+
+**Needed:** for `.receive`, resolution of BLOCKER-018 first (or an explicit decision that
+receiving can be recorded without a cost, decoupling the two). For `.transfer`, a product
+decision on whether/how a non-trip manual warehouse-to-warehouse transfer should exist and who
+may perform it. For `.consume`, a product decision on whether a standalone consume operation is
+needed at all, or whether `inventory.adjust`/`.waste` already cover every case a bakery actually
+needs offline.
+
+---
+
+## BLOCKER-027 · `production.complete` / `.record_output` / `.record_waste` sync handlers — ambiguous relationship to existing RPCs, not built
+**Status:** OPEN · **Affects:** P3.7 (remaining production domain_operation coverage) · **Type:** business rule / architecture decision, not yet specified
+
+**Context:** 2026-08-30, building the P3.7 PRODUCTION vertical slice, `production.start` and
+`production.cancel` were built as plain guard-validated status transitions (`scheduled` →
+`in_progress`/`cancelled`), mirroring `guard_production_batch_transition()`'s own role lists
+verbatim — see `tests/sql/p3_7_production_sync.sql` and `IMPLEMENTATION_LOG.md` 2026-08-30. The
+other three production operations AD-021 already allowlisted (`production.complete`,
+`.record_output`, `.record_waste`) were investigated live and deliberately NOT built this pass:
+
+- AD-021's own text names all five production operations in a single line ("production.start,
+  .complete, .cancel, .record_output, .record_waste") but never specifies `.record_output`'s or
+  `.record_waste`'s payload, or how either relates to the two existing RPCs
+  `complete_production_batch()`/`fail_production_batch()` — which already combine a status flip
+  (`in_progress`→`completed`/`failed`) with ingredient-consume and product-output stock
+  movements in ONE call. It is not decided anywhere whether `.record_output`/`.record_waste` are
+  meant to be synonyms for `.complete`/a "fail" op that doesn't exist in the allowlist,
+  finer-grained events decomposing that one call into separate steps, or something else. No EB
+  chapter or `docs/*.md` file mentions either name. Building either would mean guessing this
+  relationship, not reading it from a decision.
+- **A related defect, found live while investigating:** both `complete_production_batch()` and
+  `fail_production_batch()` derive their own tenant via `public.current_tenant_id()` — the
+  calling session's *active* organization — not an explicit parameter. Calling either from a
+  sync handler for a genuinely cross-org operation (actor's session active in a different org
+  than the operation's own `tenant_id`, AD-006's exact scenario) would silently use the wrong
+  tenant to look up the batch. This is the same active-org-assumption bug class just found and
+  fixed in `guard_production_batch_transition()`'s own role check (see AD-021 postscript,
+  2026-08-30) — but fixing it in these two RPCs is a bigger, currently-untested surface
+  (ingredient consume movements, the output movement, the "insufficient_stock rolls back the
+  whole completion" behavior) than the trigger's single role check, and wasn't undertaken
+  speculatively without first knowing what `.record_output`/`.record_waste` are actually meant
+  to do.
+
+All three remain allowlisted in `domain_operation`'s CHECK (unchanged since AD-021) but
+unhandled — `apply_sync_operation()`'s dispatcher fallback correctly `REJECTED
+unsupported_operation_type`s them today (verified live, test P11), never silently leaves them
+PENDING.
+
+**Needed:** a product/architecture decision on what `.record_output`/`.record_waste` actually
+represent relative to `complete_production_batch()`/`fail_production_batch()` — new finer-
+grained events, or the sync-facing names for calling those two RPCs (in which case `.complete`
+becomes redundant with `.record_output` and one of the two allowlisted values is likely a
+naming mistake worth correcting rather than both being built). Whichever direction is chosen,
+`complete_production_batch()`/`fail_production_batch()` (or their sync-facing replacements)
+need an explicit-tenant parameter before they can be safely called from the sync gateway for a
+genuinely cross-org operation.
+
+---
+
 ## Template
 
 ```

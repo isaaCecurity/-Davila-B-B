@@ -4,6 +4,57 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## P3.7 PRODUCTION slice delivered — `production.start`/`.cancel` built, a real security defect found and fixed along the way (2026-08-30)
+
+Continued P3.7 into production, the next entity `BACKEND_ROADMAP.md` listed as unblocked
+implementation work. Built the two of five production operations with a clean existing
+precedent (`production.start`/`production.cancel` — plain status transitions, role gates
+copied verbatim from the live `guard_production_batch_transition()` trigger).
+
+**While building this, found a real security gap and fixed it, not just documented it.**
+The trigger that guards every production batch status change was authorizing off the
+session's *currently active organization*, not the organization the batch actually belongs
+to — meaning a manager signed into Bakery B could, in principle, have changed a Bakery A
+batch's status if they happened to hold a matching role name in Bakery B. Reproduced this
+live before fixing it, then fixed it, then re-confirmed both that the gap is closed and that
+nothing about the existing online production flow changed for anyone using it correctly.
+
+`production.complete`/`.record_output`/`.record_waste` were investigated and NOT built —
+what those two new operation names are actually supposed to do isn't written down anywhere,
+and the two existing completion RPCs were found to have the same class of organization-mixup
+risk internally, just not yet reachable. Opened **BLOCKER-027** with the specific evidence
+rather than guessing.
+
+**Not committed.** Same as the inventory slice below — awaiting your go-ahead.
+
+---
+
+## P3.7 INVENTORY slice delivered — `inventory.adjust`/`.waste` built, three siblings blocked on real product decisions (2026-08-30)
+
+Continued P3.7 into inventory, the next entity `BACKEND_ROADMAP.md` already listed as
+unblocked implementation work. Built the two of five inventory operations that had a clean
+existing precedent to mirror (`inventory.adjust`, `inventory.waste` — role gates and reasons
+copied verbatim from the live `adjust_stock()` RPC) and stopped rather than guess at the
+other three:
+
+- **`inventory.receive`** would need to capture a purchase cost — the exact gap
+  **BLOCKER-018** already names (nothing anywhere records what a purchase actually cost).
+- **`inventory.transfer`** would need a rule for who may move stock between two warehouses
+  with no driver trip involved — no such rule exists today.
+- **`inventory.consume`** has no defined meaning outside a production batch, and building
+  one risked silently overlapping with `.adjust`/`.waste`.
+
+Opened **BLOCKER-026** for all three rather than inventing answers. `tests/sql/
+p3_7_inventory_sync.sql` (new, 14/14 live) confirms `.receive`/`.consume`/`.transfer` still
+correctly get rejected as unsupported, not silently accepted or half-built. Zero regression
+on the existing customer suite (21/21, re-run after the dispatcher change).
+
+**Not committed.** Awaiting your go-ahead, same as the customer slice below originally was —
+this pass's own instruction didn't explicitly authorize committing new work; only the prior,
+already-committed passes were confirmed to stand ("leave the commit, i have done it").
+
+---
+
 ## `customer.update` role scope decided and implemented — driver/cashier removed, BLOCKER-024 resolved (2026-08-29)
 
 Following up the CUSTOMER slice notification below: you decided `customer.update` should be
