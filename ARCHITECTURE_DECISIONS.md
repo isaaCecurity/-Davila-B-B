@@ -650,8 +650,81 @@ transition/not-found rejection, cross-tenant denial, replay idempotency, and a c
 regression: `tests/sql/p3_7_customer_sync.sql` (quick regression check re-confirmed after the
 production dispatcher change). Full detail: `IMPLEMENTATION_LOG.md` 2026-08-30.
 
-**Still not built:** `inventory.receive`/`.consume`/`.transfer` (BLOCKER-026),
+**Still not built (at that point):** `inventory.receive`/`.consume`/`.transfer` (BLOCKER-026),
 `production.complete`/`.record_output`/`.record_waste` (BLOCKER-027), financial handlers,
 `customer.soft_delete` (deliberately — not in `domain_operation`'s CHECK constraint),
 `depends_on_operation_id` enforcement, true cursor-expiry-via-retention-purge, per-supervisor
 manager-configurable permission overrides (BLOCKER-025). None of these are guessed at.
+
+---
+
+**Extended 2026-08-30, later same day — FINANCIAL vertical slice, three of four operations.**
+Continuing P3.7 into AD-021's last unbuilt entity ("Payments/Expenses — append-only + explicit
+reversal"). Live investigation found `record_payment()` and `record_refund()` as clean, live,
+human-approved precedent RPCs for `payment.create`/`.reverse` — both use `has_role()`/
+`has_branch_access()` (session-active-org), the exact AD-006 gap already fixed elsewhere this
+session, so the new handlers mirror their business logic and role lists verbatim but authorize
+via `has_role_in(actor, tenant, roles)` against `p_operation.tenant_id`/`branch_id`, never the
+session's active org. Built `apply_payment_create()` mirroring `record_payment()` in full,
+including the AD-018 driver-trip cash-custody branch and the cash-till-session branch;
+`guard_payment_relationships()`/`apply_payment_to_ticket()` — existing triggers already keyed off
+`NEW.tenant_id`, not session state — do the branch/overpayment/invoice/session validation and the
+`tickets.amount_paid`/`invoices.status` derivation automatically, so the handler doesn't duplicate
+it. Built `apply_payment_reverse()` mirroring `record_refund()` in full; `guard_refund_total()`
+re-validates the over-refund guard as a second line of defense. Both `payments` and `refunds`
+carry `prevent_financial_mutation()` (append-only at the database level), so `operation_type =
+'EVENT'` is correct for both `payment.create` and `payment.reverse` — matching the inventory-
+movement convention, not `'CREATE'`. A payment's lifecycle (create, then any reversals) is
+tracked in `sync_changes` keyed by the ORIGINAL payment's `entity_id`, incrementing revision —
+the same shared-entity-id ledger convention `production.start`/`.cancel` already established.
+
+**Role source for `payment.create`/`.reverse`:** there is no `financial.payment.*` key in the
+`role_permissions` catalog (`docs/ROLES-AND-PERMISSIONS.md` only covers `financial.expense.*`
+and `financial.audit.*`) — unlike `customer.create`, there is no more-current catalog to defer
+to, so `record_payment()`/`record_refund()`'s own `has_role()` arrays are the only live rule,
+mirrored as-is.
+
+**`expense.create` has no RPC precedent** — expenses are inserted directly by clients, gated by
+the live `expenses_insert` RLS policy (`owner/admin/branch_manager/cashier/accountant`). That
+array disagrees with the `role_permissions` catalog's `financial.expense.create` grants
+(`owner/admin/branch_manager/supervisor/accountant` — no cashier) on both `cashier` and
+`supervisor`. Unlike the `customer.create` precedent (a stale EB-013 doc vs. a current, deployed
+catalog, with a documented resolution favoring the catalog), this is two independently live,
+deployed mechanisms disagreeing with each other — not resolved here, logged in
+`IMPLEMENTATION_LOG.md` and mirrored to the RLS array, since that's what actually gates expense
+creation today for direct client inserts. `expenses` carries no immutability trigger and its own
+`expenses_update` RLS policy permits direct edits, so `'CREATE'` (new mutable entity) is correct
+for `expense.create`, unlike payments' `'EVENT'`.
+
+**`expense.reverse` was investigated and deliberately NOT built.** AD-021 calls for "append-only
++ explicit reversal" for expenses too, but no reversal RPC, no reversal/correction table, and no
+correcting-entry trigger exist anywhere in the live schema for expenses — and the live
+`expenses_update` RLS policy's direct-edit path actively contradicts the append-only assumption
+AD-021 wants here. Building it would mean inventing one of at least two incompatible designs
+without a product decision on which. Opened new, non-blocking **BLOCKER-028** rather than guessed
+at. It remains allowlisted in `domain_operation`'s CHECK (unchanged from AD-021) and is correctly
+`REJECTED unsupported_operation_type` by the existing dispatcher fallback.
+
+**Security, checked the same way as every prior P3.7 pass.** `apply_payment_create`/
+`apply_payment_reverse`/`apply_expense_create` were `REVOKE`d from `PUBLIC`/`anon`/`authenticated`
+in the same migrations that created them — confirmed via `has_function_privilege()` and
+independently via a clean `get_advisors(type: 'security')` run (none of the three appear in the
+findings; only the pre-existing, unrelated `record_payment`/`record_refund` anon/authenticated
+warnings remain, untouched by this pass).
+
+**Verification:** `tests/sql/p3_7_financial_sync.sql` (new, 27/27 live, covering both handlers'
+full payload validation, the driver-trip custody path, the cash-session path, overpayment/
+over-refund rejection, cancelled-ticket rejection, role gating for all three operations, cross-
+tenant denial, replay idempotency, and a check that `.reverse` for expenses still correctly falls
+through to `unsupported_operation_type`). Re-run clean, zero regression:
+`tests/sql/p3_7_customer_sync.sql` (quick regression check re-confirmed after the financial
+dispatcher change, including the `domain_operation` CHECK constraint's D1 guard). Full detail:
+`IMPLEMENTATION_LOG.md` 2026-08-30.
+
+**Still not built:** `inventory.receive`/`.consume`/`.transfer` (BLOCKER-026),
+`production.complete`/`.record_output`/`.record_waste` (BLOCKER-027), `expense.reverse`
+(BLOCKER-028), `customer.soft_delete` (deliberately — not in `domain_operation`'s CHECK
+constraint), `depends_on_operation_id` enforcement, true cursor-expiry-via-retention-purge,
+per-supervisor manager-configurable permission overrides (BLOCKER-025). None of these are guessed
+at. P3.7's `domain_operation` allowlist is now fully covered except these deliberately-open
+items.

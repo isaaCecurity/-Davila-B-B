@@ -5,6 +5,210 @@ Never record planned work here.
 
 ---
 
+## 2026-08-30 · P3.7 FINANCIAL vertical slice — `payment.create`/`payment.reverse`/`expense.create`
+
+Resumed on "leave the commiting to me and continue from where you stopped." No drift check
+needed — the user's instruction was explicit continuation, not a request to re-verify state.
+Proceeded to the last unbuilt P3.7 entity per `BACKEND_ROADMAP.md`: financial (payments,
+expenses), AD-021's final unbuilt category.
+
+**Live investigation before writing anything**, via `mcp__supabase__execute_sql`:
+- `information_schema.tables`/`routines` search for `%payment%`/`%expense%`/`%invoice%`/
+  `%cash_session%` found: tables `cash_sessions`, `expenses`, `invoices`, `payments`;
+  functions `apply_payment_to_ticket`, `bump_cash_session_revision`, `close_cash_session`,
+  `guard_cash_session_transition`, `guard_expense_cash_session`, `guard_payment_relationships`,
+  `open_cash_session`, `prevent_cash_session_delete`, `record_payment`, `update_invoice_due_at`.
+  A further search for `%reverse%`/`%void%`/`%refund%` found `guard_refund_total`,
+  `record_refund` — no expense-side reversal function of any kind.
+- `pg_get_functiondef(record_payment)` read in full: `p_order_id, p_amount, p_method,
+  p_reference, p_cash_session_id, p_driver_trip_id`; role check
+  `has_role(ARRAY['owner','admin','branch_manager','cashier','driver'])` (session-based);
+  validates amount>0, method IN ('cash','card','transfer','pos'), mutual exclusivity of
+  cash_session_id/driver_trip_id; ticket lookup+lock, `has_branch_access()` check, rejects
+  cancelled tickets; driver-trip branch (AD-018) requires trip `in_transit`, actor is the
+  trip's own driver or a manager, ticket linked to that trip; cash branch resolves an
+  explicit-or-implicit open till session at the ticket's branch; resolves invoice_id from
+  ticket_id; inserts into `payments`.
+- `pg_get_functiondef(record_refund)` read in full: `p_payment_id, p_amount, p_reason`; role
+  check `has_role(ARRAY['owner','admin','branch_manager'])`; validates amount>0, reason
+  required ≤1000 chars; payment lookup+lock, `has_branch_access()` check; sums existing
+  refunds against that payment, rejects if `already_refunded + amount > payment.amount`;
+  inserts into `refunds`.
+- `pg_get_functiondef(guard_refund_total)` read: a BEFORE INSERT trigger on `refunds`
+  independently re-validating the same over-refund guard — a second line of defense the new
+  handler doesn't need to duplicate.
+- `pg_get_functiondef(has_branch_access)` read: `has_role(['owner','admin']) OR EXISTS
+  branch_assignments row scoped by current_tenant_id()` — confirmed session-based (the exact
+  AD-006 gap class), not usable as-is from a sync handler; `is_authorized_for_branch(p_actor,
+  p_tenant, p_branch)` (already fixed/tenant-scoped, from the ticket slice) is the correct
+  equivalent to use instead.
+- `docs/ROLES-AND-PERMISSIONS.md` read in full (lines 90-149): the 25-key permission catalog
+  lists `financial.expense.create/update/delete`, `financial.audit.confirm/submit`,
+  `financial.view` — no `financial.payment.*` key exists at all. Live grants table: cashier
+  lacks `financial.expense.create` (has `financial.audit.submit`/`financial.view` only);
+  supervisor holds `financial.expense.create/update`. Cross-checked against the live
+  `expenses_insert` RLS policy (`pg_policies`): `has_role(ARRAY['owner','admin',
+  'branch_manager','cashier','accountant'])` — includes cashier, excludes supervisor. The two
+  mechanisms disagree on both roles. Unlike the `customer.create` precedent (an outdated
+  EB-013 doc superseded by a documented, explicit resolution favoring the live catalog), no
+  such resolution exists here — both are independently live, deployed, and unreconciled.
+  Decision: mirror the RLS array (what actually gates expense creation today for direct
+  client inserts), log the discrepancy rather than pick a side.
+- `pg_get_functiondef(guard_expense_cash_session)` read: BEFORE INSERT/UPDATE trigger on
+  `expenses` validating `cash_session_id` (if present) belongs to the same tenant/branch and
+  `paid_method='cash'`.
+- `pg_constraint` for `expenses`: `category` CHECK IN ('ingredients','rent','utilities',
+  'salaries','transport','other'); `paid_method` CHECK IN ('cash','card','transfer','pos');
+  `amount > 0`; `cash → cash_session_id NOT NULL` (`expenses_cash_needs_session`);
+  `description` ≤2000 chars.
+- `pg_trigger` for `expenses`: only `expenses_guard_cash_session` and `expenses_set_updated_at`
+  — **no immutability trigger** (unlike `payments`/`refunds`, which both carry
+  `prevent_financial_mutation()` BEFORE UPDATE/DELETE). `pg_policies` for `expenses` also
+  confirmed a live `expenses_update` policy permitting direct edits by owner/admin/
+  branch_manager/accountant — a genuinely mutable table, unlike payments/refunds.
+- `payments`/`refunds` `pg_trigger` confirmed: `payments_guard_relationships`,
+  `payments_apply_to_ticket` (AFTER INSERT, derives `tickets.amount_paid`/`invoices.status`
+  from a fresh sum over `payments`), `payments_immutable`
+  (`prevent_financial_mutation()`); `refunds_guard_total`, `refunds_immutable`
+  (`prevent_financial_mutation()`). Both tables genuinely append-only at the database level.
+- `pg_get_functiondef(guard_payment_relationships)`/`apply_payment_to_ticket()` read in full:
+  the former re-validates ticket-branch match, the overpayment guard
+  (`already_paid + amount > order.total`), invoice-order linkage, and cash-session
+  branch/method match — all keyed off `NEW.tenant_id`, not session state, so already
+  tenant-correct with zero fix needed; the latter derives `tickets.amount_paid` from a live
+  `SUM(payments.amount)` and cascades `invoices.status`
+  (`void`/`issued`/`partially_paid`/`paid`) — both fire automatically on the handler's plain
+  `INSERT INTO payments`, so the handler does not duplicate this logic.
+- Column lists read for `payments`, `refunds`, `expenses`, `cash_sessions`, `invoices`,
+  `tickets`, `driver_trips`, `sync_operations` to build correct `INSERT`/lookup statements.
+- `information_schema.columns`/`pg_get_constraintdef` for `tickets`: confirmed `total_amount`
+  is a **generated column** (caught only on the first dry-run test execution — see Errors
+  below); `status` CHECK includes `cancelled` (requires `cancelled_reason`); `sale_customer_type`
+  defaults `'REGISTERED'`; `ticket_number` auto-assigned by `assign_order_number()` trigger.
+- `pg_constraint`/`pg_policies` for `cash_sessions`: one-open-session-per-branch partial
+  unique constraint (`cash_sessions_one_open_per_branch`); closed-session field-completeness
+  CHECKs; `prevent_cash_session_delete()` trigger (cash sessions are immutable — caught only
+  on a test-cleanup dry run, see Errors below); `cash_sessions_insert` RLS permits
+  branch_manager directly, but no INSERT/UPDATE table-level GRANT to `authenticated` exists at
+  all for either `tickets` or `cash_sessions` beyond what RLS itself governs — direct client
+  writes for test fixtures needed a superuser (`reset role`) bracket, same pattern already
+  established for `production_batches`/`driver_trips` fixtures in the prior slice.
+- `pg_constraint` for `driver_trips`: `driver_id` carries a NOT NULL FK to `profiles(id)` —
+  confirmed no second profile fixture exists in this project's test tenant (`select id from
+  profiles where id <> 'aa...da01' and ...` returned zero rows), which is why the F12
+  "different driver" negative test was scoped out rather than faked with a nonexistent
+  profile id.
+
+**Built** (migration `p3_7_payment_create_reverse_handlers`, dry-run tested in a rolled-back
+transaction first, then applied for real):
+`apply_payment_create(p_operation sync_operations)` — payload `{ticket_id, amount, method,
+reference?, cash_session_id?, driver_trip_id?}`; validates required fields and method
+allowlist (`22023`); `has_role_in(actor, tenant, ['owner','admin','branch_manager','cashier',
+'driver'])` (`42501` otherwise — mirroring `record_payment()`'s own array verbatim, since no
+`financial.payment.*` catalog key exists to defer to); ticket lookup by id+tenant (`P0001` if
+missing), branch-consistency check against `p_operation.branch_id` (`22023` — the same
+consistency-guard shape `apply_inventory_adjust`/`apply_production_start` already use),
+rejects `status='cancelled'` (`P0001 invalid_transition`); driver-trip branch mirrors
+`record_payment()`'s exact logic (trip lookup+status+driver-or-manager+ticket-link checks,
+`42501`/`P0001` as appropriate); cash branch mirrors the explicit-or-implicit open-session
+resolution (`P0001` if none open, branch mismatch also `P0001`); resolves `invoice_id`;
+`INSERT INTO payments` (letting `guard_payment_relationships`/`apply_payment_to_ticket` do
+the rest); `sync_changes` row `operation_type='EVENT'`, `entity_id`=new payment id,
+`revision=1`. `apply_payment_reverse(p_operation sync_operations)` — payload `{payment_id,
+amount, reason}`; validates required fields and reason length (`22023`); `has_role_in(actor,
+tenant, ['owner','admin','branch_manager'])` (`42501` — mirroring `record_refund()`
+verbatim); payment lookup by id+tenant (`P0001`), branch-consistency check (`22023`); sums
+existing refunds, rejects over-refund (`P0001 invalid_transition` — `guard_refund_total`
+re-validates as a second line of defense); `INSERT INTO refunds`; `sync_changes` row
+`operation_type='EVENT'`, `entity_id`=the ORIGINAL payment's id (not the new refund's — so a
+payment's lifecycle accumulates on one entity's ledger, mirroring `production.start`/
+`.cancel`'s shared-entity-id convention), `revision = coalesce(max(revision),0)+1` for that
+entity_id. `apply_sync_operation()` extended with two more `ELSIF` branches. Both new
+functions `REVOKE`d from `PUBLIC, anon, authenticated`.
+
+**Built** (migration `p3_7_expense_create_handler`, dry-run tested first, then applied):
+`apply_expense_create(p_operation sync_operations)` — payload `{category, amount,
+description?, paid_method?, cash_session_id?, incurred_at?, receipt_url?}`; validates
+`p_operation.branch_id IS NOT NULL` (`22023` — expenses require a branch, unlike payments
+which derive theirs from the ticket), category/paid_method against the live CHECK
+allowlists, amount>0, description length, cash `paid_method` requires `cash_session_id` and
+vice versa (all `22023`); `has_role_in(actor, tenant, ['owner','admin','branch_manager',
+'cashier','accountant'])` (`42501` — mirroring the live `expenses_insert` RLS array
+verbatim, the discrepancy with the permissions catalog noted above, not resolved); if
+`cash_session_id` supplied, confirms it exists at the operation's own tenant+branch
+(`P0001` otherwise); `INSERT INTO expenses` (letting `guard_expense_cash_session` do its own
+re-validation); `sync_changes` row `operation_type='CREATE'` (expenses are mutable, unlike
+payments — no immutability trigger, direct edits permitted via `expenses_update` RLS),
+`entity_id`=new expense id, `revision=1`. `apply_sync_operation()` extended with one more
+`ELSIF` branch (after the two payment branches, before the fallback). New function `REVOKE`d
+from `PUBLIC, anon, authenticated`.
+
+**`get_advisors(type: 'security')` run after both migrations**, saved to a local JSON file
+and grepped for the three new function names: zero findings for `apply_payment_create`,
+`apply_payment_reverse`, `apply_expense_create`. The only payment/expense/refund-related
+findings present were the pre-existing, unrelated `anon`/`authenticated`-executable warnings
+on `record_payment`/`record_refund` themselves (untouched by this pass, already publicly
+callable RPCs by design).
+
+**Test file construction — errors found and fixed while building
+`tests/sql/p3_7_financial_sync.sql`:**
+1. First full-script dry run failed: `ERROR: 428C9: cannot insert a non-DEFAULT value into
+   column "total_amount"` — `tickets.total_amount` is a **generated column** (derived from
+   subtotal/discount/tax), not directly insertable. Fixed every test-fixture ticket `INSERT`
+   to supply only `subtotal_amount` (with discount/tax defaulting to 0, so `total_amount`
+   naturally equals it) and drop `total_amount` from the column/value lists (`sed`-applied
+   across all 8 occurrences, verified via `grep -c` before re-running).
+2. Second run failed: `ERROR: 42501: permission denied for table tickets` on the F6
+   cancelled-ticket fixture's `UPDATE public.tickets SET status='cancelled', ...` — no
+   `UPDATE` table-level GRANT exists for `authenticated` on `tickets` beyond RLS. Fixed by
+   bracketing that one `UPDATE` in `reset role; ... set local role authenticated;` (the
+   trigger logic itself, `guard_ticket_status_transition()`, still runs correctly under
+   superuser since it reads `auth.uid()`/role claims from the session-level
+   `request.jwt.claims` GUC, unaffected by the role switch).
+3. Third run failed: identical `permission denied for table cash_sessions` on the F9
+   cash-session fixture `INSERT` — no `INSERT` grant exists for `authenticated` on
+   `cash_sessions` either, despite `cash_sessions_insert` RLS itself being satisfiable by the
+   test's `branch_manager` role. Same `reset role`/`set local role authenticated` bracket
+   applied to both cash_sessions fixture inserts (F9, E4).
+4. Fourth run failed: `ERROR: 23505: duplicate key value violates unique constraint
+   "cash_sessions_one_open_per_branch"` — F9's cash session fixture was left open when E4
+   later tried to open a second one at the same branch within the same transaction. Fixed by
+   attempting to close F9's session immediately after use (first tried a plain `DELETE`).
+5. Fifth run failed: `ERROR: P0001: cash sessions are never deleted` —
+   `prevent_cash_session_delete()` blocks `DELETE` outright (append-only). Fixed by replacing
+   the `DELETE` with a proper close (`UPDATE ... SET status='closed', closed_by=..., closed_at
+   =now(), expected_amount=opening_float, counted_amount=opening_float` — no variance, so the
+   `variance_needs_note` CHECK is satisfied without a note).
+6. Sixth run: **27/27 passed**, no further errors.
+
+**Test results:** `tests/sql/p3_7_financial_sync.sql` — 27/27 live (F1–F11, F13–F14
+payment.create; R1–R5 payment.reverse; E1–E6 expense.create/`.reverse`-unbuilt; S1–S3
+EXECUTE-grant checks). F12 (a driver attempting a driver-trip payment for a trip that is not
+theirs, and who is not a manager) was scoped out — `driver_trips.driver_id` carries a NOT
+NULL FK to `profiles(id)` and no second profile fixture exists in this project's test tenant;
+building one was judged orthogonal fixture complexity for a single `has_role_in()` branch
+already exercised elsewhere (F10, R4, E5) by the identical mechanism — documented as
+not-independently-tested in the suite's own header, not silently skipped.
+
+**Regression check:** re-ran a trimmed 4-assertion slice of `tests/sql/p3_7_customer_sync.sql`
+(C1, C2, S1, D1) after the financial dispatcher change — 4/4 passed, including D1's exact
+`domain_operation` CHECK constraint string match (confirming the allowlist itself was
+untouched by this pass, `payment.create/.reverse`/`expense.create/.reverse` were already
+present from AD-021's original migration).
+
+**`.venv/Scripts/python.exe -m pytest -q`: 12 passed.**
+
+**Docs updated:** `BLOCKERS.md` (new BLOCKER-028), `ARCHITECTURE_DECISIONS.md` (AD-021
+postscript for the financial slice), `docs/SCHEMA-REFERENCE.md` §12 ("Fifth vertical slice"),
+`docs/API-CONTRACT.md` (`process_sync_batch` row extended again), `BACKEND_ROADMAP.md` (P3.7
+section header/deliverables/tests/completion-criteria/remaining-work, both crosswalk table
+rows), `CURRENT_TASK.md` (new top entry), `NOTIFICATIONS.md` (new top entry).
+
+**Not committed** — the user's own instruction this turn was explicit: "leave the commiting
+to me and continue from where you stopped." No `git add`/`git commit` was run.
+
+---
+
 ## 2026-08-30 · P3.7 PRODUCTION vertical slice — `production.start`/`production.cancel`, plus a real security defect fixed
 
 Resumed on "okay make the necessary corrections if needed then continue." Checked for drift

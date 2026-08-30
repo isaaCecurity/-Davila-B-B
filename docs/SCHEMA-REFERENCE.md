@@ -828,11 +828,75 @@ unchanged in behavior).**
 	re-confirmed: `tests/sql/p3_7_customer_sync.sql` quick-check re-run after the dispatcher
 	change; the online `complete_production_batch()` path re-tested end to end after the
 	trigger fix.
-- **Still not built:** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
+- **Still not built (at that point):** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
 	`production.complete`/`.record_output`/`.record_waste` (`BLOCKER-027`); financial
 	handlers; `customer.soft_delete`; `depends_on_operation_id` (`BLOCKER-022`);
 	cursor-expiry-via-retention (`BLOCKER-023`); per-supervisor manager-configurable
 	permission overrides (`BLOCKER-025`).
+
+**Fifth vertical slice, 2026-08-30 (later same day) — FINANCIAL: `payment.create`/
+`payment.reverse`/`expense.create`.**
+
+- **`apply_payment_create(p_operation sync_operations)`** mirrors the live `record_payment()`
+	RPC's business logic in full — ticket lookup and branch/status checks, the AD-018
+	driver-trip cash-custody branch, the cash-till-session branch, invoice resolution — but
+	authorizes via `has_role_in(actor, tenant, roles)` against `p_operation.tenant_id` rather
+	than `record_payment()`'s own session-based `has_role()`/`has_branch_access()`. `INSERT INTO
+	payments` lets the existing `guard_payment_relationships()` (branch/overpayment/invoice/
+	session validation) and `apply_payment_to_ticket()` (derives `tickets.amount_paid` and
+	`invoices.status`) triggers do their normal work unmodified — both already key off
+	`NEW.tenant_id`, not session state, so no active-org gap exists there. `sync_changes` row:
+	`operation_type='EVENT'` (payments are append-only, not a mutable entity), `entity_id` = the
+	new payment's own id, `revision=1`.
+- **`apply_payment_reverse(p_operation sync_operations)`** mirrors `record_refund()`'s business
+	logic in full, same tenant-scoped authorization substitution. `INSERT INTO refunds` lets the
+	existing `guard_refund_total()` trigger re-validate the over-refund guard. `sync_changes`
+	row: `operation_type='EVENT'`, `entity_id` = the ORIGINAL payment's id (not the new refund's
+	id) so a payment's lifecycle — create, then any reversals — accumulates on one entity's
+	ledger, `revision = coalesce(max(revision),0)+1` for that entity_id — the same shared-
+	entity-id convention `production.start`/`.cancel` established.
+- **Payload:** `payment.create` — `{ticket_id, amount, method, reference?, cash_session_id?,
+	driver_trip_id?}`. `payment.reverse` — `{payment_id, amount, reason}`.
+- **Role gates:** `payment.create` mirrors `record_payment()`'s own list verbatim — owner/
+	admin/branch_manager/cashier/driver. `payment.reverse` mirrors `record_refund()`'s own list
+	verbatim — owner/admin/branch_manager. There is no `financial.payment.*` key in the
+	`role_permissions` catalog (only `financial.expense.*`/`financial.audit.*` exist), so unlike
+	`customer.create` there is no more-current catalog to defer to — the RPCs' own `has_role()`
+	arrays are the only live rule.
+- **`apply_expense_create(p_operation sync_operations)`** has no RPC precedent to mirror —
+	expenses are inserted directly by clients today, gated only by the live `expenses_insert`
+	RLS policy (owner/admin/branch_manager/cashier/accountant), which the handler mirrors via
+	`has_role_in()`. That RLS array disagrees with the `role_permissions` catalog's
+	`financial.expense.create` grants (owner/admin/branch_manager/supervisor/accountant — no
+	cashier) on both `cashier` and `supervisor`; unlike the `customer.create` precedent (a stale
+	doc vs. a current catalog, with a documented resolution), this is two independently live,
+	deployed mechanisms in conflict — not resolved here, mirrored to the RLS array since that's
+	what actually gates expense creation today (see `IMPLEMENTATION_LOG.md` 2026-08-30 for full
+	reasoning). Payload: `{category, amount, description?, paid_method?, cash_session_id?,
+	incurred_at?, receipt_url?}` — `category`/`paid_method` validated against the live CHECK
+	constraints, cash `paid_method` requires `cash_session_id` (mirroring
+	`guard_expense_cash_session()`'s own rule). `sync_changes` row: `operation_type='CREATE'`
+	(expenses have no immutability trigger and their own `expenses_update` RLS permits direct
+	edits, so this is a mutable entity, unlike payments), `revision=1`.
+- **`expense.reverse` remains allowlisted in `domain_operation`'s CHECK (unchanged since
+	AD-021) but unhandled** — no reversal RPC, reversal table, or correcting-entry trigger
+	exists anywhere in the live schema for expenses, and the live `expenses_update` RLS policy's
+	direct-edit path actively contradicts the append-only-plus-reversal model AD-021 wants at
+	the sync layer. See **`BLOCKER-028`** for the full evidence. The dispatcher fallback
+	correctly `REJECTED unsupported_operation_type`s it (verified live).
+- **Security:** all three new handlers `REVOKE`d from `PUBLIC`/`anon`/`authenticated` in the
+	migrations that created them, confirmed via `has_function_privilege()` and a clean
+	`get_advisors(security)` re-run (only the pre-existing, unrelated `record_payment`/
+	`record_refund` anon/authenticated warnings remain).
+- **Tests:** `tests/sql/p3_7_financial_sync.sql`, new, 27/27 live. Zero regression re-confirmed:
+	`tests/sql/p3_7_customer_sync.sql` quick-check re-run after the dispatcher change, including
+	the `domain_operation` CHECK constraint's own D1 guard.
+- **Still not built:** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
+	`production.complete`/`.record_output`/`.record_waste` (`BLOCKER-027`);
+	`expense.reverse` (`BLOCKER-028`); `customer.soft_delete`; `depends_on_operation_id`
+	(`BLOCKER-022`); cursor-expiry-via-retention (`BLOCKER-023`); per-supervisor
+	manager-configurable permission overrides (`BLOCKER-025`). P3.7's `domain_operation`
+	allowlist is now fully covered except these deliberately-open items.
 
 ### What the deployed schema does provide
 

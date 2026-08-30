@@ -1444,6 +1444,46 @@ genuinely cross-org operation.
 
 ---
 
+## BLOCKER-028 · `expense.reverse` sync handler — no live reversal mechanism exists for expenses, not built
+**Status:** OPEN · **Affects:** P3.7 (remaining financial domain_operation coverage) · **Type:** business rule, not yet specified
+
+**Context:** 2026-08-30, building the P3.7 FINANCIAL vertical slice, `payment.create`,
+`payment.reverse`, and `expense.create` were built — see `tests/sql/p3_7_financial_sync.sql` and
+`IMPLEMENTATION_LOG.md` 2026-08-30. `expense.reverse`, the fourth financial `domain_operation`
+AD-021 already allowlists, was investigated live and deliberately NOT built:
+
+- AD-021 calls for "append-only + explicit reversal" as the conflict strategy for both payments
+  and expenses. For payments, this maps cleanly onto the live schema: `payments` carries a
+  `prevent_financial_mutation()` trigger making it genuinely immutable, and `refunds` (with its
+  own `guard_refund_total()` trigger and `record_refund()` RPC precedent) is the explicit
+  reversal mechanism — `payment.reverse` mirrors that precedent directly.
+- **Expenses have no equivalent.** There is no `refund`-shaped table for expenses, no RPC that
+  inserts a correcting/reversing entry, and no trigger enforcing append-only-ness — `expenses`
+  carries no `prevent_financial_mutation()`-style trigger at all. Worse, the live
+  `expenses_update` RLS policy (`owner/admin/branch_manager/accountant`) actively permits direct
+  in-place edits to an existing expense row, which is the opposite of the append-only-plus-
+  reversal model AD-021 asks for at the sync layer. There is no existing artifact to mirror, and
+  the live schema's own direct-edit path contradicts the assumption a sync `expense.reverse`
+  handler would need to make.
+- Building `expense.reverse` today would mean inventing one of at least two incompatible
+  designs — (a) a new `expense_corrections`/`expense_reversals` table plus trigger, matching the
+  refunds shape, or (b) treating `expense.reverse` as a sync-facing wrapper around a direct
+  UPDATE (contradicting append-only) — without a decision on which the product actually wants,
+  or whether the existing direct-edit RLS path should be retired in favor of one of them.
+
+`expense.reverse` remains allowlisted in `domain_operation`'s CHECK (unchanged since AD-021) but
+unhandled — `apply_sync_operation()`'s dispatcher fallback correctly `REJECTED
+unsupported_operation_type`s it today (verified live, test E6), never silently leaves it
+PENDING.
+
+**Needed:** a product/architecture decision on what "reversing an expense" means for this
+platform — a new correction/reversal table and trigger (mirroring `payments`/`refunds`), or a
+sync-facing name for a constrained direct edit — and, if the former, whether the live
+`expenses_update` RLS policy's direct-edit path should be narrowed or retired once a reversal
+mechanism exists, so the two paths don't contradict each other.
+
+---
+
 ## Template
 
 ```

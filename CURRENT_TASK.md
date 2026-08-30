@@ -1,5 +1,72 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 FINANCIAL vertical slice — `payment.create`/`payment.reverse`/`expense.create` DELIVERED (2026-08-30)
+
+Continued from the PRODUCTION slice below per "leave the commiting to me and continue from
+where you stopped" — proceeded straight into the next unbuilt P3.7 entity per
+`BACKEND_ROADMAP.md`: financial (payments/expenses), AD-021's last unbuilt entity.
+
+**Live-investigated before writing anything.** `record_payment()`/`record_refund()` are
+clean, live, human-approved precedent RPCs for `payment.create`/`.reverse` — both use
+session-based `has_role()`/`has_branch_access()`, the same AD-006 gap already fixed
+elsewhere this session for other entities. Built `apply_payment_create()`/
+`apply_payment_reverse()` mirroring both RPCs' business logic in full (including the AD-018
+driver-trip cash-custody branch and the cash-till-session branch) but authorizing via
+tenant-scoped `has_role_in()` against `p_operation.tenant_id`/`branch_id` instead. Existing
+triggers (`guard_payment_relationships`, `apply_payment_to_ticket`, `guard_refund_total`) —
+already tenant-correct — do the branch/overpayment/invoice/session validation and
+`tickets.amount_paid`/`invoices.status` derivation automatically; the handlers don't
+duplicate that logic. Both `payments` and `refunds` are genuinely append-only at the
+database level (`prevent_financial_mutation()`), so both write `operation_type='EVENT'`. A
+payment's lifecycle (create, then any reversals) is tracked in `sync_changes` keyed by the
+ORIGINAL payment's `entity_id`, incrementing revision — the same shared-entity-id ledger
+convention `production.start`/`.cancel` established.
+
+**No permissions-catalog key exists for payments.** `docs/ROLES-AND-PERMISSIONS.md` only
+covers `financial.expense.*`/`financial.audit.*` — there is no `financial.payment.*` — so
+unlike `customer.create`, there's no more-current catalog to defer to; the RPCs' own
+`has_role()` arrays are the only live rule, mirrored verbatim.
+
+**`expense.create` has no RPC precedent at all** — expenses are inserted directly by
+clients, gated only by the live `expenses_insert` RLS policy (owner/admin/branch_manager/
+cashier/accountant). That RLS array disagrees with the permissions catalog's own
+`financial.expense.create` grants (owner/admin/branch_manager/supervisor/accountant — no
+cashier) on both `cashier` and `supervisor`. Unlike `customer.create`'s precedent (a stale
+doc vs. a current catalog, with a documented resolution favoring the catalog), this is two
+independently live, deployed mechanisms genuinely disagreeing with each other — not resolved
+here, mirrored to the RLS array (what actually gates expense creation today), discrepancy
+logged rather than guessed away. `expenses` has no immutability trigger and its own
+`expenses_update` RLS permits direct edits, so `operation_type='CREATE'` is correct here,
+unlike payments' `'EVENT'`.
+
+**`expense.reverse` deliberately NOT built.** AD-021 calls for "append-only + explicit
+reversal" for expenses too, but no reversal RPC, reversal/correction table, or
+correcting-entry trigger exists anywhere in the live schema for expenses — and the live
+`expenses_update` RLS policy's direct-edit path actively contradicts that append-only
+assumption. Opened new, non-blocking **BLOCKER-028** rather than guessed at either design.
+
+**Verified, zero regression:** `tests/sql/p3_7_financial_sync.sql` (new, 27/27 live) —
+payment.create's full payload validation (missing ticket_id, amount≤0, invalid method,
+nonexistent/cancelled ticket, overpayment, cash-no-session, cash-with-session, driver-trip
+custody), payment.reverse (missing payment_id, over-refund, role gating, nonexistent
+payment), expense.create (invalid category, cash-no-session, cash-with-session, role
+gating), expense.reverse still correctly falling through to `unsupported_operation_type`,
+cross-tenant denial, replay idempotency, and EXECUTE grants revoked for all three handlers.
+`tests/sql/p3_7_customer_sync.sql` quick-check re-run clean after the dispatcher change
+(including its D1 `domain_operation` CHECK guard). `get_advisors(security)` clean for all
+three new functions. `pytest` 12/12.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md`
+§12, `docs/API-CONTRACT.md`, `BACKEND_ROADMAP.md` (P3.7 section, both crosswalk rows),
+`BLOCKERS.md` (new BLOCKER-028).
+
+**Not yet committed** — per the user's explicit instruction this turn ("leave the commiting
+to me"): the commit itself is left to the user, not performed here.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-30.
+
+---
+
 ## ✅ P3.7 PRODUCTION vertical slice — `production.start`/`production.cancel` DELIVERED, plus a real defect fixed (2026-08-30)
 
 Continued from the INVENTORY slice below per "make the necessary corrections if needed then

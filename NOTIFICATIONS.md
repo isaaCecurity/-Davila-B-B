@@ -4,6 +4,35 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## P3.7 FINANCIAL slice delivered — `payment.create`/`.reverse`/`expense.create` built, one operation blocked on a real gap (2026-08-30)
+
+Continued P3.7 into financial (payments/expenses), the last unbuilt entity `BACKEND_ROADMAP.md`
+already listed. Built the three of four financial operations that had a clean live rule to
+mirror: `payment.create`/`payment.reverse` copy the existing `record_payment()`/
+`record_refund()` RPCs' logic and role gates verbatim; `expense.create` mirrors the live RLS
+policy that already gates direct expense inserts today.
+
+**One live discrepancy worth flagging, not silently picked a side on:** the RLS policy that
+gates expense creation (includes cashier, excludes supervisor) disagrees with the newer
+permissions catalog for the same action (includes supervisor, excludes cashier). Both are
+live, deployed rules — this isn't a stale-doc situation with an obvious right answer, it's two
+real mechanisms in conflict. Mirrored the RLS policy (what actually governs expense creation
+today) and logged the conflict rather than guessing which one is "right."
+
+**`expense.reverse` was not built.** There is no mechanism anywhere in the system today for
+reversing an expense — no correction table, no reversal RPC, nothing. Worse, expenses can
+currently be edited directly in place, which actively works against the "append-only plus an
+explicit reversal" model this needs. Opened **BLOCKER-028** with the specific evidence rather
+than inventing a design.
+
+`tests/sql/p3_7_financial_sync.sql` (new, 27/27 live) confirms all of this, including that
+`expense.reverse` still correctly gets rejected as unsupported. Zero regression on the
+existing customer suite.
+
+**Not committed** — you said to leave the committing to you this pass.
+
+---
+
 ## P3.7 PRODUCTION slice delivered — `production.start`/`.cancel` built, a real security defect found and fixed along the way (2026-08-30)
 
 Continued P3.7 into production, the next entity `BACKEND_ROADMAP.md` listed as unblocked
