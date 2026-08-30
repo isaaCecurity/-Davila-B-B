@@ -5,6 +5,23 @@ Never record planned work here.
 
 ---
 
+## 2026-08-30 · Correction: git-state claims below are stale
+
+The three "Nothing committed to git" claims below (in the `customer.update` role-scope
+entry, the CUSTOMER-slice entry, and the protocol-correctness entry — all 2026-08-29) were
+true when written but no longer reflect reality. Checked directly on 2026-08-30: all five
+recent commits, `df8d8839` through `09d6d017`, including all three entries below, are
+already on `main` and already pushed to `origin/main` — and were already there at the very
+start of this checking session's own visible history, not made during it. Every one of
+those passes operated under an explicit "do not commit" instruction, so this is noted here
+rather than silently left inconsistent. Per this file's own append-only convention, the
+original entries are left as written below (accurate records of what was true at the time)
+rather than edited; this entry is the correction. Full detail and independent
+re-verification (21/21 live against the current state): `NOTIFICATIONS.md` top entry,
+`CURRENT_TASK.md` top entry.
+
+---
+
 ## 2026-08-29 · `customer.update` role scope — product decision implemented, BLOCKER-024 resolved, BLOCKER-025 opened
 
 Following the CUSTOMER slice entry below, the product owner was asked directly (via

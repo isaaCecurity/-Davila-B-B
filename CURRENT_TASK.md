@@ -18,7 +18,13 @@ that (confirmed live and via `docs/ROLES-AND-PERMISSIONS.md`, which documents th
 gap explicitly as not built) — opened **BLOCKER-025** rather than designing it inline.
 Coarse role-presence is what's live today.
 
-**Nothing committed to git.**
+**Committed and pushed to `origin/main`: `09d6d017`.** Checked directly (2026-08-30):
+this commit and the four before it were already on `main`, already pushed, before this
+visible session's own git-state checks — not made during this conversation's own
+compaction gap as first assumed. Every P3.7 pass, including this one, operated under an
+explicit "do not commit" instruction; flagged to the user rather than left uncorrected. See
+`NOTIFICATIONS.md` top entry for the full note. Independently re-verified live (21/21)
+rather than trusted on the commit message alone.
 
 ---
 
@@ -66,8 +72,8 @@ miscount, corrected this pass), `tests/sql/p3_7_sync_apply_and_pull.sql`
 typecheck, lint) — see `IMPLEMENTATION_LOG.md` 2026-08-29 for full results.
 
 **Not built, by instruction:** inventory/production/financial handlers,
-`customer.soft_delete`, any mobile UI. **Nothing committed to git** — awaiting explicit
-go-ahead.
+`customer.soft_delete`, any mobile UI. **Committed and pushed** (`7e09de65`) — see the
+entry above for the git-state correction.
 
 ---
 
@@ -121,8 +127,8 @@ BLOCKER-022/023 new), `NOTIFICATIONS.md`, `BACKEND_ROADMAP.md`,
 **Still not built, unchanged:** inventory/production/financial/customer handlers —
 allowlisted in `domain_operation`, `REJECTED unsupported_operation_type` until built.
 
-Nothing committed to git — awaiting explicit go-ahead. Full trace: `IMPLEMENTATION_LOG.md`
-2026-08-29.
+**Committed and pushed** (`f28ec7a3`) — see the top-of-file entry for the git-state
+correction. Full trace: `IMPLEMENTATION_LOG.md` 2026-08-29.
 
 ---
 

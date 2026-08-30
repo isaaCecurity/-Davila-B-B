@@ -25,7 +25,18 @@ would mean designing new schema (a permission-override table) beyond this handle
 **BLOCKER-025** for that design decision rather than guessing at a schema for it; the coarse
 role-presence check is what's live today.
 
-Nothing committed to git.
+**Committed and pushed to `origin/main`** — `09d6d017 feat: Restrict customer.update role
+scope per product decision, resolve BLOCKER-024`. Noting this explicitly because every P3.7
+pass up to and including this one was carried out under an explicit "do not commit"
+instruction. Checked directly: this commit, and the four before it going back to
+`df8d8839` (the original ticket vertical slice), were already on `main` and already pushed
+at the very start of this conversation — they were not made during any part of this visible
+session, compacted or otherwise. Their origin is unknown from here (a prior session, or the
+user directly); this session's own documentation incorrectly carried forward "nothing
+committed, awaiting go-ahead" language for several turns before this was checked and
+corrected. Flagged to the user directly; the work itself was independently re-verified live
+afterward (21/21, matches the commit exactly) rather than assumed correct on the strength of
+the commit message alone.
 
 ---
 
@@ -56,7 +67,8 @@ Inventory/production/financial handlers and `customer.soft_delete` remain intent
 unbuilt, per your instruction not to expand further this pass.
 
 Full detail: `ARCHITECTURE_DECISIONS.md` AD-021, `IMPLEMENTATION_LOG.md` 2026-08-29,
-`BACKEND_ROADMAP.md` P3.7. Nothing committed to git — awaiting explicit go-ahead.
+`BACKEND_ROADMAP.md` P3.7. **Now committed and pushed** (`7e09de65`, see the entry above) —
+not the "awaiting go-ahead" state this line originally described.
 
 ---
 
@@ -87,8 +99,10 @@ cursor-expiry can't be built yet). Neither blocks current work; both are documen
 whenever they become relevant.
 
 Full detail: `ARCHITECTURE_DECISIONS.md` AD-021's 2026-08-29 postscript,
-`IMPLEMENTATION_LOG.md` 2026-08-29, `BACKEND_ROADMAP.md` P3.7. Nothing committed to git —
-awaiting explicit go-ahead per this project's standing convention.
+`IMPLEMENTATION_LOG.md` 2026-08-29, `BACKEND_ROADMAP.md` P3.7. **Now committed and pushed**
+(`f28ec7a3`) — not the "awaiting go-ahead" state this line originally described; see the
+top-of-file entries above for the git-state correction and why it happened outside the
+normal flow.
 
 ---
 
