@@ -1354,8 +1354,26 @@ role-level check described in BLOCKER-024's resolution.
 
 ---
 
-## BLOCKER-026 · `inventory.receive` / `.consume` / `.transfer` sync handlers — no clean precedent, not built
-**Status:** OPEN · **Affects:** P3.7 (remaining inventory domain_operation coverage) · **Type:** business rule / architecture decision, not yet specified
+## ✅ BLOCKER-026 · `inventory.receive` / `.consume` / `.transfer` sync handlers — RESOLVED 2026-08-31 (out of MVP scope)
+**Status:** RESOLVED · **Affects:** P3.7 (remaining inventory domain_operation coverage) · **Type:** business rule / architecture decision
+
+**Resolution (2026-08-31, product decision, no guessing):** all three are out of MVP scope
+entirely — no stock purchasing/receiving workflow, no generic non-trip warehouse-to-warehouse
+transfer, and no standalone consume beyond what the already-built `inventory.adjust`/`.waste`
+cover. Rather than leave them "allowlisted for later", all three were **removed from the
+`domain_operation` CHECK constraint** on `sync_operations`/`sync_changes` (migration
+`p3_7_allowlist_tighten_receive_transfer_consume_complete`), having first verified live that
+zero existing rows used any of the three values. A client submitting one of these three now
+gets a hard `23514 check_violation` on the whole `process_sync_batch()` call (not a graceful
+per-operation `REJECTED`/`unsupported_operation_type`, since the CHECK fires before the
+dispatcher's own exception-isolated handler execution ever runs) — see
+`tests/sql/p3_7_production_output_waste_sync.sql` tests D2–D4, and the note in
+`IMPLEMENTATION_LOG.md` 2026-08-31 about why that's an accepted, deliberate consequence of
+"out of scope" rather than "not yet built". If any of the three is ever wanted post-MVP, it
+needs a fresh product decision and must be re-added to the CHECK constraint from scratch — see
+the original context below for what was investigated and ruled out.
+
+**Original context (kept for history):**
 
 **Context:** 2026-08-30, building the P3.7 INVENTORY vertical slice, `inventory.adjust` and
 `inventory.waste` were built (mirroring the live `adjust_stock()` RPC's own reason/role gates
@@ -1395,8 +1413,36 @@ needs offline.
 
 ---
 
-## BLOCKER-027 · `production.complete` / `.record_output` / `.record_waste` sync handlers — ambiguous relationship to existing RPCs, not built
-**Status:** OPEN · **Affects:** P3.7 (remaining production domain_operation coverage) · **Type:** business rule / architecture decision, not yet specified
+## ✅ BLOCKER-027 · `production.complete` / `.record_output` / `.record_waste` sync handlers — RESOLVED 2026-08-31
+**Status:** RESOLVED · **Affects:** P3.7 (remaining production domain_operation coverage) · **Type:** business rule / architecture decision
+
+**Resolution (2026-08-31, confirmed live before deciding):** `complete_production_batch()`/
+`fail_production_batch()` already take per-ingredient `actual_quantity`/`waste_quantity` in
+ONE call each, and `production_batches` has only a single `actual_quantity`/`completed_at`
+column — no schema support anywhere for multiple partial output/waste events per batch. This
+confirms `.record_output`/`.record_waste` are the sync-facing names for those two existing
+RPCs, not new finer-grained events. Built `apply_production_record_output()`/
+`apply_production_record_waste()` as thin wrappers that validate the payload, check the same
+`has_role_in(actor, tenant, ['owner','admin','branch_manager','baker'])` gate
+`guard_production_batch_transition()`'s trigger already enforces for 'completed'/'failed', and
+delegate entirely to `complete_production_batch()`/`fail_production_batch()` rather than
+duplicating their ingredient-consume/output-movement logic (migration
+`p3_7_production_record_output_waste_handlers`). `production.complete` was redundant with
+`.record_output` and removed from the `domain_operation` CHECK allowlist in the companion
+migration (zero existing rows used it, verified live first) — same "out of scope, not
+dispatcher-rejected" treatment as BLOCKER-026.
+
+As a prerequisite, added an additive `p_tenant_id uuid DEFAULT NULL` parameter to both RPCs
+(AD-006 fix): they previously resolved their own tenant via `current_tenant_id()` (the
+session's *active* org), which for a genuinely cross-org sync operation doesn't cause a
+false-accept (the trigger's own role check and the batch lookup are both still tenant-correct)
+but does cause a false NEGATIVE — the lookup silently uses the wrong org and returns "batch not
+found" for a legitimately authorized actor. The default preserves existing non-sync callers
+unaffected. Full detail, live-verified test suite (16 assertions, all pass), and zero-regression
+confirmation against the existing `production.start`/`.cancel` suite: see
+`tests/sql/p3_7_production_output_waste_sync.sql` and `IMPLEMENTATION_LOG.md` 2026-08-31.
+
+**Original context (kept for history):**
 
 **Context:** 2026-08-30, building the P3.7 PRODUCTION vertical slice, `production.start` and
 `production.cancel` were built as plain guard-validated status transitions (`scheduled` →
@@ -1445,7 +1491,16 @@ genuinely cross-org operation.
 ---
 
 ## BLOCKER-028 · `expense.reverse` sync handler — no live reversal mechanism exists for expenses, not built
-**Status:** OPEN · **Affects:** P3.7 (remaining financial domain_operation coverage) · **Type:** business rule, not yet specified
+**Status:** OPEN (reconsidered and explicitly re-deferred 2026-08-31 — not forgotten; see below) · **Affects:** P3.7 (remaining financial domain_operation coverage) · **Type:** business rule, not yet specified
+
+**2026-08-31 checkpoint:** revisited alongside BLOCKER-026/027 (both resolved that day — see
+above). Presented with the same two concrete design options this blocker already named — a new
+`expense_corrections`/`expense_reversals` table mirroring `refunds`, or a sync wrapper around a
+constrained direct edit — the product decision was to **defer entirely**, same as today: leave
+`expense.reverse` unbuilt, allowlisted-but-dispatcher-rejected (`unsupported_operation_type`),
+no allowlist change. Unlike BLOCKER-026/027, this one was NOT removed from the
+`domain_operation` CHECK, since "not yet decided" rather than "out of scope" is the actual
+status here.
 
 **Context:** 2026-08-30, building the P3.7 FINANCIAL vertical slice, `payment.create`,
 `payment.reverse`, and `expense.create` were built — see `tests/sql/p3_7_financial_sync.sql` and

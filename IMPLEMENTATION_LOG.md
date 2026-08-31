@@ -5,6 +5,217 @@ Never record planned work here.
 
 ---
 
+## 2026-08-31 (same day, later) · SECURITY FIX — unauthenticated RCE-equivalent access to `complete_production_batch`/`fail_production_batch` closed, introduced and fixed same day
+
+**Found via:** the user asked, after the entry below was reported complete, to check the pass
+for "logical errors or problems or security issues" before continuing. Self-review of the AD-006
+fix in that entry (adding `p_tenant_id` to `complete_production_batch()`/`fail_production_batch()`)
+surfaced a real, severe vulnerability — not a hypothetical.
+
+**The defect:** `CREATE OR REPLACE FUNCTION complete_production_batch(p_batch_id, p_actual_quantity,
+p_ingredient_actuals, p_warehouse_id, p_tenant_id)` — five arguments where the live function had
+four — does not replace the existing function in Postgres; a different argument list creates a
+**new, separate overload**. Confirmed live via `pg_get_function_identity_arguments` +
+`has_function_privilege`: the original 4-arg RPC was completely untouched (still `authenticated`-
+only, `anon=false`, exactly as before this whole pass) — but the new 5-arg overload was created
+with Postgres/Supabase's *default* privileges, which include `PUBLIC` EXECUTE. The prior
+migration (`p3_7_production_record_output_waste_handlers`) explicitly `REVOKE`d EXECUTE on the two
+new `apply_production_record_output`/`apply_production_record_waste` handlers, matching every
+other handler this session — but never added a REVOKE for the new 5-arg RPC overloads it also
+created, since they weren't recognized as new grantable objects at review time. Confirmed live:
+`has_function_privilege('anon', '...complete_production_batch(uuid,numeric,jsonb,uuid,uuid)',
+'EXECUTE')` returned **true**.
+
+**Why this was severe, not theoretical:** both RPCs are `SECURITY DEFINER`. Their only
+authorization gate is `guard_production_batch_transition()`'s trigger role check, which is
+unconditionally `if auth.uid() is not null and not has_role_in(...)` — **skipped entirely when
+`auth.uid()` is NULL**, which it always is for the `anon` role (no JWT). So a fully
+unauthenticated caller, with the 5-arg overload grantable to `anon`, could call
+`complete_production_batch(any_batch_id, any_qty, '[]', null, any_tenant_id)` directly via
+`/rest/v1/rpc/complete_production_batch` and have it succeed unconditionally — completing or
+failing ANY tenant's production batch, writing real `stock_movements` rows, with zero
+authentication of any kind. This is a full authorization bypass on a live, mutating endpoint.
+
+**Exploitation check, before fixing:** `select ... from production_batches where updated_at >
+now() - interval '2 hours'` and the equivalent on `stock_movements` both returned zero rows —
+the vulnerability's entire live window (the time between this session applying the migration and
+finding/fixing it) saw no writes at all, from any source. Confirmed unexploited.
+
+**Fix, applied immediately on discovery:** `REVOKE ALL ON FUNCTION
+complete_production_batch(uuid, numeric, jsonb, uuid, uuid) FROM PUBLIC, anon, authenticated;`
+and the equivalent for `fail_production_batch`, first via `execute_sql` as an emergency
+mitigation, then re-applied through `apply_migration`
+(`p3_7_security_fix_revoke_public_exec_on_tenant_scoped_production_rpcs`) so it has a proper
+migration record. Re-verified live via `has_function_privilege`: both 5-arg overloads now show
+`auth_exec=false, anon_exec=false`; the original 4-arg RPCs are unchanged
+(`auth_exec=true, anon_exec=false`, identical to their pre-this-pass state). `get_advisors(type:
+'security')` re-run: the 5-arg overloads no longer appear in the findings at all for either
+function (the pre-existing, unrelated `complete_driver_field_sale` anon-executable finding and
+the two original 4-arg RPCs' own pre-existing authenticated-executable findings are untouched
+and predate this pass).
+
+**Confirmed the fix doesn't regress the legitimate call path:** re-ran the full
+`production.record_output` happy path through `process_sync_batch()` after the REVOKE — still
+`APPLIED`. `SECURITY DEFINER` functions execute as their owner for privilege-check purposes, so
+`apply_production_record_output()` calling the now-`REVOKE`d 5-arg overload internally is
+unaffected — the same pattern every other internal handler in this session already relies on
+(confirmed by S1/S2's pre-existing pattern, extended here with S3-S6, see below).
+
+**Test suite updated:** `tests/sql/p3_7_production_output_waste_sync.sql` gained S3-S6 — S3/S4
+assert the 5-arg overloads are NOT executable by `anon`/`authenticated` (the actual regression
+guard for this exact vulnerability class), S5/S6 assert the original 4-arg RPCs remain
+executable by `authenticated`, unaffected. All four re-verified live via direct
+`has_function_privilege` queries before being written into the file. Assertion count for that
+file is now 20 (16 + S3-S6), all confirmed passing live.
+
+**Root-cause takeaway, recorded so it doesn't repeat:** every other AD-006 explicit-tenant fix
+this session was applied to a function already `REVOKE`d from `PUBLIC`/`anon`/`authenticated`
+(the internal `apply_*` handlers). This was the first time an AD-006 fix touched a function that
+is *itself* directly `GRANT`ed to `authenticated` for a live, existing, non-sync feature (the
+online "complete this batch" UI flow) — and adding a parameter to such a function via `CREATE OR
+REPLACE` silently creates a new, unprotected overload rather than modifying the protected one.
+**Any future change to a publicly-`GRANT`ed function's signature must include an explicit
+`REVOKE`/`GRANT` review for the new overload in the same migration — verified live via
+`has_function_privilege` for `anon` specifically, not just `authenticated` — before that
+migration is considered complete**, not deferred to a later self-review.
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
+## 2026-08-31 · P3.7 — BLOCKER-026/027 resolved via product decisions; `production.record_output`/`.record_waste` built; allowlist tightened
+
+Continued from the FINANCIAL slice (2026-08-30 entry below), reporting completion of which was
+this pass's starting point. Rather than guess at BLOCKER-026/027/028's open business/architecture
+questions, walked each one with the user directly via structured questions, gathered explicit
+decisions, then acted on them with live verification at every step — no guessing anywhere.
+
+**Decisions gathered (verbatim intent, not the literal wording):**
+- `inventory.receive` (cost-capture question, tied to BLOCKER-018): decoupled from cost was the
+  first answer, but on a follow-up question about who should be authorized (no live RPC gates
+  `reason='purchase'` at all — confirmed via `pg_get_functiondef(adjust_stock)`, which only
+  handles `'adjustment'`/`'waste'`/`'opening_balance'`), the user overrode: **not needed for MVP
+  at all** — no stock purchasing/receiving workflow, no general stock-count maintenance this
+  phase.
+- `inventory.transfer`: **drop from MVP scope** — bakeries don't need non-trip manual transfers
+  yet; remove from the allowlist rather than leave it dead.
+- `inventory.consume`: **not needed** — `inventory.adjust`/`.waste` already cover every case.
+- `production.record_output`/`.record_waste`: user asked to see the live evidence before
+  deciding. Investigated `complete_production_batch()`/`fail_production_batch()` in full
+  (`pg_get_functiondef`) and `production_batches`' column list
+  (`information_schema.columns`): both RPCs already take per-ingredient `actual_quantity`/
+  `waste_quantity` in ONE call via `p_ingredient_actuals jsonb`; `production_batches` has only a
+  single `actual_quantity`/`completed_at`, no per-partial-event columns anywhere. Presented this
+  back; user confirmed: **sync-facing wrapper names, confirmed** — `production.complete` becomes
+  redundant.
+- `expense.reverse`: presented the same two design options BLOCKER-028 already named (new
+  `expense_corrections` table vs. constrained direct-edit wrapper). User: **defer entirely**,
+  same as today.
+
+**Live investigation before any code, per standing discipline:**
+- `pg_get_functiondef` on `complete_production_batch`/`fail_production_batch`: confirmed neither
+  has any internal `has_role()`/`has_role_in()` check of its own — authorization for the
+  'completed'/'failed' transition happens entirely in `guard_production_batch_transition()`'s
+  trigger (already fixed for AD-006 in the prior PRODUCTION slice, 2026-08-30 — its actors array
+  covers `in_progress`/`completed`/`failed` all identically as
+  `['owner','admin','branch_manager','baker']`, only `cancelled` excludes baker). Also confirmed
+  both RPCs declare `v_tenant uuid := current_tenant_id();` — the session's active org, the exact
+  AD-006 class of gap, but here a false-NEGATIVE (batch lookup fails closed with "not found" for
+  a legitimately cross-org actor), not a false-accept, since the trigger's own role check and the
+  lookup's tenant filter are both already tenant-correct.
+- `pg_get_functiondef(current_tenant_id)`: confirmed it's `select nullif(auth.jwt() ->>
+  'tenant_id', '')::uuid` — purely session-JWT-derived, confirming the false-negative read above.
+- `pg_get_constraintdef` on `sync_operations_domain_operation_check`/
+  `sync_changes_domain_operation_check`: captured the exact live allowlist string before
+  touching it.
+- Live zero-row checks (`select domain_operation, count(*) ... group by 1`) confirmed BEFORE each
+  drop that no existing row anywhere used `inventory.receive`, `inventory.transfer`,
+  `inventory.consume`, or `production.complete` — nothing orphaned by tightening the CHECK.
+- `pg_get_functiondef` on `apply_production_start`/`apply_production_cancel`/
+  `apply_sync_operation`/`has_role_in` to mirror the established handler shape exactly (payload
+  validation → tenant-scoped entity lookup → branch-consistency guard → role gate →
+  mutate/delegate → `sync_changes` insert on the shared batch `entity_id`).
+- `pg_get_triggerdef` on `production_batches`: discovered `production_batches_copy_ingredients`
+  (AFTER INSERT) auto-populates `production_batch_ingredients` from the recipe — a previously
+  undocumented-this-session trigger. First hit as a live error (`23505 duplicate key ...
+  production_batch_ingredients_batch_ingredient_key`) when a test fixture tried to insert that
+  table manually after inserting a batch; fixed by removing the manual insert entirely and
+  trusting the trigger, confirmed live afterward.
+
+**Migrations applied (both dry-run tested in a rolled-back transaction first):**
+1. `p3_7_allowlist_tighten_receive_transfer_consume_complete` — drops
+   `inventory.receive`/`.transfer`/`.consume`/`production.complete` from both
+   `sync_operations_domain_operation_check` and `sync_changes_domain_operation_check`. Verified
+   via `pg_get_constraintdef` that the resulting CHECK string matched the intended tightened
+   allowlist exactly.
+2. `p3_7_production_record_output_waste_handlers` — (a) `CREATE OR REPLACE` on
+   `complete_production_batch()`/`fail_production_batch()` adding an additive, trailing
+   `p_tenant_id uuid DEFAULT NULL` parameter (`v_tenant := coalesce(p_tenant_id,
+   current_tenant_id())`), otherwise byte-identical to the live bodies fetched via
+   `pg_get_functiondef` — no other logic touched; (b) `apply_production_record_output()`/
+   `apply_production_record_waste()`, both `SECURITY DEFINER`, payload-validate →
+   tenant-scoped batch lookup → branch-consistency guard → `has_role_in(actor, tenant,
+   ['owner','admin','branch_manager','baker'])` → delegate to
+   `complete_production_batch()`/`fail_production_batch()` with `p_operation.tenant_id`
+   explicit → `sync_changes` insert (`operation_type='EVENT'`, entity_id = the batch, revision
+   continuing that entity's shared ledger from `production.start`); (c) `CREATE OR REPLACE` on
+   `apply_sync_operation()` adding two `ELSIF` branches for `production.record_output`/
+   `production.record_waste`, inserted after `production.cancel`, otherwise unchanged from the
+   live definition fetched first; (d) `REVOKE ALL ... FROM PUBLIC, anon, authenticated` on both
+   new handlers.
+
+**Errors found and fixed during dry-run iteration:**
+- `23502 null value in column "device_created_at"` — an early ad-hoc CHECK-verification insert
+  omitted a NOT NULL column unrelated to the constraint being tested; added the column.
+- `23514 base_revision_check` — a raw insert used `base_revision=0` for a fresh entity; the live
+  constraint requires NULL for that case (matches the CREATE-type convention used elsewhere this
+  session); switched to NULL.
+- `23503 sync_operations_device_id_fkey` — a bare-insert CHECK-verification attempt referenced
+  the standard fixture device id before it existed in that transaction; switched to verifying the
+  CHECK via `pg_get_constraintdef` directly instead of a full row insert, which is both simpler
+  and doesn't depend on unrelated fixture setup.
+- `42501 permission denied for table _r` — forgot `grant all on _r to authenticated;` after
+  `create temp table`, the same omission pattern from prior sessions' first attempts; fixed.
+- `23505 production_batch_ingredients_batch_ingredient_key` — see the trigger discovery above;
+  fixed by removing the manual insert.
+- `22023` on the O1/O2 happy-path test drafts — first draft omitted `batch_id` from the
+  `payload` (used only `entity_id`, following a mistaken assumption that these handlers read the
+  batch reference from `entity_id` like `apply_production_cancel`'s test harness does
+  cross-reference `entity_id`); the handler actually reads `payload->>'batch_id'` exclusively —
+  fixed by adding it to both payloads.
+- A `CROSS-TENANT` test draft called `process_sync_batch` via bare `perform`, which raised
+  directly (matching the existing `is_member_of()` gateway behavior, unwrapped) and aborted the
+  enclosing `do $$` block before the assertion could be recorded; wrapped in `begin...exception
+  when others` like the pre-existing `p3_7_production_sync.sql` P9 test already does, then
+  recorded `sqlstate`.
+
+**Final live run, 27 assertions total across two consolidated batches, all passed**
+(O1-O6, W1-W3, REPLAY, CROSS-TENANT, D1-D4, S1-S2 = 16 in the new file; a separate trimmed
+regression re-run of `tests/sql/p3_7_production_sync.sql`'s P1-P10/S1-S2 = 11 assertions passed
+unchanged; a standalone `customer.create` dispatcher smoke check confirmed `APPLIED`). Written
+to `tests/sql/p3_7_production_output_waste_sync.sql` only after this live confirmation, per the
+"never record a test as passing unless it was executed" rule. `get_advisors(type: 'security')`
+re-run after both migrations; grepped the saved JSON for `apply_production_record_output`/
+`apply_production_record_waste` — zero findings (the pre-existing `complete_production_batch`/
+`fail_production_batch` anon/authenticated EXECUTE warnings are unrelated and predate this pass).
+
+**Docs updated:** `BLOCKERS.md` (BLOCKER-026 and BLOCKER-027 marked RESOLVED with full
+resolution text, BLOCKER-028 updated with the 2026-08-31 re-deferral note, original context
+preserved under each), `ARCHITECTURE_DECISIONS.md` (new AD-021 postscript dated 2026-08-31),
+`docs/SCHEMA-REFERENCE.md` §12 (new "Sixth pass" subsection), `docs/API-CONTRACT.md` (the
+`process_sync_batch` cell extended, obsolete "remain allowlisted but have no handler" language
+for the four dropped values corrected to reflect the new hard-CHECK-violation behavior),
+`BACKEND_ROADMAP.md` (P3.7 section header, Deliverables/Tests, Completion criteria, Remaining
+paragraph, both crosswalk table rows), `tests/sql/p3_7_production_sync.sql` (stale P11
+assertion — which asserted `production.complete`'s old dispatcher-rejected behavior — commented
+out in place with an explanatory note, not deleted or silently left wrong; header updated with a
+2026-08-31 re-verification line), `CURRENT_TASK.md` and `NOTIFICATIONS.md` (new top entries).
+
+**Not committed** — no commit instruction was given this pass; consistent with this project's
+standing rule to never commit unless explicitly asked.
+
+---
+
 ## 2026-08-30 · P3.7 FINANCIAL vertical slice — `payment.create`/`payment.reverse`/`expense.create`
 
 Resumed on "leave the commiting to me and continue from where you stopped." No drift check

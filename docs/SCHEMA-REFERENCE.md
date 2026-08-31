@@ -891,12 +891,86 @@ unchanged in behavior).**
 - **Tests:** `tests/sql/p3_7_financial_sync.sql`, new, 27/27 live. Zero regression re-confirmed:
 	`tests/sql/p3_7_customer_sync.sql` quick-check re-run after the dispatcher change, including
 	the `domain_operation` CHECK constraint's own D1 guard.
-- **Still not built:** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
+- **Still not built (at that point):** `inventory.receive`/`.consume`/`.transfer` (`BLOCKER-026`);
 	`production.complete`/`.record_output`/`.record_waste` (`BLOCKER-027`);
 	`expense.reverse` (`BLOCKER-028`); `customer.soft_delete`; `depends_on_operation_id`
 	(`BLOCKER-022`); cursor-expiry-via-retention (`BLOCKER-023`); per-supervisor
-	manager-configurable permission overrides (`BLOCKER-025`). P3.7's `domain_operation`
-	allowlist is now fully covered except these deliberately-open items.
+	manager-configurable permission overrides (`BLOCKER-025`).
+
+### Sixth pass, 2026-08-31 — PRODUCTION `.record_output`/`.record_waste`, allowlist tightened
+
+Three product decisions were gathered (not guessed) for the items above, then acted on
+directly. Full reasoning: `ARCHITECTURE_DECISIONS.md` AD-021 postscript 2026-08-31,
+`BLOCKERS.md` BLOCKER-026/027/028, `IMPLEMENTATION_LOG.md` 2026-08-31.
+
+- **`inventory.receive`/`.transfer`/`.consume` — decided out of MVP scope entirely.**
+	Removed from the `domain_operation` CHECK on `sync_operations`/`sync_changes` (migration
+	`p3_7_allowlist_tighten_receive_transfer_consume_complete`), after confirming live that
+	zero rows anywhere used any of the three. `BLOCKER-026` RESOLVED.
+- **`apply_production_record_output(p_operation sync_operations)`/
+	`apply_production_record_waste(p_operation sync_operations)`** — confirmed live that
+	`complete_production_batch()`/`fail_production_batch()` already take per-ingredient
+	`actual_quantity`/`waste_quantity` in ONE call each, and `production_batches` has only a
+	single `actual_quantity`/`completed_at` column — no schema support for multiple partial
+	output/waste events per batch. So these two names ARE the sync-facing wrappers for those
+	two RPCs, not new events. Payload: `.record_output` — `{batch_id, actual_quantity,
+	ingredient_actuals?, warehouse_id?}`; `.record_waste` — `{batch_id, reason,
+	ingredient_actuals?, warehouse_id?}`. Both validate the payload, confirm the batch's own
+	`branch_id` matches the operation's authorized branch (same consistency-guard shape
+	`apply_production_start`/`apply_inventory_adjust` already use), check
+	`has_role_in(actor, tenant, ['owner','admin','branch_manager','baker'])` — mirroring
+	`guard_production_batch_transition()`'s own 'completed'/'failed' actors verbatim (identical
+	to each other and to 'in_progress') — then delegate entirely to the two existing RPCs.
+	`sync_changes` rows: `operation_type='EVENT'`, keyed on the shared batch `entity_id`,
+	revision continuing from `production.start`'s ledger on that same entity. `production.complete`
+	removed from the CHECK allowlist alongside the inventory three (redundant with
+	`.record_output`, zero rows used it). `BLOCKER-027` RESOLVED.
+- **AD-006 fix, prerequisite:** added an additive `p_tenant_id uuid DEFAULT NULL` parameter to
+	both `complete_production_batch()`/`fail_production_batch()` — they previously resolved
+	their own tenant via `current_tenant_id()` (the session's active org), which for a
+	cross-org sync operation silently looked up the wrong org's batch and failed "not found"
+	for a legitimately authorized actor (a false-negative correctness gap, not a false-accept
+	security hole — the trigger's own role check and the batch lookup's tenant filter were
+	already safe). Default preserves existing non-sync callers unaffected.
+- **`expense.reverse` — reconsidered, explicitly re-deferred, not resolved.** Same two design
+	options as before, product chose to defer; NOT removed from the allowlist (genuinely
+	undecided, not out of scope) — stays allowlisted-but-dispatcher-rejected.
+	`BLOCKER-028` remains OPEN.
+- **Known, deliberate side effect:** removing a value from the CHECK (rather than leaving it
+	dispatcher-rejected) means submitting it now raises a raw `23514 check_violation` that
+	aborts the WHOLE `process_sync_batch()` call — `process_sync_batch_context_validated()`'s
+	per-operation loop has no exception handler around its own `INSERT INTO sync_operations`,
+	unlike `apply_sync_operation()`'s handler-execution wrapper. Confirmed live (tests D1–D4)
+	and accepted: zero clients have ever queued any of the four dropped values.
+- **Tests:** `tests/sql/p3_7_production_output_waste_sync.sql`, new, 20/20 live (16 original +
+	S3–S6 added same day, see below). Zero regression: the full P1–P10/S1–S2 slice of
+	`tests/sql/p3_7_production_sync.sql` (production.start/.cancel) re-run unchanged, 12/12 —
+	that file's own P11 assertion (which tested `production.complete`'s old dispatcher-rejected
+	behavior) is now stale and was commented out in place rather than deleted or left silently
+	wrong. A standalone `customer.create` dispatcher smoke check confirmed the untouched
+	`apply_sync_operation()` branches still route correctly.
+- **SECURITY FIX, same day:** the AD-006 `p_tenant_id` fix above created a NEW, unprotected
+	function overload rather than modifying the protected original — `CREATE OR REPLACE` with a
+	different argument list is a new object in Postgres, not a replacement, and does not inherit
+	an existing `REVOKE`. The new 5-arg `complete_production_batch`/`fail_production_batch`
+	overloads were left with Postgres/Supabase's default `PUBLIC` EXECUTE grant, including
+	`anon` — and since `guard_production_batch_transition()`'s role check is unconditionally
+	skipped when `auth.uid()` IS NULL (always true for `anon`), this meant a fully
+	unauthenticated caller could complete or fail ANY tenant's production batch. Found via a
+	self-review the user requested right after this work was first reported done; confirmed live
+	that zero rows were touched during the vulnerability's window (unexploited); fixed same day
+	via `REVOKE ALL ... FROM PUBLIC, anon, authenticated` on both 5-arg overloads (migration
+	`p3_7_security_fix_revoke_public_exec_on_tenant_scoped_production_rpcs`); re-verified via
+	`has_function_privilege` and a clean `get_advisors(security)` re-run; re-confirmed the
+	legitimate internal call path still works (function owners retain EXECUTE regardless of
+	`REVOKE FROM PUBLIC`) and that the original 4-arg RPCs (the live "complete this batch" UI
+	flow) are completely unaffected. Regression guard: `tests/sql/p3_7_production_output_waste_sync.sql`
+	S3–S6. Full detail: `IMPLEMENTATION_LOG.md` 2026-08-31 "SECURITY FIX" entry.
+- **Still not built:** `expense.reverse` (`BLOCKER-028`, genuinely undecided — the only
+	remaining open item), `customer.soft_delete`, `depends_on_operation_id` (`BLOCKER-022`),
+	cursor-expiry-via-retention (`BLOCKER-023`), per-supervisor manager-configurable permission
+	overrides (`BLOCKER-025`). P3.7's `domain_operation` allowlist is now fully covered except
+	`expense.reverse`.
 
 ### What the deployed schema does provide
 

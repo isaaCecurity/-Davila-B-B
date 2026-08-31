@@ -3,6 +3,11 @@
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_production_sync.sql
 --
 -- EXECUTED 2026-08-30 against project tvfyxpafbpnkneujcnvr: 13/13 passed.
+-- RE-VERIFIED 2026-08-31 (12/12 -- P11 superseded, see below) after production.record_output/
+-- .record_waste were built and apply_sync_operation()/complete_production_batch()/
+-- fail_production_batch() were touched -- confirms zero regression on production.start/
+-- .cancel from that pass. See tests/sql/p3_7_production_output_waste_sync.sql for the new
+-- coverage and the domain_operation allowlist changes that made P11 stale.
 --
 -- Scope: apply_production_start(), apply_production_cancel(), their dispatch wiring in
 -- apply_sync_operation(), their EXECUTE grants, and the guard_production_batch_transition()
@@ -64,8 +69,9 @@
 --       generic gateway (is_member_of), before the handler ever runs
 --   P10 identical replay (same operation_id) -> replayed=true, does not create a second
 --       sync_changes row
---   P11 production.complete (allowlisted, deliberately unbuilt -- BLOCKER-027) -> REJECTED,
---       unsupported_operation_type, exactly like any other not-yet-built entity
+--   P11 SUPERSEDED 2026-08-31 -- production.complete was allowlisted-but-unbuilt when this
+--       ran originally; it is now removed from the allowlist entirely (BLOCKER-027 resolved).
+--       Commented out below rather than re-asserted; see p3_7_production_output_waste_sync.sql.
 --   S1  apply_production_start is not directly executable by anon or authenticated via PostgREST
 --   S2  apply_production_cancel is not directly executable by anon or authenticated via PostgREST
 
@@ -364,23 +370,39 @@ begin
     (v_res2->'results'->0->>'replayed')='true' and v_count=1, format('%s | count=%s', v_res2, v_count));
 end $$;
 
--- =================== P11: production.complete (allowlisted, deliberately unbuilt) ===================
-do $$
-declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
-begin
-  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
-    jsonb_build_array(jsonb_build_object(
-      'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
-      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
-      'entity_id', gen_random_uuid(), 'entity_type', 'production_batches',
-      'operation_type', 'EVENT', 'domain_operation', 'production.complete',
-      'device_created_at', now()::text,
-      'payload', jsonb_build_object('batch_id','b3000000-0000-4000-8000-00000000da01')
-    )));
-  select * into v_row from public.sync_operations where operation_id = v_opid;
-  insert into _results values ('P11 production.complete (unbuilt) -> REJECTED unsupported_operation_type',
-    v_row.status='REJECTED' and v_row.error_code='unsupported_operation_type', v_row.status||' '||coalesce(v_row.error_code,''));
-end $$;
+-- =================== P11: production.complete (SUPERSEDED 2026-08-31, see below) ===================
+-- STALE as of 2026-08-31: this originally asserted production.complete was allowlisted but
+-- dispatcher-rejected (REJECTED/unsupported_operation_type), matching how this slice left
+-- inventory.receive/.transfer/.consume and production.complete/.record_output/.record_waste
+-- at the time -- "allowlisted for later, not yet built". BLOCKER-027 was since resolved:
+-- production.complete was a redundant name for what production.record_output/.record_waste
+-- now do (see tests/sql/p3_7_production_output_waste_sync.sql), and product decided
+-- inventory.receive/.transfer/.consume are out of MVP scope entirely -- all four were REMOVED
+-- from the domain_operation CHECK allowlist (migration
+-- p3_7_allowlist_tighten_receive_transfer_consume_complete), not left dispatcher-rejected.
+-- Submitting 'production.complete' now raises a 23514 check_violation that aborts the whole
+-- process_sync_batch() call before the dispatcher ever runs (see test D1 in the new file) --
+-- the old REJECTED/unsupported_operation_type assertion below would no longer even reach a
+-- sync_operations row to inspect. Left commented out (not deleted) so the history of what this
+-- slice originally left open is still legible here; the live behavior is asserted in the new
+-- file instead of being re-asserted redundantly in this one.
+--
+-- do $$
+-- declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
+-- begin
+--   perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+--     jsonb_build_array(jsonb_build_object(
+--       'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+--       'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+--       'entity_id', gen_random_uuid(), 'entity_type', 'production_batches',
+--       'operation_type', 'EVENT', 'domain_operation', 'production.complete',
+--       'device_created_at', now()::text,
+--       'payload', jsonb_build_object('batch_id','b3000000-0000-4000-8000-00000000da01')
+--     )));
+--   select * into v_row from public.sync_operations where operation_id = v_opid;
+--   insert into _results values ('P11 production.complete (unbuilt) -> REJECTED unsupported_operation_type',
+--     v_row.status='REJECTED' and v_row.error_code='unsupported_operation_type', v_row.status||' '||coalesce(v_row.error_code,''));
+-- end $$;
 
 -- =================== S1/S2: internal handlers not directly executable ===================
 do $$

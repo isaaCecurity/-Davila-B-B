@@ -1,5 +1,73 @@
 # BakeFlow — Current Task
 
+## ✅ P3.7 — BLOCKER-026/027 resolved via product decisions; `domain_operation` allowlist now fully covered except `expense.reverse` (2026-08-31)
+
+Continued past the FINANCIAL slice below by walking three concrete, previously-open product
+questions (BLOCKER-026, -027, -028) with the user directly rather than guessing — this session's
+standing "stop and ask, don't invent business rules" discipline, applied to a genuine architecture
+fork (drop scope vs. build vs. wait on a dependency) rather than a pure investigation gap.
+
+**Decisions gathered, then acted on:**
+- `inventory.receive`/`.transfer`/`.consume` — **out of MVP scope entirely.** Removed from the
+  `domain_operation` CHECK on `sync_operations`/`sync_changes` (verified live first that zero
+  existing rows used any of the three) rather than left "allowlisted but unbuilt". BLOCKER-026
+  RESOLVED.
+- `production.complete`/`.record_output`/`.record_waste` — **confirmed live, not guessed**, that
+  `complete_production_batch()`/`fail_production_batch()` already take per-ingredient
+  actual/waste quantities in ONE call, and `production_batches` has only a single
+  `actual_quantity`/`completed_at` column — no schema support for multiple partial output/waste
+  events per batch. This settled the question: `.record_output`/`.record_waste` ARE the
+  sync-facing names for those two RPCs. Built `apply_production_record_output()`/
+  `apply_production_record_waste()` as thin wrappers (role gate mirrors
+  `guard_production_batch_transition()`'s own 'completed'/'failed' actors verbatim); delegated
+  to the two existing RPCs rather than duplicating their logic. `production.complete` (redundant)
+  removed from the allowlist alongside the inventory three. BLOCKER-027 RESOLVED.
+- As a prerequisite, added an additive `p_tenant_id uuid DEFAULT NULL` parameter to both RPCs
+  (AD-006 fix — they previously resolved tenant via the session's active org, causing a
+  false-negative "batch not found" for a legitimately cross-org sync actor). **This
+  implementation itself introduced a real vulnerability — see below.**
+- `expense.reverse` — **reconsidered, explicitly re-deferred, not resolved.** Same two design
+  options as before; product chose to wait. Left allowlisted-but-dispatcher-rejected, unchanged.
+  BLOCKER-028 stays OPEN — the only remaining genuinely-undecided item in P3.7's scope.
+
+**⚠️ Security issue found and fixed same day, via a self-review the user asked for.** Adding
+`p_tenant_id` created a NEW function overload (Postgres dispatches by argument list) rather than
+modifying the protected original — the new 5-arg `complete_production_batch`/
+`fail_production_batch` overloads got Postgres/Supabase's default `PUBLIC` EXECUTE grant,
+including `anon`. Since `guard_production_batch_transition()`'s role check is unconditionally
+skipped when `auth.uid()` IS NULL (always true for `anon`), this meant **a fully unauthenticated
+caller could complete or fail any tenant's production batch**. Confirmed live that zero rows
+were touched during the vulnerability's window (unexploited). Fixed via `REVOKE ALL ... FROM
+PUBLIC, anon, authenticated` on both 5-arg overloads; re-verified the legitimate internal call
+path and the original 4-arg RPCs (the live "complete this batch" UI flow) are both unaffected.
+Regression guard added: `tests/sql/p3_7_production_output_waste_sync.sql` S3–S6. Full detail:
+`IMPLEMENTATION_LOG.md` 2026-08-31 "SECURITY FIX" entry (separate from the entry for the work
+below it).
+
+**Verified, zero regression:** `tests/sql/p3_7_production_output_waste_sync.sql` (new, 20/20
+live — 16 original + S3–S6 from the security fix). Full `production.start`/`.cancel` suite
+(`tests/sql/p3_7_production_sync.sql`) re-run unchanged, 12/12 — its own P11 assertion (testing
+`production.complete`'s old dispatcher-rejected behavior) is now stale and was commented out in
+place rather than deleted or left silently wrong. A standalone `customer.create` dispatcher
+smoke check confirmed the untouched `apply_sync_operation()` branches still route correctly
+after the rewrite. `get_advisors(security)` clean for every handler and RPC overload touched
+this pass.
+
+**Known, accepted behavior change:** submitting one of the four now-dropped `domain_operation`
+values raises a raw `23514 check_violation` that aborts the WHOLE `process_sync_batch()` call
+(no per-operation exception handler wraps that INSERT), rather than the graceful per-operation
+`REJECTED`/`unsupported_operation_type` these values produced before. Confirmed live (tests
+D1–D4) and accepted: zero clients have ever queued any of the four.
+
+Docs updated: `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `docs/SCHEMA-REFERENCE.md` §12,
+`docs/API-CONTRACT.md`, `BACKEND_ROADMAP.md` (P3.7 section, both crosswalk rows), `BLOCKERS.md`
+(BLOCKER-026/027 marked RESOLVED, BLOCKER-028 updated with the re-deferral note),
+`tests/sql/p3_7_production_sync.sql` (stale P11 corrected in place).
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-08-31.
+
+---
+
 ## ✅ P3.7 FINANCIAL vertical slice — `payment.create`/`payment.reverse`/`expense.create` DELIVERED (2026-08-30)
 
 Continued from the PRODUCTION slice below per "leave the commiting to me and continue from

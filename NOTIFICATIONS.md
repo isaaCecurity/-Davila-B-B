@@ -4,6 +4,55 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ⚠️ Security issue found and fixed same day, in response to your request to self-review this pass (2026-08-31)
+
+You asked me to check the P3.7 production work below for logical errors or security issues
+before continuing. I found a real one, not a hypothetical: the AD-006 fix in that entry (adding
+a `p_tenant_id` parameter to `complete_production_batch()`/`fail_production_batch()`) created a
+new, unprotected function overload — Postgres treats a different argument list as a new function,
+not a replacement, so it didn't inherit the `REVOKE` the original 4-arg RPC had. The new overload
+was left executable by `anon` — fully unauthenticated callers — by Postgres/Supabase's default
+grant. Combined with an existing trigger design (role checks are skipped when there's no logged-in
+user, which is always true for `anon`), this meant **anyone on the internet could have completed
+or failed any bakery's production batch**, no login required.
+
+**Checked and confirmed unexploited** — zero rows were touched anywhere during the window this was
+live (the time between me applying the change and finding it a few minutes later in this same
+session). **Fixed immediately**: revoked the unintended grant, verified the hole is closed, and
+verified the fix doesn't break the real "complete this batch" button in the app (that uses a
+different, still-protected function). Added permanent tests so this exact mistake — a new
+function overload silently getting a public grant — can't slip through again unnoticed.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-08-31 "SECURITY FIX" entry.
+
+---
+
+## P3.7 — you resolved BLOCKER-026/027; `domain_operation` allowlist is now fully covered except `expense.reverse` (2026-08-31)
+
+You made three calls directly (asked in-session rather than guessed): `inventory.receive`/
+`.transfer`/`.consume` are out of MVP scope entirely (removed from the sync allowlist, not left
+unbuilt); `production.complete`/`.record_output`/`.record_waste` are confirmed to be the
+sync-facing names for the existing `complete_production_batch()`/`fail_production_batch()` RPCs
+(built, tested, live); `expense.reverse` stays deferred, same as before — the only item in P3.7
+still genuinely undecided.
+
+New test suite `tests/sql/p3_7_production_output_waste_sync.sql` (16/16 live). Zero regression
+on `production.start`/`.cancel` (12/12) or the customer/inventory/financial suites.
+
+One thing worth knowing: since `inventory.receive`/`.transfer`/`.consume`/`production.complete`
+were REMOVED from the allowlist (rather than left "allowlisted but rejected" like before), a
+client that ever submits one of these four now gets a harder failure — the whole sync batch call
+aborts, not just that one operation. No client has ever queued any of the four, so nothing real
+breaks today, but flagging it since it's a different failure shape than this project's other
+not-yet-built operations.
+
+**Not committed** — no commit instruction was given this pass.
+
+Full detail: `CURRENT_TASK.md`, `BLOCKERS.md` BLOCKER-026/027 (RESOLVED)/028 (still OPEN),
+`ARCHITECTURE_DECISIONS.md` AD-021 postscript, `IMPLEMENTATION_LOG.md` 2026-08-31.
+
+---
+
 ## P3.7 FINANCIAL slice delivered — `payment.create`/`.reverse`/`expense.create` built, one operation blocked on a real gap (2026-08-30)
 
 Continued P3.7 into financial (payments/expenses), the last unbuilt entity `BACKEND_ROADMAP.md`

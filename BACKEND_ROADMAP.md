@@ -113,7 +113,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B2 Authentication / JWT | P2.1–P2.2 | COMPLETE |
 | B3 Authorization & RLS | P2.3–P2.6 | COMPLETE |
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
-| B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29 (BLOCKER-006 resolved via AD-021), inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30; inventory.receive/.consume/.transfer (BLOCKER-026), production.complete/.record_output/.record_waste (BLOCKER-027), expense.reverse (BLOCKER-028) deliberately unbuilt |
+| B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29 (BLOCKER-006 resolved via AD-021), inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30, production.record_output/.record_waste IMPLEMENTED 2026-08-31; inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31 and removed from the allowlist (BLOCKER-026/027 RESOLVED); expense.reverse (BLOCKER-028) is the only remaining deliberately-unbuilt item |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
 | B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
@@ -341,7 +341,7 @@ Verified 2026-08-10 by executed queries; see `IMPLEMENTATION_LOG.md`.
 **Deliverables:** stale `base_revision` recorded as `CONFLICT`, never overwritten, never discarded.
 **Gap:** detection only; resolution is P3.7.
 
-## P3.7 · Per-entity sync application — **PARTIAL: tickets + customer slices, plus protocol layer, IMPLEMENTED; inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30; inventory.receive/.consume/.transfer, production.complete/.record_output/.record_waste, and expense.reverse remain deliberately unbuilt** *(formerly B5)*
+## P3.7 · Per-entity sync application — **PARTIAL: tickets + customer slices, plus protocol layer, IMPLEMENTED; inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30; production.record_output/.record_waste IMPLEMENTED 2026-08-31; inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31 (removed from the domain_operation allowlist); expense.reverse remains the only deliberately-unbuilt item** *(formerly B5)*
 **Objective:** Apply recorded operations to business tables, per entity, with explicit conflict semantics.
 **Dependencies:** P3.1–P3.6 (met), **P4.1** and/or **P4.4** for the target entity —
 P3.7 is *downstream* of those milestones, never upstream of them (BLOCKER-008b,
@@ -459,32 +459,51 @@ production dispatcher changes (zero regression each time). `tests/sql/p3_7_inven
 — new, 14/14, live (covers `inventory.adjust`/`.waste`, negative-stock rejection,
 cross-tenant/cross-branch denial, replay idempotency, and confirms `.receive`/`.consume`/
 `.transfer` still correctly fall through to `unsupported_operation_type`).
-`tests/sql/p3_7_production_sync.sql` — new, 13/13, live (covers `production.start`/`.cancel`,
-role gates matching the fixed guard trigger, invalid-transition/not-found rejection,
-cross-tenant denial, replay idempotency, and confirms `.complete` still correctly falls
-through to `unsupported_operation_type`). `tests/sql/p3_7_financial_sync.sql` — new, 27/27,
+`tests/sql/p3_7_production_sync.sql` — 13/13 as originally run 2026-08-30 (covers
+`production.start`/`.cancel`, role gates matching the fixed guard trigger,
+invalid-transition/not-found rejection, cross-tenant denial, replay idempotency); **re-run
+2026-08-31, 12/12 — its own P11 assertion (which tested `production.complete`'s old
+dispatcher-rejected behavior) is now stale after the allowlist tightening below and was
+commented out in place, pointing to the new file, rather than deleted or left silently
+wrong.** `tests/sql/p3_7_financial_sync.sql` — new, 27/27,
 live (covers `payment.create`/`.reverse`/`expense.create`'s full payload validation, the
 driver-trip custody path, the cash-session path, overpayment/over-refund rejection,
 cancelled-ticket rejection, role gating for all three operations, cross-tenant denial, replay
 idempotency, and confirms `expense.reverse` still correctly falls through to
-`unsupported_operation_type`). Re-verified with zero regression:
+`unsupported_operation_type`). **`tests/sql/p3_7_production_output_waste_sync.sql`** — new,
+2026-08-31, 20/20 live (16 original + S3–S6 added same day; covers `production.record_output`/
+`.record_waste` happy paths with exact stock-movement counts, role gating, payload validation,
+not-found, branch-mismatch, cross-tenant denial, replay idempotency, EXECUTE-grant checks for
+the sync handlers AND the underlying tenant-scoped RPC overloads, and the four now-dropped
+`domain_operation` values each correctly aborting the whole batch call with a `23514`
+check_violation). **A same-day self-review (requested by the user) found and fixed a real
+vulnerability this pass introduced: adding `p_tenant_id` to `complete_production_batch()`/
+`fail_production_batch()` created a new function overload left `anon`-executable by default,
+letting an unauthenticated caller complete/fail any tenant's production batch — confirmed
+unexploited (zero rows touched in the window), fixed same day via `REVOKE`, re-verified.** See
+`IMPLEMENTATION_LOG.md` 2026-08-31 "SECURITY FIX" entry. Re-verified with zero regression:
 `tests/sql/security_multiorg_sync.sql` (22/23 — one pre-existing, unrelated
 `rate_limit_events` RLS gap), `tests/sql/driver_trips_rls.sql` (20/20),
 `tests/sql/financial_write_rls.sql` (28/28), `tests/sql/driver_field_sale_rls.sql` (8/8), the
 online `complete_production_batch()` happy path (re-tested live end to end after the guard
 trigger fix), `tests/sql/p3_7_customer_sync.sql` (quick-check re-run after the financial
-dispatcher change, including its D1 `domain_operation` CHECK constraint guard). Also clean:
+dispatcher change, including its D1 `domain_operation` CHECK constraint guard), and a
+standalone `customer.create` dispatcher smoke check after the 2026-08-31 `apply_sync_operation()`
+rewrite. `get_advisors(security)` clean for every new handler across all passes. Also clean:
 `pytest` (12/12).
 **Completion criteria:** every in-scope entity has a contract, an applier, and passing
 idempotency + authorization + conflict tests. **Tickets and customers both meet this, and the
 shared protocol layer (idempotency, payload immutability, response-status correctness,
 cursor validation) is hardened for whichever entity comes next. Inventory, production, and
-financial now partially meet this** (inventory: `adjust`/`waste` built and tested, `receive`/
-`consume`/`transfer` deliberately not, per BLOCKER-026; production: `start`/`cancel` built and
-tested, `complete`/`record_output`/`record_waste` deliberately not, per BLOCKER-027; financial:
-`payment.create`/`.reverse`/`expense.create` built and tested, `expense.reverse` deliberately
-not, per BLOCKER-028). `customer.soft_delete` is deliberately not allowlisted at all yet (see
-`docs/SCHEMA-REFERENCE.md` §12).
+financial now meet this for their in-scope operations** (inventory: `adjust`/`waste` built
+and tested; `receive`/`transfer`/`consume` decided OUT OF MVP SCOPE 2026-08-31 and removed
+from the allowlist, `BLOCKER-026` RESOLVED; production: `start`/`cancel`/`record_output`/
+`record_waste` all built and tested, `complete` decided redundant and removed from the
+allowlist, `BLOCKER-027` RESOLVED; financial: `payment.create`/`.reverse`/`expense.create`
+built and tested, `expense.reverse` reconsidered 2026-08-31 and explicitly re-deferred — the
+only remaining genuinely-undecided item, `BLOCKER-028` still OPEN). `customer.soft_delete` is
+deliberately not allowlisted at all yet (see `docs/SCHEMA-REFERENCE.md` §12). **P3.7's
+`domain_operation` allowlist is now fully covered except `expense.reverse`.**
 **Blockers:**
 - ~~**BLOCKER-005**~~ — **RESOLVED 2026-08-14.** `prevent_submitted_ticket_update()` was
   dropped; every ticket status is now reachable and `subtotal_amount` is frozen once a
@@ -493,10 +512,9 @@ not, per BLOCKER-028). `customer.soft_delete` is deliberately not allowlisted at
 - ~~**BLOCKER-006**~~ — **RESOLVED 2026-08-28.** Per-entity conflict strategy decided,
   `sync_conflicts` confirmed as a server table, `operation_type` allowlist contract set —
   see **AD-021**. **No blocker remains for P3.7.**
-**Remaining, not a blocker — implementation work:** `inventory.receive`/
-`.consume`/`.transfer` (BLOCKER-026), `production.complete`/`.record_output`/
-`.record_waste` (BLOCKER-027), and `expense.reverse` (BLOCKER-028) — all real undecided
-business rules, not plain implementation work; `customer.soft_delete` (not yet allowlisted); `ALREADY_APPLIED` as a status value
+**Remaining, not a blocker — implementation work:** `expense.reverse` (BLOCKER-028, the only
+remaining genuinely-undecided business rule — reconsidered and explicitly re-deferred
+2026-08-31, not resolved); `customer.soft_delete` (not yet allowlisted); `ALREADY_APPLIED` as a status value
 was deliberately NOT added (see AD-021 — `status` + `replayed` already give full
 distinguishability); tombstone retention / true cursor-expiry-via-purge (no retention
 mechanism exists at all yet — see BLOCKERS.md); `depends_on_operation_id` enforcement
@@ -1049,7 +1067,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P6.2 invitations | BLOCKER-001 |
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
-| P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29, inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); inventory.receive/.consume/.transfer (BLOCKER-026), production.complete/.record_output/.record_waste (BLOCKER-027), expense.reverse (BLOCKER-028) deliberately unbuilt |
+| P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29, inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30, production.record_output/.record_waste IMPLEMENTED 2026-08-31; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31, removed from allowlist (BLOCKER-026/027 RESOLVED); expense.reverse (BLOCKER-028) is the only remaining deliberately-unbuilt item |
 | P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
 
 **Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to
