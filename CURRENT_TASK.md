@@ -1,5 +1,37 @@
 # BakeFlow — Current Task
 
+## ✅ P11 scoping — BLOCKER-002 reopened (was falsely RESOLVED); anon-EXECUTE hygiene fix on 9 functions; permanent function-privilege audit added (2026-08-31)
+
+Picked as "most important next area" after the FINANCIAL/production work below, specifically
+because it's the systemic fix for the same-day SECURITY FIX entry further below — a CI-enforced
+check would catch that class of mistake automatically, not only when someone asks for a review.
+
+**Before any CI work, found BLOCKER-002's "RESOLVED" status was false.** `.github/workflows/ci.yml`
+correctly explains SQL suites aren't CI-wired because the repo can't rebuild the schema and
+pointing CI at production needs a secret — a human decision, not mine to invent. `BLOCKERS.md`
+claimed this was already fixed via a baseline DDL file. Live-checked: that file has 23 of the
+database's 40 tables and zero RLS policies/functions/triggers; the tracking doc hadn't been
+touched in three weeks. Reopened BLOCKER-002 with full evidence; corrected
+`MIGRATION_GOVERNANCE.md` and `docs/PROJECT-OVERVIEW.md` §7. **Did not attempt the reconciliation
+itself** — real options exist and it's a decision for you, detailed in `BLOCKERS.md`.
+
+**Separately, found 9 pre-existing functions anon-executable with no product reason** (payments,
+driver-trip lifecycle, a revenue report). None were exploitable (each fails safely without a real
+login) but all were unnecessary attack surface. Fixed via `REVOKE` — the first attempt didn't
+actually work (privilege came through `PUBLIC`, not `anon` directly), caught via live re-check
+and corrected same session.
+
+**Deliverable:** `tests/sql/function_privilege_audit.sql` — a permanent, zero-rows-expected check
+(mirroring the existing RLS zero-policy check's role) that would have caught both of today's
+findings and fails loudly on any future regression. Executed live, PASSED.
+
+**Not committed** — no commit instruction was given this pass.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-08-31 (both entries), `NOTIFICATIONS.md`,
+`BLOCKERS.md` BLOCKER-002.
+
+---
+
 ## ✅ P3.7 — BLOCKER-026/027 resolved via product decisions; `domain_operation` allowlist now fully covered except `expense.reverse` (2026-08-31)
 
 Continued past the FINANCIAL slice below by walking three concrete, previously-open product

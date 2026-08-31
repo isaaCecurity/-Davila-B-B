@@ -5,6 +5,91 @@ Never record planned work here.
 
 ---
 
+## 2026-08-31 (same day, later still) · P11 scoping — BLOCKER-002 reopened; 9-function anon-EXECUTE hygiene fix; permanent function-privilege audit added
+
+**Context:** asked to pick the most important next area; chose P11 (test/CI infrastructure) as
+the systemic fix for the same-day SECURITY FIX entry above (a CI-enforced check would have
+caught that class of mistake automatically). Investigating what P11 could safely do surfaced two
+more findings before any CI work was attempted.
+
+**Finding 1 — BLOCKER-002's "RESOLVED" status was false.** `.github/workflows/ci.yml` explains
+in its own comments why `tests/sql/*.sql` isn't CI-wired: the repo can't rebuild the schema
+locally, and pointing CI at production would need a privileged key in GitHub secrets (correctly
+flagged there as a human decision). `BLOCKERS.md`'s BLOCKER-002 claimed this was RESOLVED
+2026-08-20 via a baseline file covering "all 37 core tables... and forced RLS policies." Checked
+live: `supabase/migrations/20260809_live_schema.sql` has 23 `CREATE TABLE` statements and ZERO
+`CREATE POLICY`/`ENABLE ROW LEVEL SECURITY`/`CREATE FUNCTION`/`CREATE TRIGGER` statements; the
+live database has 40 tables today. Entire domains (production, financial, sync, driver, audit)
+are absent from the baseline, and `MIGRATION_GOVERNANCE.md`'s own migration inventory stops at
+2026-08-10 — never updated across three subsequent weeks of schema work. The CI comment was
+right all along; `BLOCKERS.md` was wrong. Reopened BLOCKER-002 with full live evidence; corrected
+`MIGRATION_GOVERNANCE.md` (stale-status banner added) and `docs/PROJECT-OVERVIEW.md` §7 (new
+entry) per the standing "surface spec contradictions, fix the offending document" rule. Did NOT
+attempt the reconciliation itself — genuinely a human decision among several real options (fresh
+full dump vs. formally-scoped-partial vs. something else with a maintenance commitment), not
+something to invent. CI wiring stays exactly as `.github/workflows/ci.yml` already had it: not
+wired, correctly.
+
+**Finding 2 — 9 pre-existing functions were `anon`-executable with no product reason.**
+Independent of the same-day SECURITY FIX entry above, queried every `SECURITY DEFINER` function
+in `public` for `anon` EXECUTE and found 11 (not counting the already-fixed production RPCs):
+`record_payment`, `get_daily_revenue_summary`, `complete_driver_field_sale`,
+`complete_driver_trip`, `depart_driver_trip`, `reconcile_driver_trip`, `return_driver_trip`,
+`start_driver_trip`, `verify_trip_loading`, plus trigger functions
+`guard_driver_trip_transition`/`guard_ticket_driver_trip_assignment`. Read every one of the 9
+RPC bodies in full before touching anything: none are actually exploitable —
+`record_payment`/`get_daily_revenue_summary` explicitly raise when `has_role()` is false or
+`current_tenant_id()` IS NULL; `complete_driver_trip`/`reconcile_driver_trip`/
+`start_driver_trip`/`verify_trip_loading`/`complete_driver_field_sale` explicitly check
+`has_role()`/`has_branch_access()`; `depart_driver_trip`/`return_driver_trip` have no explicit
+check but implicitly fail closed, since `WHERE tenant_id = current_tenant_id()` matches zero
+rows when `current_tenant_id()` is NULL (true for `anon`, no JWT) — so the row lookup itself
+always returns "not found" before any business logic runs. The two `guard_*` functions are
+trigger functions; called directly outside trigger context (no `NEW`/`OLD`/`TG_OP`) they error
+immediately. None share today's earlier "skip the check entirely when auth.uid() IS NULL"
+pattern — this is a different, non-exploitable class of sloppiness, not a live hole. Confirmed
+this generalization live via a query for ANY function with mismatched-privilege sibling
+overloads (the earlier bug's specific shape) across the whole schema: zero results besides the
+two already-fixed production RPCs.
+
+Fixed anyway, since it's purely subtractive and the app has no unauthenticated-caller feature at
+all: attempted `REVOKE ALL ... FROM anon` first (migration
+`harden_anon_execute_grants_on_driver_and_payment_rpcs`) — **verified live immediately after
+that it did NOT work**, all 11 were still `anon`-executable. Root cause: the privilege was
+granted to `PUBLIC`, not to `anon` directly, so a `anon`-specific `REVOKE` revoked a grant that
+was never the actual source. Corrected via a second migration
+(`harden_anon_execute_grants_on_driver_and_payment_rpcs_v2`): `REVOKE ALL ... FROM PUBLIC` on
+all 11, plus an explicit `GRANT EXECUTE ... TO authenticated` on the 9 real RPCs (not the 2
+trigger functions, which no caller should invoke directly). Re-verified live via
+`has_function_privilege`: zero `anon`-executable `SECURITY DEFINER` functions remain anywhere in
+`public`; all 9 RPCs still `authenticated`-executable, unaffected. `get_advisors(type:
+'security')` re-run clean of the `anon`-executable finding entirely — remaining findings are the
+expected, benign "authenticated can execute this RPC" notices (every app RPC necessarily has
+these by design) plus two pre-existing, unrelated items (`rate_limit_events` RLS-no-policy,
+leaked-password-protection disabled).
+
+**Deliverable: `tests/sql/function_privilege_audit.sql`, new.** Two zero-rows-expected queries,
+directly modeled on `TESTING-STRATEGY.md` §3's table-level RLS check ("the single most valuable
+test in the suite") applied to function privileges instead: (1) any `SECURITY DEFINER` function
+`anon`-executable and not on an explicit, commented allowlist (empty today — BakeFlow has no
+public-caller feature); (2) any function name with sibling overloads whose `anon`/`authenticated`
+EXECUTE privilege differs, unless explicitly allowlisted with a reason (only
+`complete_production_batch`/`fail_production_batch`, whose mismatch is now the deliberate fix,
+not a bug). A closing `DO` block raises an exception if either check finds anything, so the file
+fails loudly under `psql -v ON_ERROR_STOP=1` rather than requiring a human to notice an empty vs.
+non-empty result set. Executed live end-to-end exactly as written: PASSED. This is the concrete,
+CI-independent piece of "P11" that could be built today without crossing the BLOCKER-002/secrets
+line — CI wiring itself still correctly waits on that blocker's resolution.
+
+Docs updated: `BLOCKERS.md` (BLOCKER-002 reopened with full evidence),
+`supabase/migrations/MIGRATION_GOVERNANCE.md` (stale-status banner),
+`docs/PROJECT-OVERVIEW.md` §7 (new entry), `docs/TESTING-STRATEGY.md` (new function-privilege
+audit paragraph, §3).
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
 ## 2026-08-31 (same day, later) · SECURITY FIX — unauthenticated RCE-equivalent access to `complete_production_batch`/`fail_production_batch` closed, introduced and fixed same day
 
 **Found via:** the user asked, after the entry below was reported complete, to check the pass

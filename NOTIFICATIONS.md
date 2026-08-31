@@ -4,6 +4,39 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## P11 scoping — reopened a falsely-"resolved" blocker, and found/fixed a second, smaller privilege hygiene issue (2026-08-31)
+
+Two things worth knowing from picking "test/CI infrastructure" as the next area:
+
+1. **BLOCKER-002 ("migration history reconciled") was marked RESOLVED but wasn't.** The file
+   that's supposed to let the schema be rebuilt from scratch covers 23 of the database's 40
+   tables and has zero RLS policies, functions, or triggers in it at all — entire feature areas
+   (production, financial, offline sync, driver trips, audit) are missing, and the tracking
+   document hadn't been touched in three weeks. This is why the SQL test suites still can't run
+   in CI — your existing CI config had this right all along ("BLOCKER-002... zero version
+   overlap"); the other document claiming it was fixed was the one that was wrong. Reopened with
+   full evidence. This needs a decision from you on how to reconcile it (a few real options,
+   detailed in `BLOCKERS.md`) — not something to guess at.
+2. **9 pre-existing functions (payments, driver-trip lifecycle, a revenue report) were callable
+   without signing in.** None were actually exploitable — each one either explicitly checks for
+   a valid role, or fails safely because there's no real organization to look anything up
+   against without a login — but there was no reason for any of them to be reachable that way
+   either, since nothing in this app works without signing in. Revoked (took two attempts — the
+   first `REVOKE` didn't work because the access came through a different mechanism than
+   expected; caught and corrected immediately via a live re-check, same session).
+
+Also added a permanent, reusable check (`tests/sql/function_privilege_audit.sql`) so this class
+of mistake — a function ending up reachable by more than it should be — gets caught
+automatically on every future review, the same way the existing RLS check already does for
+tables.
+
+**Not committed** — no commit instruction was given this pass.
+
+Full detail: `BLOCKERS.md` BLOCKER-002 (reopened), `IMPLEMENTATION_LOG.md` 2026-08-31 (both
+entries), `docs/PROJECT-OVERVIEW.md` §7.
+
+---
+
 ## ⚠️ Security issue found and fixed same day, in response to your request to self-review this pass (2026-08-31)
 
 You asked me to check the P3.7 production work below for logical errors or security issues

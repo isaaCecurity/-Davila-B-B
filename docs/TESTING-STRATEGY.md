@@ -76,6 +76,14 @@ where n.nspname = 'public' and c.relkind = 'r'
 
 This query must return zero rows. It is the single most valuable test in the suite.
 
+**Function privilege audit, added 2026-08-31.** The table-level check above has a function-level
+sibling: `tests/sql/function_privilege_audit.sql`, added after two real, live findings the same
+day (see `IMPLEMENTATION_LOG.md` 2026-08-31) — a new function overload silently inheriting a
+`PUBLIC` `EXECUTE` grant its sibling had explicitly `REVOKE`d, and nine pre-existing functions
+`anon`-executable since creation with no product reason to be. Run it after every migration that
+touches a function's signature or grants, same cadence as the RLS check above. Zero rows on both
+of its queries, same convention: any row is a real, actionable finding, not noise.
+
 ---
 
 ## 4. Financial correctness suite
