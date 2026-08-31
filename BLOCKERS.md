@@ -115,8 +115,52 @@ itself works.
 
 ---
 
-## ✅ BLOCKER-002 · Migration history reconciled (2026-08-20)
-**Status:** RESOLVED · **Affects:** repository integrity / P0.5 & P1.4 · **Type:** environment + decision
+## ⚠️ BLOCKER-002 · Migration history reconciliation — REOPENED 2026-08-31 (was falsely marked RESOLVED)
+**Status:** OPEN · **Affects:** repository integrity / P0.5 & P1.4 / P11.1 CI wiring · **Type:** environment + decision
+
+**Reopened 2026-08-31.** While scoping P11 (test/CI infrastructure) work, live-verified this
+blocker's own "RESOLVED" claim below and found it materially false — not merely stale by a
+day or two, but describing a baseline that was never actually complete and is now roughly three
+weeks out of date on top of that. Specifically, verified live:
+- `supabase/migrations/20260809_live_schema.sql` (the file claimed to be "full, canonical DDL
+  covering all 37 core tables... and forced RLS policies") contains exactly **23** `CREATE
+  TABLE` statements, not 37, and **zero** `CREATE POLICY`, `ENABLE ROW LEVEL SECURITY`, `CREATE
+  FUNCTION`, or `CREATE TRIGGER` statements at all (`grep -c`, verified directly against the
+  file). The live database currently has **40** tables
+  (`information_schema.tables`, verified 2026-08-31) — entire domains are missing from the
+  baseline: production, financial (payments/refunds/expenses/cash_sessions/invoices), the whole
+  offline-sync layer (sync_operations/sync_changes/sync_conflicts/sync_devices), driver trips,
+  audit, permanent-deletion, rate limiting, and more. None of the RLS policies, triggers, or
+  functions that make this schema actually secure or functional (guard triggers, `has_role_in`,
+  every `apply_*` handler, etc.) are captured anywhere in the file.
+- `supabase/migrations/MIGRATION_GOVERNANCE.md` makes the same false "37 tables... RLS
+  policies" claim and its own migration inventory table stops at `20260810140000` (2026-08-10)
+  — meaning it was never updated across the roughly three weeks of subsequent schema work this
+  project log otherwise documents in detail (P3.7 alone applied well over a dozen migrations in
+  just the last two days).
+- The CI workflow (`.github/workflows/ci.yml`) correctly still treats this as unresolved in its
+  own comments ("BLOCKER-002 — 17 migrations applied live, 14 files in the repo, zero version
+  overlap") — that file's understanding was accurate; the `BLOCKERS.md`/`MIGRATION_GOVERNANCE.md`
+  "RESOLVED" claim below was the one that was wrong, and evidently was never checked against
+  what actually got committed.
+
+**What actually happened 2026-08-20 (best reconstruction):** a baseline file and governance doc
+were created, covering the schema as it stood at that specific moment (or earlier, given the
+gap even then) — and the "RESOLVED" status was recorded without the coverage claims in
+either document being verified against the live database, and neither was ever revisited as
+schema work continued.
+
+**Needed:** a decision on the reconciliation approach — this is genuinely a call for the human,
+not something to invent. Candidates that were not decided between: (a) a fresh, complete DDL
+dump of the current live schema (all 40 tables, RLS, triggers, functions) as a new baseline,
+retiring the incomplete one; (b) accept an intentionally partial baseline and formally scope
+what it's for (if anything) rather than claiming full coverage; (c) some other reconciliation
+process with a maintenance commitment attached, since without one this will drift again. Until
+decided, `tests/sql/*.sql` correctly remains a local, manually-executed gate, not CI-wired —
+see `.github/workflows/ci.yml`'s own comment, which was right all along.
+
+**Original (now-corrected) entry, kept for history — do not trust the claims below, they were
+verified false 2026-08-31:**
 
 Reconciled the database migration tracking gap between remote Supabase production (`tvfyxpafbpnkneujcnvr`) and local git repository:
 - **Historical Retention:** Preserved existing 14 granular `.sql` migration files for historical context and auditing per decision.
@@ -128,6 +172,9 @@ Reconciled the database migration tracking gap between remote Supabase productio
 - TypeScript typecheck exit 0 (`npm run typecheck`)
 - Monorepo lint exit 0 (`npm run lint --max-warnings=0`)
 
+Note what this "evidence" actually checked: pytest's spec-coverage suite (naming conventions),
+TypeScript types, and lint — none of which can detect whether a DDL file's claimed table/policy
+coverage matches reality. That gap is exactly how the false "RESOLVED" status went unnoticed.
 
 ---
 

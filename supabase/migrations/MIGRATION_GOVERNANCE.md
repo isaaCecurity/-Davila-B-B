@@ -1,6 +1,13 @@
 # Supabase Migration History & Governance
 
-**Status:** Canonical record of database migrations and baseline reconciliation.  
+**Status:** STALE — reopened as BLOCKER-002 2026-08-31. This document's "37 tables... RLS
+policies" claim was verified false against the live database the same day: the baseline file
+has 23 tables and zero RLS policies/functions/triggers, and this document's own inventory
+table stops at 2026-08-10, roughly three weeks behind the live schema. See `BLOCKERS.md`
+BLOCKER-002 for full detail. Do not treat this file as an accurate reconciliation until that
+blocker is resolved — the rules in §3 are still fine to follow for new migrations, but §1/§2's
+factual claims are not current.
+
 **Supabase Project ID:** `tvfyxpafbpnkneujcnvr`
 
 ---
