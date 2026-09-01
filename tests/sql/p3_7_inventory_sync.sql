@@ -263,7 +263,15 @@ begin
     format('res1=%s res2=%s count=%s', v_res1, v_res2, v_count));
 end $$;
 
--- =================== I10: inventory.consume (allowlisted, deliberately unbuilt) ===================
+-- =================== I10: unsupported domain_operation -> REJECTED, not silently pending ===================
+-- Was inventory.consume ("allowlisted, deliberately unbuilt") -- found stale 2026-09-01, first
+-- real GitHub Actions run of the sql-tests job: inventory.consume/.receive/.transfer were removed
+-- from the domain_operation allowlist entirely (BLOCKER-026), so the insert below now fails the
+-- sync_operations_domain_operation_check CHECK constraint at INSERT time instead of reaching the
+-- dispatcher's unsupported_operation_type fallback this test means to exercise. Switched to
+-- expense.reverse, the one domain_operation still allowlisted but genuinely unhandled
+-- (BLOCKER-028, deliberately deferred) -- same fix already applied to p3_7_protocol_correctness.sql
+-- A3 and p3_7_sync_apply_and_pull.sql T3 the same pass.
 do $$
 declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
 begin
@@ -272,13 +280,13 @@ begin
       'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
       'branch_id', 'ac000000-0000-4000-8000-00000000da01',
       'entity_id', gen_random_uuid(), 'entity_type', 'stock_movements',
-      'operation_type', 'EVENT', 'domain_operation', 'inventory.consume',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
         'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',-1)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
-  insert into _results values ('I10 inventory.consume (unbuilt) -> REJECTED unsupported_operation_type',
+  insert into _results values ('I10 unsupported domain_operation -> REJECTED unsupported_operation_type',
     v_row.status='REJECTED' and v_row.error_code='unsupported_operation_type', v_row.status||' '||coalesce(v_row.error_code,''));
 end $$;
 

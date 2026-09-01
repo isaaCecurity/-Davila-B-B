@@ -5,6 +5,58 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later still) · Second real GitHub Actions run — 2 more real defects found; sql-tests job now isolates exactly one pre-existing, already-decided item
+
+**Context:** commit `dc6b82f8` (previous entry) pushed and triggered run `33526011685`. Job
+results fetched via the REST API (`.../actions/runs/33526011685/jobs`): `Spec coverage` success,
+`Lint & typecheck` **success** (confirms the `*.config.js` globals override actually works on a
+real runner, not just locally), `Database suites` still failure — but now, because the early-abort
+loop bug is fixed, it ran all 16 files and named all 3 that failed instead of silently stopping at
+1: `catalog_read_rls.sql`, `p3_7_inventory_sync.sql`, `security_multiorg_sync.sql`. Job logs
+fetched via `GET /actions/jobs/{id}/logs` using the OAuth token already stored by Git Credential
+Manager for this repo (the same credential `git push` uses) rather than requesting a new one —
+the anonymous API had refused logs with "Must have admin rights to Repository" even though the
+repo is public, which GitHub does deliberately since logs can contain secrets.
+
+**Defect 4 — `catalog_read_rls.sql` C1b: "own live rows visible = 7", asserted 6.** Direct
+consequence of this same pass's earlier C9b fix: C9b now *actually inserts* a second live
+`products` row for org A (proving the BLOCKER-010a fix lets a soft-deleted name be reused,
+persisting in the same transaction) rather than catching a `unique_violation` and leaving no
+trace. C1b's fixture-time assumption of exactly 1 live row per table (6 tables x 1 = 6) went
+stale the moment C9b stopped being a no-op. **Fix:** C1b now asserts 7, with a comment tracing the
+dependency back to C9b so the next person doesn't have to re-derive it. This is the reason the
+Evidence rule exists — reasoning from the schema alone (what the earlier C9a/C9b fix did) caught
+the *intended* defect but not this second-order fixture interaction; only actually running the
+suite end-to-end surfaced it.
+
+**Defect 5 (stale test, not new) — `p3_7_inventory_sync.sql` I10: `new row for relation
+"sync_operations" violates check constraint "sync_operations_domain_operation_check"`.** I10 used
+`domain_operation = 'inventory.consume'`, commented "allowlisted, deliberately unbuilt" — stale on
+two counts. BLOCKER-026 removed `inventory.consume`/`.receive`/`.transfer` from the allowlist
+entirely (confirmed via `grep` of `sync_operations_domain_operation_check` in the baseline: not
+present), so the row fails at INSERT time with a raw constraint violation instead of ever reaching
+the dispatcher's `unsupported_operation_type` REJECTED path this test means to exercise. **Fix:**
+switched to `expense.reverse` — same fix, same reasoning, already applied to
+`p3_7_protocol_correctness.sql` A3 and `p3_7_sync_apply_and_pull.sql` T3 earlier this same day;
+confirmed via `grep` that `process_sync_batch()`'s dispatch branch handles `expense.create` but has
+no `expense.reverse` branch (BLOCKER-028, deliberately deferred).
+
+**Confirmed unchanged, not a surprise:** `security_multiorg_sync.sql` S13 failed on exactly the
+already-documented `rate_limit_events` gap (log: `[RLS] rate_limit_events: no policies defined
+(deny-all, almost certainly unintended)`) — nothing new, not touched.
+
+**State after this entry:** two genuine environment/test bugs found and fixed (neither reachable
+without a real end-to-end run — Defect 4 is a cross-test fixture side effect, Defect 5 needed the
+actual CHECK constraint in place). `sql-tests` on the next push should fail on exactly one file,
+`security_multiorg_sync.sql`, for the one item that has always required an actual human security
+decision (already in `BLOCKERS.md`/`NOTIFICATIONS.md`) rather than a guess. Not pushed yet as of
+this entry — see the next one for the result.
+
+**Files changed:** `tests/sql/catalog_read_rls.sql` (C1b), `tests/sql/p3_7_inventory_sync.sql`
+(I10).
+
+---
+
 ## 2026-09-01 (later same day) · First real GitHub Actions run of the sql-tests job — 2 new defects found and fixed; 1 stale test corrected
 
 **Context:** the EC2 validation below was, by its own admission, "strong evidence, not an ironclad

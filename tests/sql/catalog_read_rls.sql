@@ -273,9 +273,17 @@ FROM (
 
 -- C1b -- the positive half: org A does see its own live rows. Without this, C1 would
 -- also pass if RLS were denying everything for the wrong reason.
+--
+-- 7, not 6: C9b (above) now successfully inserts a second live product named
+-- "Deleted Product A" into public.products for ORG_A, proving the BLOCKER-010a fix
+-- lets a soft-deleted name be reused -- that insert persists in this same transaction,
+-- so products carries 2 live rows by the time this count runs, not 1. Found the same
+-- pass C9a/C9b were corrected (2026-09-01, first real GitHub Actions run): C1b's
+-- expected count went stale the moment C9b started actually succeeding instead of
+-- catching a unique_violation.
 INSERT INTO _results
-SELECT 'C1b org A sees exactly its own 6 live rows',
-       sum(own_rows) = 6,
+SELECT 'C1b org A sees exactly its own 7 live rows',
+       sum(own_rows) = 7,
        'own live rows visible = ' || sum(own_rows)
 FROM (
   SELECT count(*) AS own_rows FROM public.product_categories
