@@ -831,4 +831,92 @@ grant unless explicitly revoked in the same migration. Regression guard added:
 open item), `customer.soft_delete` (deliberately — not in `domain_operation`'s CHECK
 constraint), `depends_on_operation_id` enforcement, true cursor-expiry-via-retention-purge,
 per-supervisor manager-configurable permission overrides (BLOCKER-025). P3.7's
-`domain_operation` allowlist is now fully covered except `expense.reverse`.
+`domain_operation` allowlist was fully covered except `expense.reverse` as of 2026-08-31 —
+**superseded 2026-09-01 by AD-022**, which removed `production.start`/`.cancel`/
+`.record_output`/`.record_waste` from the allowlist entirely (raw-ingredient/production
+tracking deactivated for MVP). The allowlist today has 11 values; `expense.reverse` remains
+the only one without a handler.
+
+---
+
+## AD-022 — Raw-ingredient/production stock tracking deactivated for MVP; finished-product stock only · APPROVED, IMPLEMENTED 2026-09-01
+
+**Decision (product owner, direct instruction):** the MVP will not track bakery stock at the
+raw-ingredient level (flour, sugar, and anything else "related to making the product") —
+that is explicitly a later-version feature. Finished-product stock ("how many loaves are
+left to sell") stays in scope and continues to work exactly as before. Reporting follows the
+same line: the MVP dashboard shows revenue and cash collected only; COGS, gross profit, and
+gross margin are out of scope for v1 (see BLOCKER-018 below, resolved by this same decision).
+
+**Why deactivate rather than delete.** By the time this decision was made, P4.2 (inventory)
+and P4.3 (production) were already built, tested, and shipped in the mobile app —
+`ingredients`, `recipes`/`recipe_ingredients` (BOM), `production_batches`/
+`production_batch_ingredients`, and their RPCs all existed live with real accumulated data
+(33 ingredients, 32 recipes, 91 production batches at the time of this migration). Deleting
+any of that would be exactly the kind of destructive, hard-to-reverse action CLAUDE.md's
+Executable Actions guidance flags for extra care, and would throw away tested v2 groundwork
+for no product benefit today. The chosen shape instead: **turn off every reachable path to
+the feature, keep every table/function/migration in place**, so v2 re-enabling it is reversing
+grants and a handful of `IF` conditions, not rebuilding anything.
+
+**What was actually found and changed, verified live (not assumed) via `mcp__supabase__execute_sql`
+before and after, migration `20260901160000_deactivate_ingredient_tracking_for_mvp.sql`:**
+
+1. `authenticated` held direct `INSERT/SELECT/UPDATE` on `ingredients`, `recipes`,
+   `recipe_ingredients`, `production_batches`, `production_batch_ingredients`, and
+   `ingredient_stock_levels` — confirmed via `information_schema.role_table_grants`, then
+   `REVOKE ALL ... FROM authenticated` on all six.
+2. `adjust_stock()` and the two generic sync handlers `apply_inventory_adjust()`/
+   `apply_inventory_waste()` are `SECURITY DEFINER` and branch on
+   `item_type IN ('ingredient','product')` — revoking table grants alone does not stop a
+   `SECURITY DEFINER` function from touching an *existing* ingredient's stock, since it
+   bypasses the caller's own grants. Each narrowed to accept `item_type='product'` only; the
+   `'ingredient'` branch is left in the function body (not deleted) so v2 can re-enable it by
+   reverting one `IF`.
+3. `apply_production_start`/`.cancel`/`.record_output`/`.record_waste` are 100%
+   production-batch logic with no product-only path to preserve (unlike inventory.adjust/
+   .waste, which still has a real product-only use). Confirmed unreachable directly by
+   `authenticated` already (only reachable via `process_sync_batch()`'s dispatcher); closed
+   by removing all four values from `sync_operations`/`sync_changes`'s
+   `domain_operation` CHECK constraints — same mechanism BLOCKER-026/027 already used to
+   remove `inventory.receive`/`.consume`/`.transfer`/`production.complete`. Confirmed zero
+   live rows used any of the four values before tightening the constraint.
+4. `complete_production_batch(uuid,numeric,jsonb,uuid)`/`fail_production_batch(uuid,text,jsonb,uuid)`
+   (the 4-arg, online-flow overloads P9.5's screen called directly) had their `authenticated`
+   `EXECUTE` grant revoked too — defense in depth, now that no client can create a
+   `production_batches` row for them to act on anyway. The 5-arg internal variants were
+   already `service_role`-only (AD-021's own security fix).
+5. `stock_movements.item_type`'s existing `'ingredient'` CHECK value, and every already-written
+   ingredient-type `stock_movements` row, are untouched — CLAUDE.md rule 8 (no silent deletes
+   of business-critical/immutable ledger data) applies regardless of feature scope.
+
+**Frontend:** the "Batches" nav button (→ P9.5's production screen) removed from the catalog
+screen's header; the route/screen files themselves are untouched, just unreachable from
+normal navigation. P9.4's warehouse-detail screen (`app/inventory/[warehouseId].tsx`) had its
+ingredient/product tab toggle removed entirely — it now always shows product stock only,
+since `useIngredientStockLevels`/`useIngredients` and the ingredient branch of `StockRow`
+would otherwise present a UI backed by an RPC that now rejects every call it could make.
+
+**Test suites updated to match, not just left to fail:** `p3_7_inventory_sync.sql` and
+`inventory_write_rls.sql` were largely testing `adjust_stock()`/`apply_inventory_adjust()`/
+`apply_inventory_waste()`'s generic mechanics (validation order, role-gating, negative-stock
+rejection, replay, warehouse checks) rather than anything ingredient-specific, so their
+assertions were re-pointed at the existing product-only path, with one new test added to each
+proving `item_type='ingredient'` is now refused. `inventory_read_rls.sql`'s RLS-visibility
+assertions touching `ingredient_stock_levels` were removed (a bare `SELECT` from that table as
+`authenticated` now raises `42501` before RLS is even evaluated — leaving those assertions as
+written would abort the whole test transaction on an uncaught error, not fail one row
+cleanly) and replaced with an explicit denial proof. `p3_7_production_sync.sql` and
+`p3_7_production_output_waste_sync.sql` had no product-only fallback available at all (unlike
+inventory), so both were rewritten from their original 400+/580+-line suites down to short
+files proving the CHECK-constraint rejection and the continued non-executability of the
+handler functions — the original detailed suites (including a real tenant-scoping defect they
+found and fixed in `guard_production_batch_transition()`) remain recoverable from git history
+for whenever v2 reintroduces these `domain_operation` values.
+
+**Resolves BLOCKER-018** (no mechanism captures ingredient/purchase cost, so weighted-average
+COGS cannot be computed) **by descope, not by building the missing mechanism**: with no
+ingredient-level stock tracking in MVP at all, there is no COGS to compute from, and the
+reporting dashboard is scoped to revenue/cash only for v1. `docs/REPORTING-MODEL.md` §85's
+weighted-average-costing lock still stands as the eventual v2 method; nothing here contradicts
+it, it just isn't reachable from an MVP that carries no ingredient cost data.

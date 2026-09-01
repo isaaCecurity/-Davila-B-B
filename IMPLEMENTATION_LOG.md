@@ -5,6 +5,116 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later still) · AD-022 — raw-ingredient/production stock tracking deactivated for MVP; BLOCKER-018 resolved by descope
+
+**Context:** while picking the next backend problem to work on, walked through BLOCKER-018
+(no mechanism captures ingredient purchase cost, so weighted-average COGS can't be computed)
+with the user as a candidate. They corrected the premise directly: for MVP, raw-ingredient
+stock (flour, sugar, and anything else related to making the product) is not being tracked at
+all — that's a later-version feature. Finished-product stock ("how many loaves are left")
+stays in scope. Two follow-up rounds of clarifying questions (AskUserQuestion) settled: (1)
+finished-product stock matters, raw ingredients don't; (2) the MVP dashboard shows revenue and
+cash only, no COGS/profit; (3) on what to do with the already-shipped P4.2/P4.3 code — "no
+ingredient tracking in the frontend for the MVP, and if we leave it in the backend we should
+deactivate it." Recorded as **AD-022** in `ARCHITECTURE_DECISIONS.md` — full decision record
+there; this entry is the execution trail.
+
+**Blast-radius audit before touching anything, all live-verified via `mcp__supabase__execute_sql`
+against project `tvfyxpafbpnkneujcnvr`, not assumed:**
+- `information_schema.role_table_grants`: `authenticated` held direct `INSERT/SELECT/UPDATE`
+  on `ingredients`, `recipes`, `recipe_ingredients`, `production_batches`,
+  `production_batch_ingredients`, `ingredient_stock_levels` — the actual PostgREST write (and
+  read) surface, not just the RPC layer.
+- Searched every function body for `production_batch%`/`recipe_ingredient%`/`ingredient%`
+  references: found `adjust_stock()`, `apply_inventory_adjust()`, `apply_inventory_waste()`
+  (generic, item_type-branching — narrow, don't remove), `apply_production_start/.cancel/
+  .record_output/.record_waste` (100% production-batch logic, no product-only path),
+  `apply_stock_movement()` (generic trigger infra, leave alone), `complete_production_batch`/
+  `fail_production_batch` (both overloads), and `return_driver_trip`/`verify_trip_loading`
+  (driver-trip loading, P9.3 — a different, unrelated, already-tested feature that happens to
+  share a generic `item_type` parameter; deliberately NOT touched).
+- Confirmed the four `production.*` `domain_operation` values had zero live `sync_operations`/
+  `sync_changes` rows before tightening the CHECK constraint (no `NOT VALID` needed).
+- Confirmed `apply_production_*` handlers were already unreachable directly by `authenticated`
+  (`has_function_privilege` false for all four) — only reachable via `process_sync_batch()`'s
+  dispatcher, itself gated by the CHECK constraint being tightened.
+
+**Migration applied live via `mcp__supabase__apply_migration`
+(`deactivate_ingredient_tracking_for_mvp`), then captured as
+`supabase/migrations/20260901160000_deactivate_ingredient_tracking_for_mvp.sql` and patched
+into the regenerated baseline (`20260809_live_schema.sql`) by hand-mirroring the exact same
+edits rather than a fresh full re-dump — precise because the delta was already fully known
+from applying it live, not a shortcut taken to skip verification:**
+1. `REVOKE ALL ... FROM authenticated` on the six tables above.
+2. `adjust_stock()`, `apply_inventory_adjust()`, `apply_inventory_waste()`: narrowed their
+   `item_type` check to `'product'` only (was `IN ('ingredient','product')`). The `'ingredient'`
+   branch of each function body is left in place, not deleted, for a one-line v2 revert.
+3. `sync_operations_domain_operation_check`/`sync_changes_domain_operation_check`: dropped and
+   re-added without `production.start`/`.cancel`/`.record_output`/`.record_waste` — same
+   mechanism BLOCKER-026/027 already used for `inventory.receive`/`.consume`/`.transfer`/
+   `production.complete`.
+4. `REVOKE EXECUTE ... FROM authenticated` on `complete_production_batch(uuid,numeric,jsonb,uuid)`/
+   `fail_production_batch(uuid,text,jsonb,uuid)` (the 4-arg online-flow overloads) — defense in
+   depth, now that no client can create a batch for them to act on.
+
+**Verified functionally live, not just structurally**, in rolled-back transactions: set a real
+JWT claim for an owner in a tenant with a real ingredient row, called `adjust_stock(...,
+'ingredient', ...)` — got the new, intended error message, not a generic failure. Inserted a
+`sync_operations` row with `domain_operation='production.start'` — got `23514` from the CHECK
+constraint. Re-ran `function_privilege_audit.sql`'s Check 1/Check 2 queries live — 0/0, and
+confirmed `complete_production_batch`/`fail_production_batch`'s two overloads are now
+*identically* non-executable (no longer a mismatch to allowlist, though the allowlist entry
+was kept as a documented no-op rather than churned).
+
+**Frontend** (`bakeflow-frontend/apps/mobile`): removed the "Batches" nav button from
+`app/index.tsx` (P9.5 stays in the repo, just unreachable from normal navigation).
+`app/inventory/[warehouseId].tsx` (P9.4 detail screen) had its ingredient/product tab toggle
+removed entirely — `useIngredientStockLevels`/`useIngredients` and the ingredient branch of
+`StockRow` deleted, screen now always shows product stock. `corepack npm run typecheck`,
+`lint`, and `test` (workspace-wide) all clean after the change.
+
+**Test suites updated to match reality, not left to fail red:**
+- `p3_7_inventory_sync.sql`, `inventory_write_rls.sql`: both were mostly testing
+  `adjust_stock()`/`apply_inventory_adjust()`/`apply_inventory_waste()`'s generic mechanics
+  (validation order, role-gating, negative-stock rejection, replay, warehouse/branch checks),
+  not anything ingredient-specific — re-pointed at the existing product-only path (using
+  `fixtures.sql`'s seeded product variants / the file's own existing product fixture), each
+  with one new test added (`I0`, `A13`) proving `item_type='ingredient'` is now refused.
+- `inventory_read_rls.sql`: RLS-visibility assertions touching `ingredient_stock_levels`
+  removed from their `UNION ALL` blocks — a bare `SELECT` from that table as `authenticated`
+  now raises `42501` before RLS is even evaluated, and leaving it in an unguarded top-level
+  statement would abort the whole transaction on an uncaught error rather than fail one
+  assertion cleanly. Replaced with an explicit `I8` denial proof (`DO` block, catches
+  `insufficient_privilege`, asserts `SQLSTATE='42501'`).
+- `p3_7_customer_sync.sql` D1: its anchor string (an exact `pg_get_constraintdef()` match,
+  itself only just re-anchored earlier this same day for BLOCKER-026/027) updated again to
+  the new, narrower `domain_operation` allowlist.
+- `p3_7_production_sync.sql`/`p3_7_production_output_waste_sync.sql`: no product-only fallback
+  exists for these (batches are inherently recipe/ingredient-bound), so both rewritten from
+  their original 432/586-line suites down to short files proving the CHECK-constraint
+  rejection (`P0a`/`P0b`, `O0a`/`O0b`) and the continued/newly-flipped non-executability of the
+  handler/RPC functions (`S1`-`S6` in the output/waste file — S5/S6 now assert the *opposite*
+  of what they did before, since AD-022 revoked the 4-arg overloads' `authenticated` grant that
+  S5/S6 used to confirm existed). Original detailed suites (including the real tenant-scoping
+  defect they found and fixed in `guard_production_batch_transition()`) remain recoverable from
+  git history for a future v2 reactivation.
+- `function_privilege_audit.sql`: updated the `known_intentional_mismatches` comment for
+  `complete_production_batch`/`fail_production_batch` — the mismatch it used to document no
+  longer exists (both overloads are now identically non-executable); the allowlist entry
+  itself was left in place as a harmless no-op rather than removed.
+
+**Documentation:** `ARCHITECTURE_DECISIONS.md` AD-022 (full decision record), `BLOCKERS.md`
+BLOCKER-018 marked RESOLVED (by descope, via AD-022), `BACKEND_ROADMAP.md` P4.2b/P4.3/P9.4/
+P9.5/P5.8 rows and the top-of-file "Current State" summary updated to describe the
+deactivation rather than plain COMPLETE.
+
+**Verification:** `.venv/Scripts/python.exe -m pytest -q` — 12 passed. Frontend typecheck/
+lint/unit tests — all clean. SQL suite changes await confirmation from the next real GitHub
+Actions run (the same throwaway-database CI pipeline validated earlier this same day) — not
+recorded as passing here until that happens, per the Evidence rule.
+
+---
+
 ## 2026-09-01 (later still) · Third real GitHub Actions run confirms the fix; rate_limit_events RLS "gap" turns out to already be a decided, verified design — allowlisted at the test level, not guessed
 
 **Context:** commit `feb327a5` (previous entry) pushed and triggered run `33527874910`. Result:

@@ -80,13 +80,9 @@ export default function CatalogScreen(): React.JSX.Element {
           >
             <Text className="text-sm font-medium text-neutral-900">Stock</Text>
           </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push('/production')}
-            className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
-          >
-            <Text className="text-sm font-medium text-neutral-900">Batches</Text>
-          </Pressable>
+          {/* Production batches (AD-022): raw-ingredient tracking is deactivated for MVP,
+              and production batches are entirely recipe/ingredient machinery -- no
+              product-only path to keep. The screen and its route stay in the repo for v2. */}
           <Pressable
             accessibilityRole="button"
             onPress={() => router.push('/delivery')}

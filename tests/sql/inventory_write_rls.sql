@@ -1,8 +1,16 @@
--- BakeFlow — inventory write-path security suite (A0..A12) — P4.2b
+-- BakeFlow — inventory write-path security suite (A0..A13) — P4.2b
 --
 -- STATUS: EXECUTED 2026-08-15 against project tvfyxpafbpnkneujcnvr — 17/17 passed.
 -- The first run failed A11 for a test reason, not a product one; see the note at A11.
 --
+-- UPDATED 2026-09-01 (AD-022, ingredient/raw-material tracking deactivated for MVP):
+-- adjust_stock() now rejects item_type='ingredient' outright. A1/A2/A7/A8/A10/A6/A5/A4a-d
+-- were always testing adjust_stock()'s generic RPC mechanics (absolute-target semantics,
+-- idempotency, role gating, negative-target/invalid-reason rejection, branch/warehouse
+-- checks) rather than anything ingredient-specific, so all switched to item_type='product'
+-- against the already-fixtured variant e4000000-...-a1 (A3/A4c/A4d already used it). A13
+-- added to prove the deactivation itself. A0 (direct table-insert denial) is unaffected --
+-- it tests a GRANT, not adjust_stock()'s item_type branch.
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/inventory_write_rls.sql
 --
 -- WHAT IT PROVES, and why the write path is an RPC rather than an insert.
@@ -86,22 +94,22 @@ BEGIN
 
   -- A1 -- absolute target, exact to 4dp.
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count');
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count');
     s := 'ok';
   EXCEPTION WHEN OTHERS THEN s := SQLSTATE||' '||SQLERRM; END;
-  SELECT quantity_on_hand::text INTO v FROM public.ingredient_stock_levels
-   WHERE warehouse_id='e6000000-0000-4000-8000-0000000000a1' AND ingredient_id='e5000000-0000-4000-8000-0000000000a1';
+  SELECT quantity_on_hand::text INTO v FROM public.product_stock_levels
+   WHERE warehouse_id='e6000000-0000-4000-8000-0000000000a1' AND product_variant_id='e4000000-0000-4000-8000-0000000000a1';
   INSERT INTO _r VALUES ('A1 branch_manager adjustment sets the absolute target exactly',
     s='ok' AND v='12345678901234.5678', 'result='||s||' level='||coalesce(v,'<none>'));
 
   -- A2 -- absolute-target semantics give idempotency for free.
-  r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count again');
-  SELECT count(*) INTO n FROM public.stock_movements WHERE ingredient_id='e5000000-0000-4000-8000-0000000000a1';
+  r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count again');
+  SELECT count(*) INTO n FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a1';
   INSERT INTO _r VALUES ('A2 replaying the same target is a no-op, not a second movement',
     (r->>'unchanged')='true' AND n=1, 'unchanged='||coalesce(r->>'unchanged','<none>')||' movements='||n);
 
   -- A10 -- the actor is stamped by the server, not supplied by the caller.
-  SELECT created_by INTO cb FROM public.stock_movements WHERE ingredient_id='e5000000-0000-4000-8000-0000000000a1' LIMIT 1;
+  SELECT created_by INTO cb FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a1' LIMIT 1;
   INSERT INTO _r VALUES ('A10 created_by is stamped from auth.uid() by the RPC',
     cb='e1000000-0000-4000-8000-000000000001', 'created_by = '||coalesce(cb::text,'<null>'));
 
@@ -128,26 +136,26 @@ BEGIN
     'audit rows visible to branch_manager = '||n);
 
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',-1.0,'adjustment',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',-1.0,'adjustment',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A7 a negative target quantity is refused', s LIKE '%cannot be negative%', 'msg = '||left(s,60));
 
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',5.0,'sale',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',5.0,'sale',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A12 reason=sale is refused by adjust_stock', s LIKE '%invalid stock adjustment reason%', 'msg = '||left(s,60));
 
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',99999999999999.0,'waste',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',99999999999999.0,'waste',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A8 an increase cannot be recorded as waste', s LIKE '%cannot be recorded as waste%', 'msg = '||left(s,60));
 
   -- A6 -- branch isolation on the WRITE path.
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a2','ingredient','e5000000-0000-4000-8000-0000000000a1',5.0,'adjustment',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a2','product','e4000000-0000-4000-8000-0000000000a1',5.0,'adjustment',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A6 branch isolation holds on WRITE (unassigned branch refused)', s LIKE '%branch access denied%', 'msg = '||left(s,60));
@@ -155,7 +163,7 @@ BEGIN
   -- A5 -- a foreign warehouse is refused with the same message as a missing one, so the
   -- caller cannot probe which ids exist elsewhere.
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000b1','ingredient','e5000000-0000-4000-8000-0000000000a1',5.0,'adjustment',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000b1','product','e4000000-0000-4000-8000-0000000000a1',5.0,'adjustment',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A5 cross-organization warehouse is refused (no existence leak)', s LIKE '%not found or branch access denied%', 'msg = '||left(s,60));
@@ -165,6 +173,15 @@ BEGIN
     s := 'ok';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A3 opening_balance establishes a level', s='ok', 'result = '||left(s,60));
+
+  -- A13 -- AD-022: ingredient tracking is deactivated for MVP; adjust_stock() must refuse
+  -- item_type='ingredient' outright, on an item that legitimately exists in this tenant.
+  BEGIN
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',5.0,'adjustment',NULL);
+    s := 'no error';
+  EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
+  INSERT INTO _r VALUES ('A13 item_type=ingredient is refused (AD-022 deactivation)',
+    s LIKE '%ingredient tracking is not available%', 'msg = '||left(s,70));
 END
 $a$;
 
@@ -177,12 +194,12 @@ DO $a4$
 DECLARE s text; r jsonb;
 BEGIN
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',1.0,'adjustment',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',1.0,'adjustment',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A4a cashier cannot record an adjustment', s LIKE '%insufficient_role%', 'msg = '||left(s,55));
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','ingredient','e5000000-0000-4000-8000-0000000000a1',1.0,'waste',NULL);
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',1.0,'waste',NULL);
     s := 'no error';
   EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
   INSERT INTO _r VALUES ('A4b cashier cannot record waste either', s LIKE '%insufficient_role%', 'msg = '||left(s,55));
@@ -220,7 +237,7 @@ BEGIN
   UPDATE _r SET passed = (n>=1), detail = 'audit rows (RLS bypassed) = '||n
    WHERE test LIKE 'A11 an audit_log entry%';
   SELECT count(*) INTO m FROM public.stock_movements
-   WHERE ingredient_id='e5000000-0000-4000-8000-0000000000a1';
+   WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a1';
   INSERT INTO _r VALUES ('A11b one audit row per ledger movement', n>=m, 'audit='||n||' movements='||m);
 END
 $a11$;

@@ -4,6 +4,16 @@
 --
 -- EXECUTED 2026-08-30 against project tvfyxpafbpnkneujcnvr: 12/12 passed.
 --
+-- REWRITTEN 2026-09-01 (AD-022, ingredient/raw-material tracking deactivated for MVP):
+-- apply_inventory_adjust()/apply_inventory_waste() now reject item_type='ingredient'
+-- outright. This suite's actual subject was always the generic handler mechanics
+-- (validation order, role-gating, negative-stock rejection, replay, warehouse checks) --
+-- none of that is specific to ingredients, so every test below now exercises the same
+-- assertions against item_type='product' instead, using fixtures.sql's two seeded product
+-- variants (PV_MAIN, PV_REPLAY). A new I0 test was added specifically to prove the
+-- deactivation itself: item_type='ingredient' must now be REJECTED. See
+-- IMPLEMENTATION_LOG.md 2026-09-01 for the full rationale.
+--
 -- Scope: apply_inventory_adjust(), apply_inventory_waste(), their dispatch wiring in
 -- apply_sync_operation(), and their EXECUTE grants. Does NOT re-test
 -- process_sync_batch_context_validated()'s generic idempotency/context/conflict machinery --
@@ -69,7 +79,9 @@
 --     'customers'/'tickets' entity_id being the movement's own id, not a pre-existing entity.
 --
 -- Covers:
---   I1  branch_manager inventory.adjust +10 on an ingredient -> APPLIED, on-hand +10, revision 1
+--   I0  inventory.adjust with item_type='ingredient' -> REJECTED 22023 (AD-022: ingredient
+--       tracking deactivated for MVP -- proves the deactivation itself, not a pre-existing case)
+--   I1  branch_manager inventory.adjust +10 on a product -> APPLIED, on-hand +10, revision 1
 --   I2  missing warehouse_id -> REJECTED, 22023 invalid_request
 --   I3  quantity_delta = 0 -> REJECTED, 22023 invalid_request
 --   I4  driver-only (not owner/admin/branch_manager) cannot adjust -> REJECTED, 42501
@@ -82,7 +94,7 @@
 --       second stock_movements row
 --   I10 inventory.consume (allowlisted, deliberately unbuilt -- BLOCKER-026) -> REJECTED,
 --       unsupported_operation_type, exactly like any other not-yet-built entity
---   W1  baker inventory.waste -2 on an ingredient -> APPLIED, on-hand -2
+--   W1  baker inventory.waste -2 on a product -> APPLIED, on-hand -2
 --   W3  driver-only (not owner/admin/branch_manager/baker) cannot record waste -> REJECTED, 42501
 --   W4  inventory.waste with a positive quantity_delta -> REJECTED, 22023 (waste must be a
 --       negative delta -- the one place adjust and waste deliberately diverge)
@@ -113,6 +125,25 @@ select set_config('request.jwt.claims', json_build_object(
   'roles', array['driver','branch_manager']
 )::text, true);
 
+-- =================== I0: item_type='ingredient' -> REJECTED (AD-022) ===================
+do $$
+declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'stock_movements',
+      'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
+        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',5)
+    )));
+  select * into v_row from public.sync_operations where operation_id = v_opid;
+  insert into _results values ('I0 item_type=ingredient -> REJECTED 22023 (AD-022 deactivation)',
+    v_row.status='REJECTED' and v_row.error_code='22023', v_row.status||' '||coalesce(v_row.error_code,''));
+end $$;
+
 -- =================== I6: cross-tenant (org C, not a member) ===================
 do $$
 declare v_opid uuid := gen_random_uuid(); v_ok boolean := false; v_msg text;
@@ -126,7 +157,7 @@ begin
         'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
         'device_created_at', now()::text,
         'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-          'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',5)
+          'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',5)
       )));
   exception when others then
     v_ok := true; v_msg := sqlerrm;
@@ -146,22 +177,22 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','00000000-0000-4000-8000-000000000000',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',5)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',5)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I7 nonexistent warehouse_id -> REJECTED P0001',
     v_row.status='REJECTED' and v_row.error_code='P0001', v_row.status||' '||coalesce(v_row.error_code,''));
 end $$;
 
--- =================== I1: branch_manager adjusts flour +10 ===================
+-- =================== I1: branch_manager adjusts a product +10 ===================
 do $$
 declare
   v_opid uuid := gen_random_uuid();
   v_row public.sync_operations;
   v_before numeric; v_after numeric;
 begin
-  select coalesce(quantity_on_hand,0) into v_before from public.ingredient_stock_levels
-   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and ingredient_id='b1000000-0000-4000-8000-00000000da01';
+  select coalesce(quantity_on_hand,0) into v_before from public.product_stock_levels
+   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and product_variant_id='af000000-0000-4000-8000-00000000da01';
 
   perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
     jsonb_build_array(jsonb_build_object(
@@ -171,11 +202,11 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',10)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',10)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
-  select quantity_on_hand into v_after from public.ingredient_stock_levels
-   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and ingredient_id='b1000000-0000-4000-8000-00000000da01';
+  select quantity_on_hand into v_after from public.product_stock_levels
+   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and product_variant_id='af000000-0000-4000-8000-00000000da01';
 
   insert into _results values ('I1 branch_manager inventory.adjust +10 -> APPLIED, level +10, revision 1',
     v_row.status = 'APPLIED' and (v_row.result->>'revision')='1' and v_after = v_before + 10,
@@ -193,7 +224,7 @@ begin
       'entity_id', gen_random_uuid(), 'entity_type', 'stock_movements',
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
-      'payload', jsonb_build_object('item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',5)
+      'payload', jsonb_build_object('item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',5)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I2 missing warehouse_id -> REJECTED 22023',
@@ -212,7 +243,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',0)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',0)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I3 quantity_delta=0 -> REJECTED 22023',
@@ -231,7 +262,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',-999999999)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',-999999999)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I5 adjust to negative -> REJECTED P0001/negative_stock_rejected',
@@ -253,11 +284,11 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da02','quantity_delta',3));
+        'item_type','product','item_id','82218a93-83fe-464a-819e-641987a8e3b1','quantity_delta',3));
   v_res1 := public.process_sync_batch('f8000000-0000-4000-8000-000000000001', jsonb_build_array(v_op));
   v_res2 := public.process_sync_batch('f8000000-0000-4000-8000-000000000001', jsonb_build_array(v_op));
   select count(*) into v_count from public.stock_movements where reference_id='b0000000-0000-4000-8000-00000000da01'
-    and ingredient_id='b1000000-0000-4000-8000-00000000da02' and quantity_delta=3;
+    and product_variant_id='82218a93-83fe-464a-819e-641987a8e3b1' and quantity_delta=3;
   insert into _results values ('I9 replay same operation_id -> second call replayed=true, one movement',
     (v_res2->'results'->0->>'replayed')='true' and v_count=1,
     format('res1=%s res2=%s count=%s', v_res1, v_res2, v_count));
@@ -283,7 +314,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',-1)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',-1)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I10 unsupported domain_operation -> REJECTED unsupported_operation_type',
@@ -313,7 +344,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',5)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',5)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('I4 driver-only inventory.adjust -> REJECTED 42501',
@@ -332,7 +363,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.waste',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',-1)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',-1)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('W3 driver-only inventory.waste -> REJECTED 42501',
@@ -356,8 +387,8 @@ declare
   v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
   v_before numeric; v_after numeric;
 begin
-  select coalesce(quantity_on_hand,0) into v_before from public.ingredient_stock_levels
-   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and ingredient_id='b1000000-0000-4000-8000-00000000da03';
+  select coalesce(quantity_on_hand,0) into v_before from public.product_stock_levels
+   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and product_variant_id='af000000-0000-4000-8000-00000000da01';
 
   perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
     jsonb_build_array(jsonb_build_object(
@@ -367,11 +398,11 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.waste',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da03','quantity_delta',-2)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',-2)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
-  select quantity_on_hand into v_after from public.ingredient_stock_levels
-   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and ingredient_id='b1000000-0000-4000-8000-00000000da03';
+  select quantity_on_hand into v_after from public.product_stock_levels
+   where warehouse_id='b0000000-0000-4000-8000-00000000da01' and product_variant_id='af000000-0000-4000-8000-00000000da01';
   insert into _results values ('W1 baker inventory.waste -2 -> APPLIED, level -2',
     v_row.status='APPLIED' and v_after = v_before - 2, format('status=%s before=%s after=%s',v_row.status,v_before,v_after));
 end $$;
@@ -388,7 +419,7 @@ begin
       'operation_type', 'EVENT', 'domain_operation', 'inventory.waste',
       'device_created_at', now()::text,
       'payload', jsonb_build_object('warehouse_id','b0000000-0000-4000-8000-00000000da01',
-        'item_type','ingredient','item_id','b1000000-0000-4000-8000-00000000da01','quantity_delta',2)
+        'item_type','product','item_id','af000000-0000-4000-8000-00000000da01','quantity_delta',2)
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
   insert into _results values ('W4 waste with positive quantity_delta -> REJECTED 22023',

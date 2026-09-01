@@ -819,7 +819,7 @@ CREATE TABLE public.sync_changes (
 ,  changed_by uuid
 ,  payload jsonb DEFAULT '{}'::jsonb NOT NULL
 ,  domain_operation text
-,  CONSTRAINT sync_changes_domain_operation_check CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY['ticket.create'::text, 'ticket.transition'::text, 'ticket.item_update'::text, 'inventory.adjust'::text, 'inventory.waste'::text, 'production.start'::text, 'production.record_output'::text, 'production.record_waste'::text, 'production.cancel'::text, 'payment.create'::text, 'payment.reverse'::text, 'expense.create'::text, 'expense.reverse'::text, 'customer.create'::text, 'customer.update'::text]))))
+,  CONSTRAINT sync_changes_domain_operation_check CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY['ticket.create'::text, 'ticket.transition'::text, 'ticket.item_update'::text, 'inventory.adjust'::text, 'inventory.waste'::text, 'payment.create'::text, 'payment.reverse'::text, 'expense.create'::text, 'expense.reverse'::text, 'customer.create'::text, 'customer.update'::text]))))
 ,  CONSTRAINT sync_changes_operation_type_check CHECK ((operation_type = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'SOFT_DELETE'::text, 'EVENT'::text, 'COMMAND'::text, 'CORRECTION'::text])))
 ,  CONSTRAINT sync_changes_revision_check CHECK ((revision > 0))
 ,  CONSTRAINT sync_changes_pkey PRIMARY KEY (sequence_id)
@@ -890,7 +890,7 @@ CREATE TABLE public.sync_operations (
 ,  client_sequence bigint
 ,  CONSTRAINT sync_operations_base_revision_check CHECK (((base_revision IS NULL) OR (base_revision > 0)))
 ,  CONSTRAINT sync_operations_client_sequence_check CHECK (((client_sequence IS NULL) OR (client_sequence >= 0)))
-,  CONSTRAINT sync_operations_domain_operation_check CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY['ticket.create'::text, 'ticket.transition'::text, 'ticket.item_update'::text, 'inventory.adjust'::text, 'inventory.waste'::text, 'production.start'::text, 'production.record_output'::text, 'production.record_waste'::text, 'production.cancel'::text, 'payment.create'::text, 'payment.reverse'::text, 'expense.create'::text, 'expense.reverse'::text, 'customer.create'::text, 'customer.update'::text]))))
+,  CONSTRAINT sync_operations_domain_operation_check CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY['ticket.create'::text, 'ticket.transition'::text, 'ticket.item_update'::text, 'inventory.adjust'::text, 'inventory.waste'::text, 'payment.create'::text, 'payment.reverse'::text, 'expense.create'::text, 'expense.reverse'::text, 'customer.create'::text, 'customer.update'::text]))))
 ,  CONSTRAINT sync_operations_operation_type_check CHECK ((operation_type = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'SOFT_DELETE'::text, 'EVENT'::text, 'COMMAND'::text, 'CORRECTION'::text])))
 ,  CONSTRAINT sync_operations_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'APPLIED'::text, 'REJECTED'::text, 'CONFLICT'::text])))
 ,  CONSTRAINT sync_operations_pkey PRIMARY KEY (id)
@@ -1546,8 +1546,11 @@ BEGIN
       USING errcode = 'P0001', detail = json_build_object('code', 'session_expired')::text;
   END IF;
 
-  IF p_item_type NOT IN ('ingredient','product') THEN
-    RAISE EXCEPTION 'invalid item_type: %',p_item_type
+  -- Ingredient tracking is deactivated for MVP (AD-022): only finished-product stock is
+  -- adjustable through this RPC. The 'ingredient' branch below is left intact, not
+  -- deleted, so v2 can re-enable it by reverting this one check.
+  IF p_item_type <> 'product' THEN
+    RAISE EXCEPTION 'invalid item_type: % (ingredient tracking is not available in this version)',p_item_type
       USING errcode = 'P0001', detail = json_build_object('code', 'invalid_request')::text;
   END IF;
 
@@ -1892,8 +1895,10 @@ BEGIN
     RAISE EXCEPTION 'inventory.adjust payload requires warehouse_id'
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
-  IF v_item_type IS NULL OR v_item_type NOT IN ('ingredient','product') THEN
-    RAISE EXCEPTION 'inventory.adjust payload item_type must be ingredient or product'
+  -- Ingredient tracking is deactivated for MVP (AD-022). Left as a value check, not
+  -- removed, so v2 can re-enable ingredient support with a one-line revert.
+  IF v_item_type IS NULL OR v_item_type <> 'product' THEN
+    RAISE EXCEPTION 'inventory.adjust payload item_type must be product (ingredient tracking is not available in this version)'
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
   IF v_item_id IS NULL THEN
@@ -1944,21 +1949,12 @@ BEGIN
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
 
-  IF v_item_type = 'ingredient' THEN
-    IF NOT EXISTS (SELECT 1 FROM public.ingredients WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
-      RAISE EXCEPTION 'ingredient not found in this organization'
-        USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
-    END IF;
-    SELECT quantity_on_hand INTO v_current FROM public.ingredient_stock_levels
-     WHERE warehouse_id = v_warehouse_id AND ingredient_id = v_item_id;
-  ELSE
-    IF NOT EXISTS (SELECT 1 FROM public.product_variants WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
-      RAISE EXCEPTION 'product variant not found in this organization'
-        USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
-    END IF;
-    SELECT quantity_on_hand INTO v_current FROM public.product_stock_levels
-     WHERE warehouse_id = v_warehouse_id AND product_variant_id = v_item_id;
+  IF NOT EXISTS (SELECT 1 FROM public.product_variants WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
+    RAISE EXCEPTION 'product variant not found in this organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
   END IF;
+  SELECT quantity_on_hand INTO v_current FROM public.product_stock_levels
+   WHERE warehouse_id = v_warehouse_id AND product_variant_id = v_item_id;
 
   v_current := coalesce(v_current, 0);
   v_new := v_current + v_quantity_delta;
@@ -1975,8 +1971,8 @@ BEGIN
     quantity_delta, reason, reference_type, reference_id, note, created_by
   ) VALUES (
     p_operation.tenant_id, v_warehouse.branch_id, v_warehouse_id, v_item_type,
-    CASE WHEN v_item_type = 'ingredient' THEN v_item_id END,
-    CASE WHEN v_item_type = 'product' THEN v_item_id END,
+    NULL,
+    v_item_id,
     v_quantity_delta, 'adjustment', 'manual', v_warehouse_id, v_note, p_operation.actor_id
   ) RETURNING * INTO v_movement;
 
@@ -2011,8 +2007,10 @@ BEGIN
     RAISE EXCEPTION 'inventory.waste payload requires warehouse_id'
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
-  IF v_item_type IS NULL OR v_item_type NOT IN ('ingredient','product') THEN
-    RAISE EXCEPTION 'inventory.waste payload item_type must be ingredient or product'
+  -- Ingredient tracking is deactivated for MVP (AD-022). Left as a value check, not
+  -- removed, so v2 can re-enable ingredient support with a one-line revert.
+  IF v_item_type IS NULL OR v_item_type <> 'product' THEN
+    RAISE EXCEPTION 'inventory.waste payload item_type must be product (ingredient tracking is not available in this version)'
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
   IF v_item_id IS NULL THEN
@@ -2057,21 +2055,12 @@ BEGIN
       USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
   END IF;
 
-  IF v_item_type = 'ingredient' THEN
-    IF NOT EXISTS (SELECT 1 FROM public.ingredients WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
-      RAISE EXCEPTION 'ingredient not found in this organization'
-        USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
-    END IF;
-    SELECT quantity_on_hand INTO v_current FROM public.ingredient_stock_levels
-     WHERE warehouse_id = v_warehouse_id AND ingredient_id = v_item_id;
-  ELSE
-    IF NOT EXISTS (SELECT 1 FROM public.product_variants WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
-      RAISE EXCEPTION 'product variant not found in this organization'
-        USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
-    END IF;
-    SELECT quantity_on_hand INTO v_current FROM public.product_stock_levels
-     WHERE warehouse_id = v_warehouse_id AND product_variant_id = v_item_id;
+  IF NOT EXISTS (SELECT 1 FROM public.product_variants WHERE id = v_item_id AND tenant_id = p_operation.tenant_id) THEN
+    RAISE EXCEPTION 'product variant not found in this organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
   END IF;
+  SELECT quantity_on_hand INTO v_current FROM public.product_stock_levels
+   WHERE warehouse_id = v_warehouse_id AND product_variant_id = v_item_id;
 
   v_current := coalesce(v_current, 0);
   v_new := v_current + v_quantity_delta;
@@ -2086,8 +2075,8 @@ BEGIN
     quantity_delta, reason, reference_type, reference_id, note, created_by
   ) VALUES (
     p_operation.tenant_id, v_warehouse.branch_id, v_warehouse_id, v_item_type,
-    CASE WHEN v_item_type = 'ingredient' THEN v_item_id END,
-    CASE WHEN v_item_type = 'product' THEN v_item_id END,
+    NULL,
+    v_item_id,
     v_quantity_delta, 'waste', 'manual', v_warehouse_id, v_note, p_operation.actor_id
   ) RETURNING * INTO v_movement;
 
@@ -7137,9 +7126,10 @@ GRANT SELECT ON TABLE public.driver_trips TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.driver_trips TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.expenses TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.expenses TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.ingredient_stock_levels TO authenticated;
+-- AD-022 (2026-09-01): ingredient/raw-material tracking deactivated for MVP -- the
+-- `authenticated` grant on ingredient_stock_levels/ingredients was REVOKEd, service_role
+-- only below. See 20260901160000_deactivate_ingredient_tracking_for_mvp.sql.
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.ingredient_stock_levels TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.ingredients TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.ingredients TO service_role;
 GRANT SELECT ON TABLE public.invoices TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.invoices TO service_role;
@@ -7159,9 +7149,9 @@ GRANT INSERT, SELECT, UPDATE ON TABLE public.product_stock_levels TO authenticat
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.product_stock_levels TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.product_variants TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.product_variants TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.production_batch_ingredients TO authenticated;
+-- AD-022 (2026-09-01): production-batch tracking deactivated for MVP (it is entirely
+-- raw-ingredient/recipe machinery) -- `authenticated` grant REVOKEd, service_role only.
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.production_batch_ingredients TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.production_batches TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.production_batches TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.products TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.products TO service_role;
@@ -7169,9 +7159,9 @@ GRANT INSERT, SELECT, UPDATE ON TABLE public.profiles TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.profiles TO service_role;
 GRANT SELECT ON TABLE public.profiles TO supabase_auth_admin;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.rate_limit_events TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.recipe_ingredients TO authenticated;
+-- AD-022 (2026-09-01): recipe/BOM tracking deactivated for MVP alongside ingredients --
+-- `authenticated` grant REVOKEd, service_role only.
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.recipe_ingredients TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.recipes TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.recipes TO service_role;
 GRANT SELECT ON TABLE public.refunds TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.refunds TO service_role;
@@ -7256,8 +7246,10 @@ GRANT EXECUTE ON FUNCTION public.complete_driver_field_sale(p_ticket_id uuid, p_
 GRANT EXECUTE ON FUNCTION public.complete_driver_field_sale(p_ticket_id uuid, p_warehouse_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_driver_trip(p_trip_id uuid, p_settlement_cash_session_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_driver_trip(p_trip_id uuid, p_settlement_cash_session_id uuid) TO service_role;
+-- AD-022 (2026-09-01): production-batch tracking deactivated for MVP -- authenticated
+-- EXECUTE REVOKEd (batches can't be created anyway once the table grant is gone, but
+-- this closes the direct-RPC path explicitly rather than leaving it as a stale grant).
 GRANT EXECUTE ON FUNCTION public.complete_production_batch(p_batch_id uuid, p_actual_quantity numeric, p_ingredient_actuals jsonb, p_warehouse_id uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.complete_production_batch(p_batch_id uuid, p_actual_quantity numeric, p_ingredient_actuals jsonb, p_warehouse_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_production_batch(p_batch_id uuid, p_actual_quantity numeric, p_ingredient_actuals jsonb, p_warehouse_id uuid, p_tenant_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_ticket(p_order_id uuid, p_warehouse_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_ticket(p_order_id uuid, p_warehouse_id uuid) TO service_role;
@@ -7276,7 +7268,6 @@ GRANT EXECUTE ON FUNCTION public.depart_driver_trip(p_trip_id uuid) TO authentic
 GRANT EXECUTE ON FUNCTION public.depart_driver_trip(p_trip_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.enforce_rate_limit(p_tenant_id uuid, p_actor_id uuid, p_scope text, p_limit integer, p_window_minutes integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.fail_production_batch(p_batch_id uuid, p_reason text, p_ingredient_actuals jsonb, p_warehouse_id uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.fail_production_batch(p_batch_id uuid, p_reason text, p_ingredient_actuals jsonb, p_warehouse_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fail_production_batch(p_batch_id uuid, p_reason text, p_ingredient_actuals jsonb, p_warehouse_id uuid, p_tenant_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.get_daily_revenue_summary(p_branch_id uuid, p_date date) TO service_role;
 GRANT EXECUTE ON FUNCTION public.get_daily_revenue_summary(p_branch_id uuid, p_date date) TO authenticated;

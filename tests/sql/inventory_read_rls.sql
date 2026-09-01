@@ -198,12 +198,17 @@ SELECT set_config('request.jwt.claims',
                     'tenant_id','d0000000-0000-4000-8000-0000000000a1',
                     'roles', json_build_array('branch_manager'))::text, true);
 
+-- ingredient_stock_levels dropped from every UNION below (AD-022, 2026-09-01): authenticated
+-- now holds NO grant on it at all, so a plain SELECT referencing it inside one of these
+-- statements would raise an uncaught 42501 and abort the whole transaction before any later
+-- assertion could run -- not fail cleanly into _results the way these suites are designed to.
+-- I8 (below) replaces the old "negative level is readable" check with an explicit proof that
+-- the table is unreachable outright, which is the more important fact now.
 INSERT INTO _results
-SELECT 'I1 org A sees zero rows belonging to org B (all 4 tables)', sum(f)=0,
+SELECT 'I1 org A sees zero rows belonging to org B (3 authenticated-readable tables)', sum(f)=0,
        'foreign rows visible = ' || sum(f)
 FROM (SELECT count(*) AS f FROM public.warehouses             WHERE tenant_id='d0000000-0000-4000-8000-0000000000b1'
   UNION ALL SELECT count(*) FROM public.stock_movements        WHERE tenant_id='d0000000-0000-4000-8000-0000000000b1'
-  UNION ALL SELECT count(*) FROM public.ingredient_stock_levels WHERE tenant_id='d0000000-0000-4000-8000-0000000000b1'
   UNION ALL SELECT count(*) FROM public.product_stock_levels    WHERE tenant_id='d0000000-0000-4000-8000-0000000000b1') s;
 
 -- I2 -- the axis catalog does not have. Same organization, valid tenant claim, other branch.
@@ -212,14 +217,12 @@ SELECT 'I2 branch_manager assigned to A1 sees zero rows from branch A2 (same org
        'branch A2 rows visible = ' || sum(o)
 FROM (SELECT count(*) AS o FROM public.warehouses             WHERE branch_id='da000000-0000-4000-8000-0000000000a2'
   UNION ALL SELECT count(*) FROM public.stock_movements        WHERE branch_id='da000000-0000-4000-8000-0000000000a2'
-  UNION ALL SELECT count(*) FROM public.ingredient_stock_levels WHERE branch_id='da000000-0000-4000-8000-0000000000a2'
   UNION ALL SELECT count(*) FROM public.product_stock_levels    WHERE branch_id='da000000-0000-4000-8000-0000000000a2') s;
 
 INSERT INTO _results
-SELECT 'I2b the same user DOES see branch A1 (I2 is not vacuous)', sum(b)=4,
+SELECT 'I2b the same user DOES see branch A1 (I2 is not vacuous)', sum(b)=2,
        'branch A1 rows visible = ' || sum(b)
 FROM (SELECT count(*) AS b FROM public.warehouses             WHERE branch_id='da000000-0000-4000-8000-0000000000a1' AND deleted_at IS NULL
-  UNION ALL SELECT count(*) FROM public.ingredient_stock_levels WHERE branch_id='da000000-0000-4000-8000-0000000000a1'
   UNION ALL SELECT count(*) FROM public.product_stock_levels    WHERE branch_id='da000000-0000-4000-8000-0000000000a1') s;
 
 INSERT INTO _results
@@ -227,11 +230,20 @@ SELECT 'I4 soft-deleted warehouse in an accessible branch is invisible', count(*
        'soft-deleted rows visible = ' || count(*)
 FROM public.warehouses WHERE id='d6000000-0000-4000-8000-0000000000a9';
 
-INSERT INTO _results
-SELECT 'I8 negative quantity_on_hand is readable and exact', count(*)=1,
-       'negative level rows visible = ' || count(*)
-FROM public.ingredient_stock_levels
-WHERE ingredient_id='d5000000-0000-4000-8000-0000000000a2' AND quantity_on_hand=-42.5000;
+-- I8 -- AD-022: ingredient_stock_levels is completely unreachable to `authenticated` now, not
+-- just RLS-filtered. A bare SELECT must raise (42501, insufficient_privilege), caught here
+-- because an uncaught error inside a plain top-level statement would abort the transaction.
+DO $$
+DECLARE v_n int; v_raised text := 'no exception';
+BEGIN
+  BEGIN
+    SELECT count(*) INTO v_n FROM public.ingredient_stock_levels;
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := SQLSTATE;
+  END;
+  INSERT INTO _results VALUES (
+    'I8 ingredient_stock_levels unreachable to authenticated (AD-022 deactivation)',
+    v_raised = '42501', 'sqlstate: ' || v_raised);
+END $$;
 
 -- ---- U_OWNER: owner in org A, NO branch_assignments row at all ----
 SELECT set_config('request.jwt.claims',
@@ -263,7 +275,6 @@ SELECT 'I7 no tenant claim yields zero inventory rows everywhere', sum(v)=0,
        'rows visible with no tenant claim = ' || sum(v)
 FROM (SELECT count(*) AS v FROM public.warehouses
   UNION ALL SELECT count(*) FROM public.stock_movements
-  UNION ALL SELECT count(*) FROM public.ingredient_stock_levels
   UNION ALL SELECT count(*) FROM public.product_stock_levels) s;
 
 RESET ROLE;

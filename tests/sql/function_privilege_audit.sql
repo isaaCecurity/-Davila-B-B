@@ -78,12 +78,16 @@ order by p.proname;
 -- — this is exactly finding 1 above: a new overload silently inheriting a different privilege
 -- than its sibling because nothing revoked it explicitly.
 --
--- complete_production_batch/fail_production_batch are on the allowlist below DELIBERATELY, not
--- as an oversight: each now has two overloads on purpose — the original 4-arg RPC, granted to
--- `authenticated` for the live "complete this batch" UI flow, and a 5-arg explicit-tenant
--- variant used only internally by the P3.7 sync handlers, REVOKE'd from everyone (callable only
--- because SECURITY DEFINER functions execute as their owner). That mismatch is the fix, not the
--- bug it once was — see IMPLEMENTATION_LOG.md 2026-08-31. Any OTHER function appearing below is
+-- complete_production_batch/fail_production_batch are on the allowlist below for history, not
+-- because either currently has a mismatch to allow: each has two overloads — the original
+-- 4-arg RPC and a 5-arg explicit-tenant variant used only internally by the P3.7 sync handlers
+-- — and until 2026-09-01 the 4-arg one was deliberately `authenticated`-granted for the live
+-- "complete this batch" UI flow while the 5-arg one was REVOKE'd from everyone (callable only
+-- because SECURITY DEFINER functions execute as their owner). AD-022 (ingredient/production
+-- tracking deactivated for MVP) then REVOKEd the 4-arg overload's `authenticated` grant too, so
+-- both are now identically non-executable and CHECK 2's query would not flag this pair even
+-- without the allowlist entry — left in place as a harmless, documented no-op rather than
+-- churned, in case v2 reintroduces the original asymmetry. Any OTHER function appearing below is
 -- a real finding.
 -- ============================================================================================
 with known_intentional_mismatches(proname) as (

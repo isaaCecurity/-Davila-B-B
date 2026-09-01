@@ -1,5 +1,40 @@
 # BakeFlow — Current Task
 
+## ✅ AD-022 — raw-ingredient/production stock tracking deactivated for MVP (2026-09-01)
+
+Direct product decision from the user, made mid-session: MVP does not track bakery stock at
+the raw-ingredient level (flour, sugar, anything "related to making the product") — that's a
+v2 feature. Finished-product stock ("how many loaves are left") stays in scope, and the MVP
+dashboard shows revenue/cash only, no COGS/profit. This resolves **BLOCKER-018** by descope
+rather than by building the missing ingredient-purchase-cost mechanism.
+
+Applied live via `mcp__supabase__apply_migration` (full blast-radius audit first, every claim
+live-verified, not assumed): `authenticated` grants revoked on the six ingredient/production
+tables; `adjust_stock()`/`apply_inventory_adjust()`/`apply_inventory_waste()` narrowed to
+`item_type='product'` only; `production.start/.cancel/.record_output/.record_waste` removed
+from the `domain_operation` allowlist; `complete_production_batch()`/`fail_production_batch()`'s
+4-arg overload lost its `authenticated` EXECUTE grant. Nothing dropped — every table/function/
+migration stays in the schema for v2 to re-enable by reversing this one migration.
+
+Frontend: "Batches" nav button removed, `app/inventory/[warehouseId].tsx` narrowed to
+product-only stock (ingredient tab toggle deleted). Typecheck/lint/unit tests clean.
+
+7 SQL test files updated to match: `p3_7_inventory_sync.sql`/`inventory_write_rls.sql`
+re-pointed at the still-live product-only path (plus new tests proving ingredient rejection);
+`inventory_read_rls.sql`'s ingredient-visibility assertions replaced with a denial proof;
+`p3_7_customer_sync.sql`'s D1 anchor re-updated; `p3_7_production_sync.sql`/
+`p3_7_production_output_waste_sync.sql` rewritten from 400+/580+ lines down to short
+CHECK-constraint-rejection proofs (no product-only fallback exists for production batches);
+`function_privilege_audit.sql`'s allowlist comment corrected.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (fifth entry), `ARCHITECTURE_DECISIONS.md`
+AD-022, `BLOCKERS.md` BLOCKER-018.
+
+**Still open:** the SQL test-file changes await confirmation from the next real GitHub Actions
+run — not claimed as passing until that happens.
+
+---
+
 ## ✅ SQL-suite CI wiring — GREEN on GitHub's own runners; P11.1 + P11.2 COMPLETE (2026-09-01)
 
 **Update, same day:** the "one thing still genuinely open" below (a real GitHub Actions run) has

@@ -1,19 +1,13 @@
 import { getSupabaseClient } from '@bakeflow/auth';
 import {
   useAllProductVariants,
-  useIngredientStockLevels,
-  useIngredients,
   useProductStockLevels,
   useWarehouses,
 } from '@bakeflow/hooks';
-import {
-  compareDecimalStrings,
-  isNegativeDecimalString,
-  type Quantity,
-} from '@bakeflow/types';
+import { isNegativeDecimalString, type Quantity } from '@bakeflow/types';
 import { formatQuantity } from '@bakeflow/utils';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -27,7 +21,14 @@ import {
 import { useSessionStore } from '../../stores/session';
 
 /**
- * Stock on hand in one warehouse — P9.4, read and write.
+ * Stock on hand in one warehouse — P9.4, read and write, finished-product stock only.
+ *
+ * Ingredient stock (raw materials) is deactivated for MVP (AD-022): the tab toggle this
+ * screen used to have between "Ingredients" and "Finished goods" is gone, and only
+ * product stock levels are fetched. `useIngredientStockLevels`/`useIngredients` and the
+ * ingredient branch of `StockRow` were removed here, not just hidden behind a flag —
+ * the backend RPC (`adjust_stock`) rejects `item_type='ingredient'` outright now, so
+ * showing that tab would only present a UI users cannot act on.
  *
  * ## The row never edits its own number
  *
@@ -60,41 +61,17 @@ export default function WarehouseStockScreen(): React.JSX.Element {
   const router = useRouter();
   const { warehouseId } = useLocalSearchParams<{ warehouseId: string }>();
   const activeTenantId = useSessionStore((s) => s.activeTenantId);
-  const [tab, setTab] = useState<'ingredients' | 'products'>('ingredients');
 
   const id = typeof warehouseId === 'string' && warehouseId !== '' ? warehouseId : null;
 
   const warehouses = useWarehouses(client, activeTenantId);
-  const ingredientLevels = useIngredientStockLevels(client, activeTenantId, id);
   const productLevels = useProductStockLevels(client, activeTenantId, id);
-  const ingredients = useIngredients(client, activeTenantId);
   const variants = useAllProductVariants(client, activeTenantId);
 
   const warehouseName = useMemo(
     () => warehouses.data?.find((w) => w.id === id)?.name ?? null,
     [warehouses.data, id],
   );
-
-  /**
-   * Names and reorder levels, resolved client-side from the catalog.
-   *
-   * A stock level row carries only ids, so the alternative was a PostgREST embed. Two plain
-   * queries are used instead for the same reason `getProductWithVariants` avoids embeds: an
-   * embed needs its own nested `deleted_at` filter, and getting that wrong fails *open*.
-   * The catalog is small enough per bakery that the extra round trip is not the cost that
-   * matters here.
-   */
-  const ingredientInfo = useMemo(() => {
-    const map = new Map<string, { name: string; unit: string; reorder: Quantity }>();
-    for (const row of ingredients.data?.rows ?? []) {
-      map.set(row.id, {
-        name: row.name,
-        unit: row.unit_of_measure,
-        reorder: row.reorder_level,
-      });
-    }
-    return map;
-  }, [ingredients.data]);
 
   const variantNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -109,8 +86,6 @@ export default function WarehouseStockScreen(): React.JSX.Element {
       </SafeAreaView>
     );
   }
-
-  const active = tab === 'ingredients' ? ingredientLevels : productLevels;
 
   return (
     <SafeAreaView className="flex-1 bg-white">
@@ -130,44 +105,16 @@ export default function WarehouseStockScreen(): React.JSX.Element {
             <Text className="text-sm font-medium text-neutral-900">Change</Text>
           </Pressable>
         </View>
-
-        <View className="flex-row gap-2">
-          <Tab label="Ingredients" selected={tab === 'ingredients'} onPress={() => setTab('ingredients')} />
-          <Tab label="Finished goods" selected={tab === 'products'} onPress={() => setTab('products')} />
-        </View>
       </View>
 
-      {active.isPending ? (
+      {productLevels.isPending ? (
         <LoadingState label="Loading stock…" />
-      ) : active.isError ? (
-        <ErrorState error={active.error} onRetry={() => void active.refetch()} />
-      ) : active.data.rows.length === 0 ? (
+      ) : productLevels.isError ? (
+        <ErrorState error={productLevels.error} onRetry={() => void productLevels.refetch()} />
+      ) : productLevels.data.rows.length === 0 ? (
         <EmptyState
           title="Nothing recorded here yet"
           detail="Quantities appear once stock movements have been recorded for this stockroom."
-        />
-      ) : tab === 'ingredients' ? (
-        <FlatList
-          data={ingredientLevels.data?.rows ?? []}
-          keyExtractor={(item) => item.id}
-          contentContainerClassName="p-6 gap-3"
-          refreshing={ingredientLevels.isRefetching}
-          onRefresh={() => void ingredientLevels.refetch()}
-          renderItem={({ item }) => {
-            const info = ingredientInfo.get(item.ingredient_id);
-            return (
-              <StockRow
-                name={info?.name ?? 'Unknown ingredient'}
-                detail={info === undefined ? null : info.unit}
-                quantity={item.quantity_on_hand}
-                reorderLevel={info?.reorder ?? null}
-                warehouseId={id ?? ''}
-                itemType="ingredient"
-                itemId={item.ingredient_id}
-                tenantId={activeTenantId}
-              />
-            );
-          }}
         />
       ) : (
         <FlatList
@@ -179,11 +126,8 @@ export default function WarehouseStockScreen(): React.JSX.Element {
           renderItem={({ item }) => (
             <StockRow
               name={variantNames.get(item.product_variant_id) ?? 'Unknown variant'}
-              detail={null}
               quantity={item.quantity_on_hand}
-              reorderLevel={null}
               warehouseId={id ?? ''}
-              itemType="product"
               itemId={item.product_variant_id}
               tenantId={activeTenantId}
             />
@@ -194,99 +138,52 @@ export default function WarehouseStockScreen(): React.JSX.Element {
   );
 }
 
-function Tab({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}): React.JSX.Element {
-  return (
-    <Pressable
-      accessibilityRole="tab"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      className={`rounded-lg px-4 py-2 active:opacity-70 ${
-        selected ? 'bg-neutral-900' : 'border border-neutral-300'
-      }`}
-    >
-      <Text className={`text-sm font-medium ${selected ? 'text-white' : 'text-neutral-900'}`}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 /**
- * One item's quantity.
+ * One product's quantity.
  *
- * The "Low" marker is a **display cue over an existing column**, not a new business rule:
- * it reads `ingredients.reorder_level`, which already exists live with a `>= 0` check. It
- * appears only when a reorder level has actually been set — flagging every item whose level
- * is the default `0` would mark every never-stocked ingredient and train users to ignore
- * the badge. Both numbers are always printed, so the underlying comparison stays visible
- * and the cue carries no information the user cannot check.
+ * Ingredient-only concepts (the "Low" reorder-level marker, a unit-of-measure suffix) are
+ * gone along with the ingredient tab this row used to also render for (AD-022) —
+ * `reorder_level` lives on `ingredients`, which product variants never had a version of.
  */
 function StockRow({
   name,
-  detail,
   quantity,
-  reorderLevel,
   warehouseId,
-  itemType,
   itemId,
   tenantId,
 }: {
   name: string;
-  detail: string | null;
   quantity: Quantity;
-  reorderLevel: Quantity | null;
   warehouseId: string;
-  itemType: 'ingredient' | 'product';
   itemId: string;
   tenantId: string | null;
 }): React.JSX.Element {
   const negative = isNegativeDecimalString(quantity);
-  const low =
-    reorderLevel !== null &&
-    compareDecimalStrings(reorderLevel, '0') > 0 &&
-    compareDecimalStrings(quantity, reorderLevel) <= 0;
 
   return (
     <View className="gap-1 rounded-xl border border-neutral-200 p-4">
       <View className="flex-row items-center justify-between gap-3">
         <View className="flex-1 gap-1">
           <Text className="text-base font-semibold text-neutral-900">{name}</Text>
-          {reorderLevel !== null && compareDecimalStrings(reorderLevel, '0') > 0 && (
-            <Text className="text-xs text-neutral-500">
-              Reorder at {formatQuantity(reorderLevel)}
-              {detail === null ? '' : ` ${detail}`}
-            </Text>
-          )}
         </View>
         <View className="items-end gap-1">
           <Text
             className={`text-lg font-semibold ${negative ? 'text-red-600' : 'text-neutral-900'}`}
           >
             {formatQuantity(quantity)}
-            {detail === null ? '' : ` ${detail}`}
           </Text>
-          {negative ? (
+          {negative && (
             <Text className="text-xs font-medium uppercase text-red-600">Negative</Text>
-          ) : low ? (
-            <Text className="text-xs font-medium uppercase text-amber-600">Low</Text>
-          ) : null}
+          )}
         </View>
       </View>
       <View className="flex-row justify-end">
         <AdjustStockAction
           warehouseId={warehouseId}
-          itemType={itemType}
+          itemType="product"
           itemId={itemId}
           currentQuantity={quantity}
-          unit={detail}
+          unit={null}
           tenantId={tenantId}
         />
       </View>

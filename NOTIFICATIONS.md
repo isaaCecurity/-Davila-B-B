@@ -4,6 +4,30 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Ingredient tracking deactivated for MVP, as you asked (2026-09-01)
+
+Done. Nothing tracks raw ingredients (flour, sugar, etc.) anymore, in the app or through the
+backend — the "Batches" button is gone from the catalog screen, and the stock screen only
+shows finished products now. On the backend side it's genuinely turned off, not just hidden:
+even someone calling the API directly can't touch ingredient data anymore. Nothing was
+deleted, though — all the ingredient/recipe/production-batch code and data are still there,
+just switched off, so turning it back on for v2 is a small, well-understood change rather than
+rebuilding it.
+
+This also closes out the old COGS/gross-profit blocker (BLOCKER-018) — since there's no
+ingredient cost data at all now, there's nothing to compute a cost of goods sold from. The
+reports screen already only shows revenue and cash, which turns out to be exactly right for
+this decision, not something that needs changing.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-01, `ARCHITECTURE_DECISIONS.md` AD-022.
+
+**Committed and pushed.** The database change went live via the same path used throughout
+this session, verified before and after with real queries against your live database — not
+assumed. The one thing still pending: the updated SQL test files need one more real GitHub
+Actions run to confirm they pass, same as everything else today.
+
+---
+
 ## SQL-suite CI wiring — now GREEN for real on GitHub's own runners (2026-09-01)
 
 Follow-up to the entry below. Pushed the EC2-validated work, and — as flagged at the time — the

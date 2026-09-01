@@ -1059,7 +1059,21 @@ functions afterward.
 ---
 
 ## BLOCKER-018 · No mechanism captures ingredient/purchase cost, so weighted-average COGS cannot be computed
-**Status:** OPEN · **Affects:** P5.8 (Reporting & P&L) · **Type:** business rule + missing workflow
+**Status:** ✅ **RESOLVED 2026-09-01 — by descope, via AD-022, not by building the missing mechanism.** **Affects:** P5.8 (Reporting & P&L) · **Type:** business rule + missing workflow
+
+**Resolution:** the product owner decided directly (not inferred): raw-ingredient stock
+tracking is out of MVP scope entirely, deferred to v2 — see **AD-022** in
+`ARCHITECTURE_DECISIONS.md` for the full implementation. With no ingredient-level stock
+tracking, there is no ingredient purchase-cost workflow left to design, and no COGS to
+compute from. The MVP reporting dashboard is scoped to revenue and cash collected only;
+COGS/gross-profit/gross-margin are explicitly out of scope for v1, not silently missing.
+`docs/REPORTING-MODEL.md` §85's weighted-average-costing lock is unchanged as the eventual v2
+method — this resolution does not contradict it, it just isn't reachable from an MVP that
+carries no ingredient cost data at all. The three candidate ingredient-purchase-cost
+workflows originally proposed below were never decided between, because the premise (that
+ingredient purchases would be tracked at all) no longer holds for MVP.
+
+**Original (OPEN, 2026-08-24):**
 
 `docs/REPORTING-MODEL.md` §85 locks weighted-average costing as the MVP method and §27–30
 explains why (last-cost and FIFO are both rejected). The schema already has the column
