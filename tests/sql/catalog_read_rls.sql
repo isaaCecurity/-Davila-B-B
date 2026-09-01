@@ -7,6 +7,15 @@
 --
 -- Companion to tests/sql/security_multiorg_sync.sql, same conventions.
 --
+-- UPDATED 2026-09-01 (AD-022, ingredient/production tracking deactivated for MVP):
+-- ingredients/recipes/recipe_ingredients dropped out of `authenticated`'s reach entirely (not
+-- just RLS-filtered), so C1/C1b/C2/C3/C4's cross-tenant/soft-delete UNIONs were narrowed to
+-- the 3 tables still readable (product_categories/products/product_variants), and C1c/C1d/
+-- C1e/C3b now prove the denial itself rather than a traversal that no longer has a path to
+-- walk. The fixture setup (still creating ingredient/recipe/recipe_ingredient rows, still
+-- run as an elevated role before `SET LOCAL ROLE authenticated` below) and the C5-C9
+-- structural block are unaffected -- those never depended on `authenticated`'s own grants.
+--
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/catalog_read_rls.sql
 --
 -- Deliberately contains **no psql meta-commands**, so the identical text can also be
@@ -254,58 +263,83 @@ SELECT set_config('request.jwt.claims',
                     'tenant_id','c0000000-0000-4000-8000-0000000000a1',
                     'roles', json_build_array('owner'))::text, true);
 
--- C1 -- organization isolation across all six tables, in one pass.
+-- C1 -- organization isolation across the 3 catalog tables `authenticated` can still reach.
+-- ingredients/recipes/recipe_ingredients dropped from every UNION in this section (AD-022,
+-- 2026-09-01): authenticated now holds NO grant on any of the three at all, so a plain SELECT
+-- referencing one inside a statement here would raise an uncaught 42501 and abort the whole
+-- transaction, not fail one row cleanly. C1c (below) proves that denial explicitly instead.
+--
 -- Counted rather than expected to raise: RLS filters SELECT, it does not error. A
 -- denied read is an empty set. Any test that expected an exception here would pass
 -- for the wrong reason.
 INSERT INTO _results
-SELECT 'C1 org A sees zero rows belonging to org B (all 6 tables)',
+SELECT 'C1 org A sees zero rows belonging to org B (3 authenticated-readable tables)',
        sum(foreign_rows) = 0,
        'foreign rows visible = ' || sum(foreign_rows)
 FROM (
   SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') AS foreign_rows FROM public.product_categories
   UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') FROM public.products
   UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') FROM public.product_variants
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') FROM public.ingredients
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') FROM public.recipes
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000a1') FROM public.recipe_ingredients
 ) s;
 
 -- C1b -- the positive half: org A does see its own live rows. Without this, C1 would
 -- also pass if RLS were denying everything for the wrong reason.
 --
--- 7, not 6: C9b (above) now successfully inserts a second live product named
--- "Deleted Product A" into public.products for ORG_A, proving the BLOCKER-010a fix
--- lets a soft-deleted name be reused -- that insert persists in this same transaction,
--- so products carries 2 live rows by the time this count runs, not 1. Found the same
--- pass C9a/C9b were corrected (2026-09-01, first real GitHub Actions run): C1b's
--- expected count went stale the moment C9b started actually succeeding instead of
--- catching a unique_violation.
+-- 4, not 6/7: down to product_categories(1) + products(2, see below) + product_variants(1).
+-- C9b (above) now successfully inserts a second live product named "Deleted Product A" into
+-- public.products for ORG_A, proving the BLOCKER-010a fix lets a soft-deleted name be reused
+-- -- that insert persists in this same transaction, so products carries 2 live rows, not 1.
 INSERT INTO _results
-SELECT 'C1b org A sees exactly its own 7 live rows',
-       sum(own_rows) = 7,
+SELECT 'C1b org A sees exactly its own 4 live rows',
+       sum(own_rows) = 4,
        'own live rows visible = ' || sum(own_rows)
 FROM (
   SELECT count(*) AS own_rows FROM public.product_categories
   UNION ALL SELECT count(*) FROM public.products
   UNION ALL SELECT count(*) FROM public.product_variants
-  UNION ALL SELECT count(*) FROM public.ingredients
-  UNION ALL SELECT count(*) FROM public.recipes
-  UNION ALL SELECT count(*) FROM public.recipe_ingredients
 ) s;
 
--- C2 -- soft-deleted rows are invisible in all six tables.
+-- C1c -- AD-022: ingredients/recipes/recipe_ingredients are completely unreachable to
+-- `authenticated` now, not just RLS-filtered. A bare SELECT from any of the three must raise
+-- (42501, insufficient_privilege), caught here because an uncaught error inside a plain
+-- top-level statement would abort the transaction.
+DO $$
+DECLARE v_n int; v_raised text;
+BEGIN
+  v_raised := 'no exception';
+  BEGIN
+    SELECT count(*) INTO v_n FROM public.ingredients;
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := SQLSTATE;
+  END;
+  INSERT INTO _results VALUES ('C1c ingredients unreachable to authenticated (AD-022 deactivation)',
+    v_raised = '42501', 'sqlstate: ' || v_raised);
+
+  v_raised := 'no exception';
+  BEGIN
+    SELECT count(*) INTO v_n FROM public.recipes;
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := SQLSTATE;
+  END;
+  INSERT INTO _results VALUES ('C1d recipes unreachable to authenticated (AD-022 deactivation)',
+    v_raised = '42501', 'sqlstate: ' || v_raised);
+
+  v_raised := 'no exception';
+  BEGIN
+    SELECT count(*) INTO v_n FROM public.recipe_ingredients;
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := SQLSTATE;
+  END;
+  INSERT INTO _results VALUES ('C1e recipe_ingredients unreachable to authenticated (AD-022 deactivation)',
+    v_raised = '42501', 'sqlstate: ' || v_raised);
+END $$;
+
+-- C2 -- soft-deleted rows are invisible in the 3 authenticated-readable catalog tables.
 INSERT INTO _results
-SELECT 'C2 soft-deleted rows invisible in all 6 tables',
+SELECT 'C2 soft-deleted rows invisible in all 3 authenticated-readable tables',
        count(*) = 0,
        'soft-deleted rows visible = ' || count(*)
 FROM (
   SELECT id FROM public.product_categories WHERE id = 'c1000000-0000-4000-8000-0000000000a9'
   UNION ALL SELECT id FROM public.products           WHERE id = 'c2000000-0000-4000-8000-0000000000a9'
   UNION ALL SELECT id FROM public.product_variants   WHERE id = 'c3000000-0000-4000-8000-0000000000a9'
-  UNION ALL SELECT id FROM public.ingredients        WHERE id = 'c4000000-0000-4000-8000-0000000000a9'
-  UNION ALL SELECT id FROM public.recipes            WHERE id = 'c5000000-0000-4000-8000-0000000000a9'
-  UNION ALL SELECT id FROM public.recipe_ingredients WHERE id = 'c6000000-0000-4000-8000-0000000000a9'
 ) s;
 
 -- C2b -- the read service adds `.is('deleted_at', null)` on every query even though
@@ -332,31 +366,33 @@ SELECT set_config('request.jwt.claims',
                     'roles', json_build_array('owner'))::text, true);
 
 INSERT INTO _results
-SELECT 'C3 org B sees zero rows belonging to org A (all 6 tables)',
+SELECT 'C3 org B sees zero rows belonging to org A (3 authenticated-readable tables)',
        sum(foreign_rows) = 0,
        'foreign rows visible = ' || sum(foreign_rows)
 FROM (
   SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') AS foreign_rows FROM public.product_categories
   UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') FROM public.products
   UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') FROM public.product_variants
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') FROM public.ingredients
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') FROM public.recipes
-  UNION ALL SELECT count(*) FILTER (WHERE tenant_id <> 'c0000000-0000-4000-8000-0000000000b1') FROM public.recipe_ingredients
 ) s;
 
--- C3b -- org B cannot reach org A's recipe through the variant relation either. The
--- read service walks variant -> recipe -> lines, so the join path needs proving, not
--- just the base tables.
-INSERT INTO _results
-SELECT 'C3b org B cannot traverse variant->recipe->lines into org A',
-       count(*) = 0,
-       'rows reachable through the join = ' || count(*)
-FROM public.product_variants v
-JOIN public.recipes r ON r.product_variant_id = v.id
-JOIN public.recipe_ingredients ri ON ri.recipe_id = r.id
-WHERE v.tenant_id = 'c0000000-0000-4000-8000-0000000000a1'
-   OR r.tenant_id = 'c0000000-0000-4000-8000-0000000000a1'
-   OR ri.tenant_id = 'c0000000-0000-4000-8000-0000000000a1';
+-- C3b -- org B cannot traverse variant->recipe->lines into org A. Was a live JOIN across
+-- product_variants/recipes/recipe_ingredients; AD-022 (2026-09-01) made the latter two
+-- unreachable to authenticated outright, so the traversal this test proved is no longer a
+-- risk to prove -- there is no path to walk at all now. Replaced with the same denial proof
+-- as C1c/C1d/C1e, run here under org B's claim for completeness (the grant is role-scoped,
+-- not tenant-scoped, so the result does not actually depend on which org is active, but
+-- proving it under both actors this file uses costs nothing and rules out a tenant-specific
+-- policy accidentally reintroducing access).
+DO $$
+DECLARE v_n int; v_raised text := 'no exception';
+BEGIN
+  BEGIN
+    SELECT count(*) INTO v_n FROM public.recipes r JOIN public.recipe_ingredients ri ON ri.recipe_id = r.id;
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := SQLSTATE;
+  END;
+  INSERT INTO _results VALUES ('C3b recipes/recipe_ingredients unreachable to authenticated as org B too (AD-022)',
+    v_raised = '42501', 'sqlstate: ' || v_raised);
+END $$;
 
 -- ---- C4: deny by default when the JWT carries no organization ----
 -- A revoked membership mints a null tenant_id (AD-003, test S5d). `NULL = anything`
@@ -367,16 +403,13 @@ SELECT set_config('request.jwt.claims',
                     'roles', json_build_array())::text, true);
 
 INSERT INTO _results
-SELECT 'C4 null tenant claim sees nothing in any catalog table',
+SELECT 'C4 null tenant claim sees nothing in any authenticated-readable catalog table',
        sum(visible) = 0,
        'rows visible with no tenant claim = ' || sum(visible)
 FROM (
   SELECT count(*) AS visible FROM public.product_categories
   UNION ALL SELECT count(*) FROM public.products
   UNION ALL SELECT count(*) FROM public.product_variants
-  UNION ALL SELECT count(*) FROM public.ingredients
-  UNION ALL SELECT count(*) FROM public.recipes
-  UNION ALL SELECT count(*) FROM public.recipe_ingredients
 ) s;
 
 RESET ROLE;

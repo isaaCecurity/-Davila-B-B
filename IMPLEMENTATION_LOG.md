@@ -5,6 +5,48 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later still) · AD-022 follow-up — real GitHub Actions run found 2 more test files that read the deactivated tables directly
+
+**Context:** pushed the AD-022 commit (previous entry); the real GitHub Actions run
+(`33545125885`) came back with `Lint & typecheck` and `Spec coverage` green (confirms the
+frontend nav change works for real), but `Database suites` failed on 2 files: `inventory_write_rls.sql`
+and, unexpectedly, `catalog_read_rls.sql` — not one of the files touched in the previous
+commit. Diagnosed via the job log (downloaded through the Azure Blob redirect the log API
+issues, which needed `--resolve` to work around a DNS resolution gap specific to that one
+host from this environment).
+
+**`inventory_write_rls.sql` A3 failed:** `new row for relation "stock_movements" violates
+check constraint`. Root cause: A1/A2/A10 were re-pointed at the same product variant
+(`e4000000-...-a1`) A3 also uses, in the previous pass's rewrite — before that rewrite, A1
+used a different *ingredient* than A3's product, so the two never interacted. Once A1 set that
+variant's level to `12345678901234.5678`, A3's own `opening_balance` call computed a massively
+negative delta, violating `stock_movements_sign_matches_reason`
+(`'opening_balance' THEN quantity_delta > 0`). Fixed by adding a second product variant
+fixture (`e4000000-...-a2`) and moving A1/A2/A10 onto it, restoring the isolation the original
+ingredient/product split gave the file for free.
+
+**`catalog_read_rls.sql` failed on `permission denied for table ingredients`:** a real gap in
+the previous pass's audit — the earlier search was keyed on the string `'ingredient'` (the
+`item_type` value) and specific table names already known to matter (`ingredient_stock_levels`),
+which missed that this file's C1/C1b/C2/C3/C3b/C4 sections directly `SELECT`/`JOIN` the bare
+`ingredients`/`recipes`/`recipe_ingredients` tables as `authenticated`, as part of its
+"organization isolation across all N catalog tables" checks. Ran a proper sweep this time —
+`grep -nE "public\.(ingredients|recipes|recipe_ingredients|production_batches|
+production_batch_ingredients|ingredient_stock_levels)\b"` across every file in `tests/sql/`,
+not just the string patterns used the first time — and confirmed only this one file had
+unaudited hits. Fixed the same way as `inventory_read_rls.sql`'s equivalent gap: the three
+tables dropped from every `UNION`/`JOIN` in the authenticated-role section (C1/C1b/C2/C3/C4
+narrowed to the 3 tables still reachable; C1b's expected row count recomputed from 7 to 4),
+and C3b's live variant→recipe→lines traversal replaced with an explicit denial proof
+(C1c/C1d/C1e/C3b) — a bare `SELECT` from any of the three now raises `42501` before RLS is
+even evaluated, so leaving them in an unguarded top-level statement would abort the whole
+transaction on an uncaught error rather than fail one assertion cleanly.
+
+**Verification:** `.venv/Scripts/python.exe -m pytest -q` — 12 passed. SQL suite fixes await
+the next real GitHub Actions run, per the Evidence rule.
+
+---
+
 ## 2026-09-01 (later still) · AD-022 — raw-ingredient/production stock tracking deactivated for MVP; BLOCKER-018 resolved by descope
 
 **Context:** while picking the next backend problem to work on, walked through BLOCKER-018

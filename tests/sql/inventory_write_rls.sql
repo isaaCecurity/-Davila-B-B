@@ -62,8 +62,14 @@ INSERT INTO public.product_categories (id, tenant_id, name, sort_order) VALUES
   ('e2000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','W Cat A',1);
 INSERT INTO public.products (id, tenant_id, category_id, name, is_active) VALUES
   ('e3000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','e2000000-0000-4000-8000-0000000000a1','W Prod A',true);
+-- Two variants, deliberately: A1/A2/A10/A7/A8/A6/A5/A4a/A4b (below) mutate/probe "A2" so that
+-- A3's own opening_balance call on "A1" -- which requires a POSITIVE delta
+-- (stock_movements_sign_matches_reason) -- always starts from a clean, untouched level. They
+-- used to be naturally isolated by item_type (ingredient vs product) before AD-022 (2026-09-01)
+-- moved everything onto item_type='product'; this second variant restores that isolation.
 INSERT INTO public.product_variants (id, tenant_id, product_id, name, sku, unit_price, is_active) VALUES
-  ('e4000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','e3000000-0000-4000-8000-0000000000a1','W Var A','W-SKU-A',500.0000,true);
+  ('e4000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','e3000000-0000-4000-8000-0000000000a1','W Var A','W-SKU-A',500.0000,true),
+  ('e4000000-0000-4000-8000-0000000000a2','e0000000-0000-4000-8000-0000000000a1','e3000000-0000-4000-8000-0000000000a1','W Var A2','W-SKU-A2',500.0000,true);
 INSERT INTO public.ingredients (id, tenant_id, name, unit_of_measure, reorder_level, is_active) VALUES
   ('e5000000-0000-4000-8000-0000000000a1','e0000000-0000-4000-8000-0000000000a1','W Flour A','kg',1.0000,true);
 
@@ -92,24 +98,27 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN s := SQLSTATE; END;
   INSERT INTO _r VALUES ('A0 direct INSERT into stock_movements is denied to authenticated', s='42501', 'sqlstate = '||s);
 
-  -- A1 -- absolute target, exact to 4dp.
+  -- A1 -- absolute target, exact to 4dp. Uses variant "...a2", not "...a1": A3 (below, same
+  -- DO block) needs a pristine item for its own opening_balance call, which requires a
+  -- POSITIVE delta (stock_movements_sign_matches_reason) -- sharing this huge value with it
+  -- would make A3's delta massively negative and fail that CHECK constraint.
   BEGIN
-    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count');
+    r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a2',12345678901234.5678,'adjustment','count');
     s := 'ok';
   EXCEPTION WHEN OTHERS THEN s := SQLSTATE||' '||SQLERRM; END;
   SELECT quantity_on_hand::text INTO v FROM public.product_stock_levels
-   WHERE warehouse_id='e6000000-0000-4000-8000-0000000000a1' AND product_variant_id='e4000000-0000-4000-8000-0000000000a1';
+   WHERE warehouse_id='e6000000-0000-4000-8000-0000000000a1' AND product_variant_id='e4000000-0000-4000-8000-0000000000a2';
   INSERT INTO _r VALUES ('A1 branch_manager adjustment sets the absolute target exactly',
     s='ok' AND v='12345678901234.5678', 'result='||s||' level='||coalesce(v,'<none>'));
 
   -- A2 -- absolute-target semantics give idempotency for free.
-  r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a1',12345678901234.5678,'adjustment','count again');
-  SELECT count(*) INTO n FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a1';
+  r := public.adjust_stock('e6000000-0000-4000-8000-0000000000a1','product','e4000000-0000-4000-8000-0000000000a2',12345678901234.5678,'adjustment','count again');
+  SELECT count(*) INTO n FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a2';
   INSERT INTO _r VALUES ('A2 replaying the same target is a no-op, not a second movement',
     (r->>'unchanged')='true' AND n=1, 'unchanged='||coalesce(r->>'unchanged','<none>')||' movements='||n);
 
   -- A10 -- the actor is stamped by the server, not supplied by the caller.
-  SELECT created_by INTO cb FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a1' LIMIT 1;
+  SELECT created_by INTO cb FROM public.stock_movements WHERE product_variant_id='e4000000-0000-4000-8000-0000000000a2' LIMIT 1;
   INSERT INTO _r VALUES ('A10 created_by is stamped from auth.uid() by the RPC',
     cb='e1000000-0000-4000-8000-000000000001', 'created_by = '||coalesce(cb::text,'<null>'));
 
