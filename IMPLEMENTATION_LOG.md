@@ -5,7 +5,62 @@ Never record planned work here.
 
 ---
 
-## 2026-09-01 (latest) · Full live database audit (security + data integrity) — one real finding, fixed
+## 2026-09-01 (latest) · P4.4 ticket write-path test suite — a real idempotency defect found and fixed
+
+**Context:** picked as the next task after the full database audit, from a set of
+offered options (P4.4 test suite / BLOCKER-022/023 / BLOCKER-025) — no decision needed,
+pure test-coverage debt on the one P3–P5 write path with no dedicated SQL suite.
+
+**Investigated live before writing anything.** Read the full bodies of
+`confirm_ticket()`, `cancel_ticket()`, `complete_ticket()`, `update_ticket()`, and
+`guard_ticket_status_transition()` (the trigger all four funnel through). Confirmed
+`update_ticket()`'s three-tier role structure (manager-only pricing/assignment/
+cancellation fields; baker restricted to status-only changes; `has_branch_access()`
+gating every caller, bypassed only for owner/admin) and the trigger's full per-status
+actor table and cancellation/refund rules, rather than assuming from the docs.
+
+**A real defect was found and fixed before writing any assertion.** `complete_ticket()`
+had no guard against being called twice on an already-`completed` ticket: its final
+status UPDATE is a same-status no-op under `guard_ticket_status_transition()` (the
+trigger returns immediately when `NEW.status = OLD.status`, before any check runs), but
+the stock-movement loop above it in the function body ran unconditionally on every call,
+with no idempotency key of its own. Reproduced live in a rolled-back transaction: two
+calls on one ticket sold the same 3 units twice, taking on-hand from 50 to 44 instead of
+the correct 47 — silently, no exception either time. A client retry after a timeout, or
+a double-tap, would silently oversell/under-record stock in production.
+
+**Fixed live** (migration `fix_complete_ticket_idempotency`): added an explicit
+`IF v_order.status = 'completed' THEN RAISE EXCEPTION ...` check, mirroring this
+project's existing pattern for the same class of check (`archive_catalog_entity`'s
+"already archived", `restore_catalog_entity`'s "not archived"). Every other invalid
+starting status was already safe by transactional atomicity — the trigger's
+`invalid_transition` exception aborts the whole call, including any stock movements
+inserted earlier in the same statement; only the same-status re-entry case needed a
+dedicated guard. Re-verified live after the fix: two calls now correctly leave on-hand
+at 47, the second call rejected with `invalid_transition`/`already_completed`.
+
+**Built `tests/sql/sales_write_rls.sql`, 21/21 passed live** (SW1-SW21): the full ticket
+lifecycle walked through real role switches (cashier submits, owner confirms/prices/
+schedules, baker advances production, cashier delivers, owner completes) proving each
+hop's actor list from `guard_ticket_status_transition()`; `confirm_ticket()`'s item-count
+and state-machine preconditions; `update_ticket()`'s manager-only-field gate, baker
+status-only restriction, and `assigned_to` driver validation; `cancel_ticket()`'s
+blank-reason rejection, invoice-voiding, and the `refund_required` block on a paid
+ticket; the `has_branch_access()` gate for an actor with no `branch_assignments` row;
+cross-tenant denial; and SW14, the permanent regression guard for the idempotency fix
+above.
+
+Docs updated: `docs/API-CONTRACT.md` (`complete_ticket` row), `BACKEND_ROADMAP.md`
+(Current State P4.4 bullet, B8 crosswalk row).
+
+`.venv/Scripts/python.exe -m pytest -q` → 12 passed, unaffected.
+
+**Not committed yet in this entry** — pending push and the same real-GitHub-Actions
+confirmation discipline as every prior pass this session.
+
+---
+
+## 2026-09-01 · Full live database audit (security + data integrity) — one real finding, fixed
 
 **Context:** user asked, before moving to the next task, to check the whole live
 database (all tables/rows) for security holes and logical errors.

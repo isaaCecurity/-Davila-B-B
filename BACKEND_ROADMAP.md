@@ -45,10 +45,14 @@ being updated. As of this pass:
   NOT_STARTED against this, reconciled 2026-08-23. **Deactivated for MVP 2026-09-01 (AD-022)**
   — production batches are entirely recipe/ingredient machinery; RPCs/schema untouched for v2,
   but no longer reachable by `authenticated` or through the sync layer.
-- P4.4 ticket write: **RPCs COMPLETE**, live-verified 2026-08-22 — all ten lifecycle
-  transitions are reachable (`confirm_ticket`/`cancel_ticket`/`complete_ticket`/
-  `archive_ticket`/`update_ticket`). Tax and discounts are deferred by AD-017; there is
-  no dedicated write-path SQL test suite yet.
+- P4.4 ticket write: **COMPLETE 2026-09-01** — all ten lifecycle transitions are
+  reachable (`confirm_ticket`/`cancel_ticket`/`complete_ticket`/`archive_ticket`/
+  `update_ticket`), now with a permanent write-path suite
+  (`tests/sql/sales_write_rls.sql`, 21/21 live). Tax and discounts remain deferred by
+  AD-017. Writing the suite found and fixed a real defect: `complete_ticket()` was not
+  idempotent — a second call on an already-completed ticket silently re-sold the same
+  stock (verified live: 50 units → 44 instead of 47 after two calls). Fixed to reject
+  a repeat call outright; see `docs/API-CONTRACT.md`'s `complete_ticket` row.
 - P4.5 delivery write: **COMPLETE** (2026-08-21) — `transition_delivery()`/
   `update_delivery_details()` live-verified; the milestone's own section previously still
   read BLOCKED against this, reconciled 2026-08-23.
@@ -126,7 +130,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29 (BLOCKER-006 resolved via AD-021), inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30, production.record_output/.record_waste IMPLEMENTED 2026-08-31; inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31 and removed from the allowlist (BLOCKER-026/027 RESOLVED); expense.reverse (BLOCKER-028) is the only remaining deliberately-unbuilt item |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
 | B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b COMPLETE 2026-09-01 |
-| B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
+| B8 Tickets / sales | P4.4 | COMPLETE (read + write, 2026-09-01) |
 | B9 Payments & cash | P5 | BLOCKED (BLOCKER-003) |
 | B10 Financial reporting | P5.7 | BLOCKED (BLOCKER-003) |
 

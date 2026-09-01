@@ -3556,6 +3556,15 @@ begin
       using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
   end if;
 
+  -- Fixed 2026-09-01 (migration fix_complete_ticket_idempotency): a second call on an
+  -- already-completed ticket used to silently sell the same stock twice -- the final
+  -- status UPDATE is a same-status no-op, so nothing ever raised to stop it.
+  if v_order.status = 'completed' then
+    raise exception 'order is already completed'
+      using errcode = 'P0001',
+            detail = json_build_object('code', 'invalid_transition', 'reason', 'already_completed')::text;
+  end if;
+
   if v_wh is null then
     select id into v_wh from public.warehouses
     where tenant_id = v_tenant and branch_id = v_order.branch_id and is_default

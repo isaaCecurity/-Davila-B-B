@@ -1,5 +1,39 @@
 # BakeFlow — Current Task
 
+## ✅ P4.4 ticket write-path test suite DELIVERED — real idempotency defect found and fixed (2026-09-01)
+
+Picked as the next task after the full-database audit, from a set of offered options.
+No decision needed — pure test-coverage debt on the one P3–P5 write path
+(`confirm_ticket`/`cancel_ticket`/`complete_ticket`/`archive_ticket`/`update_ticket`)
+with no dedicated SQL suite.
+
+**A real defect was found and fixed while writing it, before any assertion existed:**
+`complete_ticket()` was not idempotent — calling it twice on an already-completed
+ticket silently re-sold the same stock a second time (verified live: 50 units → 44
+instead of the correct 47, with no exception raised either time). Root cause: the
+function's final status UPDATE is a same-status no-op under
+`guard_ticket_status_transition()`, so nothing ever stopped a second pass through the
+stock-movement loop above it. Fixed live (migration
+`fix_complete_ticket_idempotency`) by rejecting outright if the ticket is already
+completed, mirroring this project's existing pattern for the same class of check.
+
+**Delivered:** `tests/sql/sales_write_rls.sql`, 21/21 live — the full ticket lifecycle
+walked through real role switches, `confirm_ticket()`'s preconditions,
+`update_ticket()`'s three-tier permission structure (manager-only fields / baker
+status-only restriction / driver-assignment validation), `cancel_ticket()`'s
+reason-required and refund-required rules and invoice-voiding, the branch-access gate,
+cross-tenant denial, and the idempotency regression guard (SW14).
+
+Docs updated: `docs/API-CONTRACT.md`, `BACKEND_ROADMAP.md` (P4.4 now COMPLETE in both
+the Current State summary and the B8 crosswalk row).
+
+**Not yet committed** — pending push and confirmation on a real GitHub Actions run,
+same standing discipline as every prior pass this session.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (latest entry).
+
+---
+
 ## ✅ BLOCKER-010(c) resolved — catalog write path confirmed; P4.1b COMPLETE (2026-09-01)
 
 Picked from a set of offered next-task options after AD-022 wrapped up. Confirmed

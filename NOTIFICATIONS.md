@@ -4,6 +4,18 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Found and fixed a real stock bug while building the ticket-order test suite (2026-09-01)
+
+Building out proper tests for the order lifecycle (confirm, cancel, complete, edit)
+turned up a genuine bug: if "mark this order complete" ever got tapped twice, or a slow
+connection made the app retry the same request, the system would silently sell the same
+stock a second time — quietly wrong inventory numbers, no error shown to anyone. Fixed:
+a second completion attempt on the same order is now correctly refused. Verified live
+before and after the fix. This is now a permanent, automated test, alongside 20 other
+checks covering who's allowed to do what at each step of an order's life.
+
+---
+
 ## Catalog editing (products/prices) confirmed safe to build on — plus a real gap found and fixed (2026-09-01)
 
 You picked this as the next thing to work on. Short version: editing products, categories,
