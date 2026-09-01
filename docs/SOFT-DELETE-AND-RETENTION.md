@@ -919,21 +919,50 @@ try {
 ```typescript
 // Restore = clear soft-delete fields + write audit event
 await supabase.rpc('restore_catalog_entity', {
-  p_entity_type: 'product',  // 'product' | 'ingredient' | 'product_category' | 'product_variant'
+  p_entity_type: 'product',  // 'product' | 'product_category' | 'product_variant'
   p_entity_id: deletedRow.id,
 });
 ```
 
-This RPC does not exist yet — it must be built as part of P4.1b. Its contract:
+**Built 2026-09-01** (migration `20260901200000_add_archive_restore_catalog_entity_rpcs.sql`,
+resolving BLOCKER-010(c) — see `BLOCKERS.md`), live-verified 5/5 in
+`tests/sql/catalog_write_rls.sql` (W17-W21). Its actual contract, differing from the
+sketch above in three places (each for a concrete reason, not drift):
 
-- `SECURITY DEFINER`, `SET search_path TO 'public'`
-- Verify caller has `owner`, `admin`, or `branch_manager` role (`has_role(...)`)
-- Verify `tenant_id = current_tenant_id()` — never trust client-supplied tenant
-- Verify `deleted_at IS NOT NULL` — reject if already active
-- Set `deleted_at = NULL`, `deleted_by = NULL` atomically
-- Write an `audit_log` entry: `operation = 'CATALOG_ENTITY_RESTORED'`, include `entity_type`, `entity_id`, actor
-- Return the restored row
-- Revoke EXECUTE from PUBLIC and `anon`; grant only to `authenticated`
+- `SECURITY DEFINER`, `SET search_path TO 'public'`.
+- Role gate is `has_permission('products.manage', NULL)`, **not** `has_role(...)` — the
+  RLS policies on these tables use the JWT-claim-based `has_role()`, but the established
+  RPC convention (`archive_ticket()`) uses the DB-backed permission catalog instead;
+  `products.manage` is held by exactly owner/admin/branch_manager, the same set, so the
+  practical gate is unchanged.
+- **`p_entity_type` does NOT include `'ingredient'`.** The sketch above listed it, but
+  AD-022 (2026-09-01, same day) fully revoked `authenticated`'s grants on
+  `ingredients`/`recipes`/`recipe_ingredients` for the MVP descope. Since this RPC is
+  `SECURITY DEFINER`, including `'ingredient'` would silently bypass that revocation
+  rather than honour it. Only `'product'`, `'product_category'`, `'product_variant'` are
+  accepted; anything else is a rejected `22023`.
+- Verify `tenant_id = current_tenant_id()` and `deleted_at IS NOT NULL` in the same
+  `UPDATE ... WHERE` (not a separate `SELECT` first) — matches `archive_ticket()`'s own
+  pattern, and collapses "not found" / "wrong tenant" / "not archived" into one generic
+  error rather than leaking which case applied.
+- Set `deleted_at = NULL`, `deleted_by = NULL` atomically; write via
+  `log_audit_event(tenant_id, entity_type, entity_id, 'update', before, after)` — action
+  is `'update'`, not a new `'CATALOG_ENTITY_RESTORED'` value: `audit_log`'s own
+  `action` CHECK constraint only allows `insert`/`update`/`delete`/`status_change`
+  (confirmed live), the same convention `archive_ticket()` already uses for its own
+  archive event.
+- Return the restored row as `jsonb` (`to_jsonb`, with `unit_price` cast to `::text` for
+  the `product_variant` case per the money-in-jsonb hazard documented for
+  `get_daily_revenue_summary`) — not a typed `RETURNS products`/etc., since one function
+  serves three different row shapes.
+- `REVOKE ALL ... FROM PUBLIC, anon, authenticated; GRANT EXECUTE ... TO authenticated`.
+
+**`archive_catalog_entity` was built in the same migration, symmetric to restore, and
+was NOT anticipated by this section originally** — the write-path test suite proved live
+that a direct PostgREST `UPDATE` can never set `deleted_at` at all (Postgres refuses any
+write that would make the new row fail the table's own SELECT policy), so archiving
+needed exactly the same kind of RPC restoring did. Same contract shape, same role gate,
+opposite `deleted_at`/`deleted_by` direction.
 
 **Error type definitions (add to `packages/api/errors/index.ts`):**
 

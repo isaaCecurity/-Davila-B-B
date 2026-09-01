@@ -2834,6 +2834,64 @@ BEGIN
     'subtotal_amount', v_ticket.subtotal_amount, 'revision', v_ticket.revision);
 END; $function$;
 
+-- AD-022-scoped (2026-09-01): 'product'|'product_category'|'product_variant' only, not
+-- 'ingredient'/'recipe' — see BLOCKERS.md BLOCKER-010(c) and migration
+-- 20260901200000_add_archive_restore_catalog_entity_rpcs.sql for the full rationale.
+CREATE OR REPLACE FUNCTION public.archive_catalog_entity(p_entity_type text, p_entity_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant_id uuid;
+  v_result jsonb;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'authentication required'
+      USING errcode='28000', detail = json_build_object('code','session_expired')::text;
+  END IF;
+  IF NOT public.has_permission('products.manage', NULL) THEN
+    RAISE EXCEPTION 'only Owner, Admin, or Branch Manager may archive catalog entities'
+      USING errcode='42501', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+  IF p_entity_type NOT IN ('product','product_category','product_variant') THEN
+    RAISE EXCEPTION 'unsupported entity_type: % (ingredient/recipe entities are not archivable through this RPC)', p_entity_type
+      USING errcode='22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  IF p_entity_type = 'product' THEN
+    UPDATE public.products
+       SET deleted_at = now(), deleted_by = auth.uid()
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NULL
+     RETURNING tenant_id, to_jsonb(products.*) INTO v_tenant_id, v_result;
+  ELSIF p_entity_type = 'product_category' THEN
+    UPDATE public.product_categories
+       SET deleted_at = now(), deleted_by = auth.uid()
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NULL
+     RETURNING tenant_id, to_jsonb(product_categories.*) INTO v_tenant_id, v_result;
+  ELSIF p_entity_type = 'product_variant' THEN
+    UPDATE public.product_variants
+       SET deleted_at = now(), deleted_by = auth.uid()
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NULL
+     RETURNING tenant_id, (to_jsonb(product_variants.*) || jsonb_build_object('unit_price', unit_price::text))
+       INTO v_tenant_id, v_result;
+  END IF;
+
+  IF v_tenant_id IS NULL THEN
+    RAISE EXCEPTION '% not found or already archived', p_entity_type
+      USING errcode='P0001', detail = json_build_object('code','invalid_transition')::text;
+  END IF;
+
+  PERFORM public.log_audit_event(
+    v_tenant_id, p_entity_type, p_entity_id, 'update',
+    jsonb_build_object('deleted_at', null),
+    jsonb_build_object('deleted_at', v_result->>'deleted_at', 'deleted_by', v_result->>'deleted_by'));
+
+  RETURN v_result;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.archive_ticket(p_ticket_id uuid, p_reason text)
  RETURNS tickets
  LANGUAGE plpgsql
@@ -5740,6 +5798,64 @@ BEGIN
 END;
 $function$;
 
+-- AD-022-scoped (2026-09-01): 'product'|'product_category'|'product_variant' only, not
+-- 'ingredient'/'recipe' — see BLOCKERS.md BLOCKER-010(c) and migration
+-- 20260901200000_add_archive_restore_catalog_entity_rpcs.sql for the full rationale.
+CREATE OR REPLACE FUNCTION public.restore_catalog_entity(p_entity_type text, p_entity_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant_id uuid;
+  v_result jsonb;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'authentication required'
+      USING errcode='28000', detail = json_build_object('code','session_expired')::text;
+  END IF;
+  IF NOT public.has_permission('products.manage', NULL) THEN
+    RAISE EXCEPTION 'only Owner, Admin, or Branch Manager may restore catalog entities'
+      USING errcode='42501', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+  IF p_entity_type NOT IN ('product','product_category','product_variant') THEN
+    RAISE EXCEPTION 'unsupported entity_type: % (ingredient/recipe entities are not restorable through this RPC)', p_entity_type
+      USING errcode='22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  IF p_entity_type = 'product' THEN
+    UPDATE public.products
+       SET deleted_at = NULL, deleted_by = NULL
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NOT NULL
+     RETURNING tenant_id, to_jsonb(products.*) INTO v_tenant_id, v_result;
+  ELSIF p_entity_type = 'product_category' THEN
+    UPDATE public.product_categories
+       SET deleted_at = NULL, deleted_by = NULL
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NOT NULL
+     RETURNING tenant_id, to_jsonb(product_categories.*) INTO v_tenant_id, v_result;
+  ELSIF p_entity_type = 'product_variant' THEN
+    UPDATE public.product_variants
+       SET deleted_at = NULL, deleted_by = NULL
+     WHERE id = p_entity_id AND tenant_id = public.current_tenant_id() AND deleted_at IS NOT NULL
+     RETURNING tenant_id, (to_jsonb(product_variants.*) || jsonb_build_object('unit_price', unit_price::text))
+       INTO v_tenant_id, v_result;
+  END IF;
+
+  IF v_tenant_id IS NULL THEN
+    RAISE EXCEPTION '% not found or not archived', p_entity_type
+      USING errcode='P0001', detail = json_build_object('code','invalid_transition')::text;
+  END IF;
+
+  PERFORM public.log_audit_event(
+    v_tenant_id, p_entity_type, p_entity_id, 'update',
+    jsonb_build_object('deleted_at', 'was_deleted'),
+    jsonb_build_object('deleted_at', null));
+
+  RETURN v_result;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.return_driver_trip(p_trip_id uuid, p_items jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -7231,6 +7347,8 @@ GRANT EXECUTE ON FUNCTION public.apply_stock_movement() TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_sync_operation(p_operation_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_ticket_create(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_ticket_item_update(p_operation sync_operations) TO service_role;
+GRANT EXECUTE ON FUNCTION public.archive_catalog_entity(p_entity_type text, p_entity_id uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.archive_catalog_entity(p_entity_type text, p_entity_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.archive_ticket(p_ticket_id uuid, p_reason text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.archive_ticket(p_ticket_id uuid, p_reason text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.assert_schema_invariants() TO service_role;
@@ -7315,6 +7433,8 @@ GRANT EXECUTE ON FUNCTION public.record_payment(p_order_id uuid, p_amount numeri
 GRANT EXECUTE ON FUNCTION public.record_payment(p_order_id uuid, p_amount numeric, p_method text, p_reference text, p_cash_session_id uuid, p_driver_trip_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_refund(p_payment_id uuid, p_amount numeric, p_reason text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.record_refund(p_payment_id uuid, p_amount numeric, p_reason text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.restore_catalog_entity(p_entity_type text, p_entity_id uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.restore_catalog_entity(p_entity_type text, p_entity_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.return_driver_trip(p_trip_id uuid, p_items jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.return_driver_trip(p_trip_id uuid, p_items jsonb) TO service_role;
 GRANT EXECUTE ON FUNCTION public.rls_auto_enable() TO service_role;

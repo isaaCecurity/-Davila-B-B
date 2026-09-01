@@ -5,6 +5,97 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (latest) · BLOCKER-010(c) resolved — catalog write path confirmed, two new RPCs built (P4.1b COMPLETE)
+
+**Context:** user picked "BLOCKER-010(c): catalog write mechanism" from a set of offered
+next-task options (the last one before this was AD-022's ingredient-tracking
+deactivation). Goal: confirm whether PostgREST+RLS or an RPC is the intended
+`products`/`product_variants`/`product_categories` write mechanism, per
+`API-CONTRACT.md` §1's own rule, then build P4.1b if the answer was clean.
+
+**Investigated live before writing anything.** `information_schema.role_table_grants`
+confirmed `authenticated` already holds INSERT/SELECT/UPDATE (no DELETE) on all three
+tables, and `pg_policies` confirmed role-gated INSERT/UPDATE policies already exist
+(owner/admin/branch_manager), unused by any test suite until now. Wrote
+`tests/sql/catalog_write_rls.sql` to prove the mechanism live rather than reason about
+it — insert/update role gates (owner/branch_manager allowed, cashier/driver refused),
+cross-tenant `WITH CHECK`/filter behavior, the direct `unit_price` edit BLOCKER-010(b)
+worried about, and — the key confirmation — that `ticket_items.unit_price` stays frozen
+after a later catalog price change (AD-017/AD-021's mechanism, not a separate
+price-history table, none exists).
+
+**Two genuine, previously undocumented gaps found while writing the delete-path
+assertions, reproduced live in rolled-back transactions, not assumed:**
+
+1. A direct PostgREST `UPDATE` can never set `deleted_at` on these tables, for **any**
+   role including owner. Diagnosed by elimination: replaced the UPDATE policy's own
+   `WITH CHECK` with `true` via `ALTER POLICY` inside a throwaway transaction — the
+   UPDATE still failed with `42501`. Relaxing the *SELECT* policy's
+   `deleted_at IS NULL` clause instead made it succeed. Conclusion, confirmed
+   deliberately rather than half-understood: PostgreSQL requires an UPDATE's resulting
+   row to still satisfy the table's own SELECT policy, independently of the UPDATE
+   policy's WITH CHECK.
+2. `authenticated` was never actually `GRANT`ed `DELETE` on these three tables at all —
+   the `products_delete`/etc. RLS policies (owner/admin only) are dead code, the same
+   shape of gap TD-016 already recorded for `tickets`.
+
+**Consequence:** catalog soft-delete had no PostgREST path in either direction.
+`docs/SOFT-DELETE-AND-RETENTION.md` §38 had already flagged this for **restore**
+(`restore_catalog_entity`, "does not exist yet — must be built as part of P4.1b") but
+not for **archive**, since nothing had exercised it live before.
+
+**Built both as `SECURITY DEFINER` RPCs** (migration
+`20260901200000_add_archive_restore_catalog_entity_rpcs.sql`), read live from
+`archive_ticket()`'s body first and mirrored its conventions rather than inventing new
+ones: `has_permission('products.manage', NULL)` (the DB-backed permission catalog,
+confirmed to resolve to owner/admin/branch_manager — the same set the RLS policies use,
+but via `docs/ROLES-AND-PERMISSIONS.md`'s more current mechanism, not the RLS tables'
+JWT-only `has_role()`); the `errcode`/`detail` `RAISE` shape;
+`log_audit_event(..., 'update', ...)` (confirmed live that `audit_log`'s own `action`
+CHECK only allows `insert`/`update`/`delete`/`status_change` — no dedicated
+archive/restore action value exists, matching how `archive_ticket()` itself logs its
+own archive event). Deliberately scoped `p_entity_type` to
+`'product'|'product_category'|'product_variant'` only, excluding `'ingredient'`/
+`'recipe'` (§38's original sketch included `'ingredient'`): both RPCs are
+`SECURITY DEFINER` and would otherwise bypass AD-022's same-day revocation of
+`authenticated`'s ingredient-table grants.
+
+**Live-verified in a rolled-back transaction before applying, then again after:**
+archive then restore round-trips `deleted_at`/`deleted_by` correctly, `'ingredient'`
+rejected (`22023`), restoring an already-live row rejected (`P0001`), a cross-tenant id
+refused as generic not-found rather than leaking existence. `mcp__supabase__get_advisors`
+(security) clean — both functions appear only in the same expected
+"authenticated-executable SECURITY DEFINER" noise every other legitimate RPC in this
+project produces. `tests/sql/function_privilege_audit.sql`'s CHECK 1 re-run directly
+against both functions: zero rows (not anon-executable).
+
+**`tests/sql/catalog_write_rls.sql` final count: 18/18 live** (W1,W2,W3,W5-W12,W15-W21 —
+W4/W13/W14 deliberately absent: W13/W14 were role-split hard-DELETE cases retired
+mid-write-up once testing showed the boundary is a missing GRANT, not a role gate; W4
+was never assigned). `.venv/Scripts/python.exe -m pytest -q` → 12 passed, unaffected (no
+frontend/spec-coverage-relevant files touched this pass).
+
+**Docs updated:** `BLOCKERS.md` (BLOCKER-010 fully RESOLVED — a, b, c all closed),
+`docs/SOFT-DELETE-AND-RETENTION.md` §38 (restore contract corrected to match what was
+actually built; archive_catalog_entity added), `docs/API-CONTRACT.md` §2 (two new RPC
+rows), `ARCHITECTURE_DECISIONS.md` (AD-021 postscript), `BACKEND_ROADMAP.md` (P4.1b →
+COMPLETE in the Current State summary, the B7 crosswalk row, the P4.1b section itself,
+the P5.1 pricing row, and the dependency-stopped-on table — five separate stale mentions
+corrected in the same pass rather than one).
+
+Full baseline sync: `supabase/migrations/20260809_live_schema.sql` hand-patched with
+both function bodies (alphabetically placed) and their GRANT lines, matching this
+project's established dual-write pattern (a standalone numbered migration as the source
+of truth for what ran on production, plus a baseline patch so the CI throwaway database
+can reproduce it) — same pattern AD-022 used.
+
+**Not committed in this pass** — pending the same real-CI-run confirmation discipline
+this project has followed since P11.1/P11.2: push, then treat the SQL suite as
+genuinely passing only once GitHub's own runners confirm it, not the live-project
+verification alone.
+
+---
+
 ## 2026-09-01 (later still) · AD-022 follow-up — real GitHub Actions run found 2 more test files that read the deactivated tables directly
 
 **Context:** pushed the AD-022 commit (previous entry); the real GitHub Actions run

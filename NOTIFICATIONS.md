@@ -4,6 +4,24 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Catalog editing (products/prices) confirmed safe to build on — plus a real gap found and fixed (2026-09-01)
+
+You picked this as the next thing to work on. Short version: editing products, categories,
+and prices directly (no special approval step) is confirmed to be the right, safe way to do
+it — already tested live, including that changing a price today doesn't quietly rewrite the
+price on old orders.
+
+While testing that, found a real gap: there was actually no way at all to *delete* (or
+un-delete) a product, category, or variant — not through the normal app-style write, and not
+even for the owner account. Built the missing piece — two small, permission-checked backend
+functions that do exactly that (delete/archive and restore), matching the same "owner, admin,
+or branch manager only" rule everything else in the catalog already follows.
+
+Net effect: the catalog write side of the backend (BLOCKER-010) is now fully done — nothing
+outstanding there.
+
+---
+
 ## Ingredient tracking deactivated for MVP, as you asked (2026-09-01)
 
 Done. Nothing tracks raw ingredients (flour, sugar, etc.) anymore, in the app or through the

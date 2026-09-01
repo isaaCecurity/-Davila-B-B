@@ -239,6 +239,16 @@ an existing ticket's items/amounts during the window `STATE-MACHINES.md` already
 	create/edit is out of first sync scope. Historical ticket items keep their frozen price
 	(AD-017) regardless of later catalog price changes.
 
+**Postscript, 2026-09-01 (BLOCKER-010c resolved, P4.1b complete).** The *online* catalog
+write path (create/edit) is confirmed PostgREST+RLS, per `docs/API-CONTRACT.md` §1 — no
+RPC needed there. But live testing (`tests/sql/catalog_write_rls.sql`) found that
+soft-delete (`deleted_at`) has no PostgREST path at all, for any role: PostgreSQL refuses
+an UPDATE that would make the new row fail the table's own SELECT policy. Two
+`SECURITY DEFINER` RPCs now cover it — `archive_catalog_entity()`/
+`restore_catalog_entity()`, scoped to `product`/`product_category`/`product_variant`
+only (not `ingredient`, consistent with AD-022 below). See `BLOCKERS.md` BLOCKER-010(c)
+and `docs/SOFT-DELETE-AND-RETENTION.md` §38 for the full detail.
+
 **`sync_conflicts` is a server table, authoritative — not only a client projection.**
 This **corrects** `OFFLINE-SYNC-MODEL.md` §10, which previously said a conflict is recorded
 only as `sync_operations.status = 'CONFLICT'` with no dedicated table and explicitly said a

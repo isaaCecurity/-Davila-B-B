@@ -1,5 +1,40 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-010(c) resolved — catalog write path confirmed; P4.1b COMPLETE (2026-09-01)
+
+Picked from a set of offered next-task options after AD-022 wrapped up. Confirmed
+PostgREST+RLS is the correct write mechanism for catalog create/edit (matches
+`docs/API-CONTRACT.md` §1's own rule, live-verified via new suite
+`tests/sql/catalog_write_rls.sql`, 18/18) — but found, live and reproducibly, that a
+direct PostgREST `UPDATE` can **never** set `deleted_at` on `products`/
+`product_categories`/`product_variants` for any role, including owner (Postgres refuses
+an UPDATE whose new row would fail the table's own SELECT policy), and that
+`authenticated` was never actually `GRANT`ed `DELETE` on these tables either — so
+catalog soft-delete had no PostgREST path in either direction.
+
+Built the fix: `archive_catalog_entity()`/`restore_catalog_entity()`, two new
+`SECURITY DEFINER` RPCs (migration `20260901200000_add_archive_restore_catalog_entity_
+rpcs.sql`), mirroring `archive_ticket()`'s established conventions
+(`has_permission('products.manage', NULL)`, `log_audit_event()`, the errcode/detail
+`RAISE` shape) rather than inventing new ones. Scoped to `product`/`product_category`/
+`product_variant` only — `docs/SOFT-DELETE-AND-RETENTION.md` §38 had already specified
+`restore_catalog_entity` including `'ingredient'`, but AD-022 (same day) revoked
+`authenticated`'s ingredient-table grants entirely, and these RPCs being
+`SECURITY DEFINER` would otherwise silently bypass that.
+
+**BLOCKER-010 is now fully resolved** (all three parts — a: 2026-08-14, b: 2026-08-24
+via AD-017, c: this pass) and **P4.1b catalog write path is COMPLETE**. Full trace:
+`IMPLEMENTATION_LOG.md` 2026-09-01 (latest entry), `BLOCKERS.md` BLOCKER-010,
+`ARCHITECTURE_DECISIONS.md` AD-021 postscript, `docs/API-CONTRACT.md` §2,
+`docs/SOFT-DELETE-AND-RETENTION.md` §38, `BACKEND_ROADMAP.md` (five stale mentions
+corrected).
+
+**Not yet committed** — same standing pattern as every prior pass this session: push,
+then confirm green on a real GitHub Actions run before calling it done, not on the live
+Supabase project's own verification alone.
+
+---
+
 ## ✅ AD-022 — raw-ingredient/production stock tracking deactivated for MVP (2026-09-01)
 
 Direct product decision from the user, made mid-session: MVP does not track bakery stock at

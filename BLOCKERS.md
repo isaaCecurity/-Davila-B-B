@@ -491,8 +491,8 @@ evidence recorded.
 
 ---
 
-## BLOCKER-010 · Catalog write path — one unresolved sub-decision
-**Status:** OPEN (c) · BLOCKER-010a RESOLVED 2026-08-14 · BLOCKER-010b RESOLVED 2026-08-24 via AD-017 · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
+## ✅ BLOCKER-010 · Catalog write path — all three parts resolved 2026-09-01
+**Status:** RESOLVED · BLOCKER-010a RESOLVED 2026-08-14 · BLOCKER-010b RESOLVED 2026-08-24 via AD-017 · BLOCKER-010c RESOLVED 2026-09-01 · **Affects:** P4.1b (catalog write path) · **Type:** schema defect + business rule + architecture confirmation
 
 The P4.1 **read** path is safe and proceeding. The **write** path is not, on three
 counts. Recorded rather than guessed.
@@ -506,15 +506,41 @@ in place silently rewrites the price every historical read reproduces. This was
 **BLOCKER-003** territory. AD-017 now requires effective-dated price history and frozen
 ticket-item prices, so the catalog write path must not mutate historical prices.
 
-**(c) Confirm PostgREST + RLS as the catalog write mechanism.** `API-CONTRACT.md` §1
-assigns single-row writes with no side effects to PostgREST + RLS, not RPCs, and the read
-path follows that. Catalog writes appear to qualify, but this should be confirmed
-explicitly before the write path is built, since the roadmap previously specified "CRUD
-RPCs" (now corrected).
+**(c) ~~Confirm PostgREST + RLS as the catalog write mechanism.~~ RESOLVED 2026-09-01,
+with a nuance the original question didn't anticipate.** `API-CONTRACT.md` §1's own rule
+("single-row writes with no side effects → PostgREST + RLS") is confirmed correct **for
+create and ordinary-field edit** — live-verified via the new `tests/sql/
+catalog_write_rls.sql` (18/18): `authenticated` already holds INSERT/UPDATE on
+`products`/`product_categories`/`product_variants`, role-gated to owner/admin/
+branch_manager exactly as the permissions catalog specifies, including a direct
+`unit_price` edit (the case BLOCKER-010b worried about) — proven not to disturb
+`ticket_items.unit_price`'s already-frozen copy.
 
-**Needed:** ~~(a) resolved~~ ~~(b) resolved by AD-017~~ (c) confirmation that PostgREST + RLS is the correct catalog write mechanism.
+**Two genuine gaps were found while proving this, not assumed — both now closed in the
+same pass:**
+1. A direct PostgREST `UPDATE` can **never** set `deleted_at` on these tables, for any
+   role including owner — PostgreSQL requires a row's post-UPDATE image to still satisfy
+   the table's own SELECT policy (`deleted_at IS NULL`), so Postgres refuses the write
+   before the UPDATE policy's own `WITH CHECK` is even consulted (confirmed by swapping
+   that `WITH CHECK` for `true` via `ALTER POLICY` — still refused).
+2. `authenticated` was never actually `GRANT`ed `DELETE` on these tables at all — the
+   existing `products_delete`/etc. RLS policies (owner/admin only) were dead code, the
+   same shape of gap TD-016 already logged for `tickets`.
 
-**Non-blocking work:** the entire P4.1a read path, P6.1, P11.1.
+So soft-delete had no PostgREST path at all, in either direction — `docs/
+SOFT-DELETE-AND-RETENTION.md` §38 had already flagged this for **restore**
+(`restore_catalog_entity`, "does not exist yet") but not for **archive**, since nothing
+had exercised it live before. Built both as `SECURITY DEFINER` RPCs, mirroring
+`archive_ticket()`'s established conventions (`has_permission('products.manage', NULL)`,
+not the RLS tables' JWT-only `has_role()`; `log_audit_event()`; the errcode/detail
+`RAISE` shape) — migration `20260901200000_add_archive_restore_catalog_entity_rpcs.sql`.
+Deliberately scoped to `'product'|'product_category'|'product_variant'` only, excluding
+`'ingredient'`/`'recipe'`: both RPCs are `SECURITY DEFINER` and would otherwise bypass
+AD-022's revocation of `authenticated`'s grants on the ingredient tables. Live-verified
+(same suite, W17-W21): archive/restore round-trip, `'ingredient'` rejected, cross-tenant
+id refused as not-found (tenant resolved server-side, never trusted from the caller).
+
+**Non-blocking work, still true:** the entire P4.1a read path, P6.1, P11.1.
 
 ---
 

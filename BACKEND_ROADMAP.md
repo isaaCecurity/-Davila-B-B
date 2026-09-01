@@ -34,7 +34,9 @@ an executed SQL suite (`inventory_read_rls.sql` 2026-08-15, production live-veri
 **Write paths are no longer uniformly blocked** — this line originally said "every write
 path is BLOCKED"; that stopped being true over the following week without this section
 being updated. As of this pass:
-- P4.1b catalog write: **BLOCKED** — BLOCKER-010(c); pricing policy is resolved by AD-017.
+- P4.1b catalog write: **COMPLETE 2026-09-01** — BLOCKER-010 fully resolved (all three
+  parts); `archive_catalog_entity()`/`restore_catalog_entity()` RPCs added since
+  PostgREST+RLS alone has no soft-delete path (see the P4.1b section below).
 - P4.2b inventory write: **COMPLETE** (2026-08-15); **narrowed to finished-product stock only
   2026-09-01 (AD-022)** — ingredient tracking deactivated for MVP, `adjust_stock()` now
   rejects `item_type='ingredient'`.
@@ -58,8 +60,10 @@ being updated. As of this pass:
   `guard_expense_cash_session()`, and an unneeded direct-write grant on `cash_sessions`).
   Refunds (P5.5) are RPC-complete and tested but deferred from the MVP product surface by
   AD-017. Tax/discounts (P5.1/P5.2) remain deferred by the same decision; the
-  price-history mechanism for non-discount pricing is still open (BLOCKER-010b/c).
-  Reporting (P5.8) not audited this pass.
+  price-history mechanism for non-discount pricing is resolved (BLOCKER-010b, 2026-08-24)
+  — `ticket_items.unit_price` is copied and frozen at ticket-creation time, not a
+  separate history table (AD-021 makes this explicit). Reporting (P5.8) not audited this
+  pass.
 - P6 platform services: P6.1, P6.2, P6.4, P6.5, **P6.6 COMPLETE** (rate limiting,
   2026-08-22). P6.3, P6.7 DEFERRED.
 
@@ -73,11 +77,13 @@ organization → catalog (P8.1) plus catalog detail, inventory, production, and 
 strongest verification available without a physical device/emulator, which this
 environment does not have. Full detail: P8.1 section under Phase 8.
 
-**Open blockers requiring a human decision, as of 2026-08-28:** BLOCKER-010(c) (catalog
-write mechanism confirmation) and BLOCKER-018 (ingredient cost capture workflow, gating
-COGS/gross-profit reporting only — revenue/cash reporting already shipped in P9.8).
-BLOCKER-006 (per-entity sync conflict strategy, was gating P3.7) is now **RESOLVED** —
-see AD-021. Every other blocker previously summarized on this page —
+**Open blockers requiring a human decision, updated 2026-09-01:** none of the blockers
+this section used to list remain open. BLOCKER-010(c) (catalog write mechanism) resolved
+2026-09-01 — see the P4.1b section below. BLOCKER-018 (ingredient/COGS cost capture)
+resolved 2026-09-01 by descope via AD-022 (ingredient tracking out of MVP scope
+entirely) — see `BLOCKERS.md`. BLOCKER-006 (per-entity sync conflict strategy, was
+gating P3.7) is **RESOLVED** — see AD-021. Every other blocker previously summarized on
+this page —
 BLOCKER-001, 002, 003, 004, 005, 006, 007, 008, 009, 011, 012, 013, 014, 015, 016, 017,
 019, 020, 021 — is **RESOLVED**; see `BLOCKERS.md` for the evidence behind each.
 
@@ -119,7 +125,7 @@ The earlier B-numbering is preserved so nothing is rewritten:
 | B4 Sync gateway (record) | P3.1–P3.6 | COMPLETE |
 | B5 Per-entity apply | P3.7 | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29 (BLOCKER-006 resolved via AD-021), inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30, production.record_output/.record_waste IMPLEMENTED 2026-08-31; inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31 and removed from the allowlist (BLOCKER-026/027 RESOLVED); expense.reverse (BLOCKER-028) is the only remaining deliberately-unbuilt item |
 | B6 Invitation delivery | P6.2 | COMPLETE (verified live 2026-08-22) |
-| B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b BLOCKED (BLOCKER-010b,c) |
+| B7 Core domain services | P4 | P4.1a COMPLETE / P4.1b COMPLETE 2026-09-01 |
 | B8 Tickets / sales | P4.4 | READ PATH COMPLETE / WRITE PATH RPCs COMPLETE |
 | B9 Payments & cash | P5 | BLOCKED (BLOCKER-003) |
 | B10 Financial reporting | P5.7 | BLOCKED (BLOCKER-003) |
@@ -592,15 +598,18 @@ stale after the suite actually ran (see `CURRENT_TASK.md`'s P4.1a section) — c
 here rather than re-verified, since the evidence already exists.
 **Blockers:** none.
 
-### P4.1b · Catalog write path — BLOCKED
-**Blockers:** **BLOCKER-010** — one unresolved sub-decision:
-(a) does soft-delete free a natural key? The unique indexes `products_tenant_name_key`,
-`ingredients_tenant_name_key`, `product_categories_tenant_name_key`,
-`product_variants_tenant_sku_key` and `recipes_one_active_per_variant` are **not partial
-on `deleted_at IS NULL`** (verified live), so under AD-012 a soft-deleted name is
-permanently consumed — fixing it is a migration and needs approval;
-(b) may `unit_price` be edited in place with no price-history table (**resolved by AD-017**);
-(c) confirmation that PostgREST + RLS, not an RPC, is the write mechanism.
+### P4.1b · Catalog write path — COMPLETE 2026-09-01
+**Blockers:** none — **BLOCKER-010 fully resolved** (all three sub-parts):
+(a) soft-delete frees a natural key — the five unique indexes are now partial on
+`deleted_at IS NULL` (fixed 2026-08-14); (b) `unit_price` may be edited in place, per
+AD-017's frozen-`ticket_items`-price mechanism (resolved 2026-08-24); (c) PostgREST+RLS
+is confirmed correct for create/ordinary-edit (live-verified,
+`tests/sql/catalog_write_rls.sql` 18/18) but soft-delete/hard-delete had no PostgREST
+path at all — closed via two new `SECURITY DEFINER` RPCs, `archive_catalog_entity()`/
+`restore_catalog_entity()` (migration `20260901200000_add_archive_restore_catalog_
+entity_rpcs.sql`), scoped to `product`/`product_category`/`product_variant` (not
+`ingredient`, per AD-022). See `docs/API-CONTRACT.md` §2 and
+`docs/SOFT-DELETE-AND-RETENTION.md` §38.
 **Parallelizable:** P4.1a with P6.1, P6.3.
 
 ## P4.2 · Inventory — COMPLETE (P4.2a read, P4.2b write)
@@ -741,7 +750,7 @@ audit, not assumed.
 
 | ID | Milestone | Schema | Status |
 |---|---|---|---|
-| P5.1 | Pricing & discounts | `product_variants`, `tickets.discount_amount` | **PARTIAL.** No effective-dated price-history table exists yet (AD-017 requires one for the catalog write path — see BLOCKER-010b/c); discounts are explicitly deferred from MVP scope by AD-017, not blocked. |
+| P5.1 | Pricing & discounts | `product_variants`, `tickets.discount_amount` | **PARTIAL.** Pricing's own piece resolved 2026-08-24/2026-09-01: AD-017's "effective-dated price history" is `ticket_items.unit_price` copied and frozen at ticket-creation time (no separate history table — AD-021 makes this the settled design, not a gap; confirmed live under the actual PostgREST write path, `tests/sql/catalog_write_rls.sql` W16). Discounts are explicitly deferred from MVP scope by AD-017, not blocked. |
 | P5.2 | Taxes | `tickets.tax_amount` | **DEFERRED by AD-017** — a scope decision, not an open blocker. The column exists and is dormant. |
 | P5.3 | Invoices | `invoices` | ✅ **COMPLETE.** `confirm_ticket()` issues one on confirmation with the frozen ticket total; status derives automatically (`issued`→`partially_paid`→`paid`) as `apply_payment_to_ticket()` accrues payments. Verified live: F7/F8a–c. |
 | P5.4 | Payments | `payments`, `apply_payment_to_ticket()`, `record_payment()` | ✅ **COMPLETE**, two real defects found and fixed 2026-08-24: `record_payment()` actively offered `'credit'` as a method, though AD-017 states a credit sale creates **no** payment row; and nothing enforced AD-017's "overpayments are rejected against the outstanding balance" — a 500 payment against a 100 total succeeded outright. Both fixed (`record_payment()`'s allowed-method list; `guard_payment_relationships()` gained the overpayment check so it holds regardless of write path). Verified live: F2–F6, F9/F10. |
@@ -1070,7 +1079,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 
 | Remaining backend milestone | Stopped on |
 |---|---|
-| P4.1b catalog write | BLOCKER-003 (pricing), BLOCKER-010b/c |
+| P4.1b catalog write | ✅ **COMPLETE 2026-09-01** — BLOCKER-010 fully resolved |
 | P4.2b inventory write | ✅ **COMPLETE** — 17/17 executed live 2026-08-15 |
 | P4.3 production | types/schemas **live-verified**; the `complete_production_batch()` and `fail_production_batch()` signatures were **read live 2026-08-16** and the completion path executed once under ROLLBACK, so the write path is now startable — no decision outstanding |
 | P4.4a customers | ✅ **COMPLETE** — 6/6 RLS + 12/12 structural executed live |
