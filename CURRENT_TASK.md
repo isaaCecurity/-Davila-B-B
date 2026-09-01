@@ -27,8 +27,10 @@ cross-tenant denial, and the idempotency regression guard (SW14).
 Docs updated: `docs/API-CONTRACT.md`, `BACKEND_ROADMAP.md` (P4.4 now COMPLETE in both
 the Current State summary and the B8 crosswalk row).
 
-**Not yet committed** — pending push and confirmation on a real GitHub Actions run,
-same standing discipline as every prior pass this session.
+**Committed and pushed (`de55f79`), confirmed GREEN on a real GitHub Actions run**
+(`33572983188`) — all three jobs passed, including `Database suites (throwaway
+Postgres)`, confirming `tests/sql/sales_write_rls.sql` and the idempotency fix both
+work from a genuinely fresh database, not just the live project.
 
 Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (latest entry).
 
