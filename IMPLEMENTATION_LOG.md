@@ -42,8 +42,9 @@ and C3b's live variant→recipe→lines traversal replaced with an explicit deni
 even evaluated, so leaving them in an unguarded top-level statement would abort the whole
 transaction on an uncaught error rather than fail one assertion cleanly.
 
-**Verification:** `.venv/Scripts/python.exe -m pytest -q` — 12 passed. SQL suite fixes await
-the next real GitHub Actions run, per the Evidence rule.
+**Verification:** `.venv/Scripts/python.exe -m pytest -q` — 12 passed. Pushed (commit
+`a333b487`) and confirmed: run `33546190160` completed green — all three CI jobs, all 16 SQL
+suites. AD-022 is fully validated end-to-end, not just applied.
 
 ---
 

@@ -27,11 +27,13 @@ re-pointed at the still-live product-only path (plus new tests proving ingredien
 CHECK-constraint-rejection proofs (no product-only fallback exists for production batches);
 `function_privilege_audit.sql`'s allowlist comment corrected.
 
-Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (fifth entry), `ARCHITECTURE_DECISIONS.md`
-AD-022, `BLOCKERS.md` BLOCKER-018.
+Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (fifth and sixth entries),
+`ARCHITECTURE_DECISIONS.md` AD-022, `BLOCKERS.md` BLOCKER-018.
 
-**Still open:** the SQL test-file changes await confirmation from the next real GitHub Actions
-run — not claimed as passing until that happens.
+**Confirmed GREEN**, two pushes in: the first real CI run after this change found two more
+test files that read the deactivated tables directly (`catalog_read_rls.sql`,
+`inventory_write_rls.sql` — both fixed, see the sixth log entry); the second run (commit
+`a333b487`, run `33546190160`) passed clean across all three jobs and all 16 SQL suites.
 
 ---
 
