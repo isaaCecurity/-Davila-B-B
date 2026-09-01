@@ -29,9 +29,10 @@ via AD-017, c: this pass) and **P4.1b catalog write path is COMPLETE**. Full tra
 `docs/SOFT-DELETE-AND-RETENTION.md` §38, `BACKEND_ROADMAP.md` (five stale mentions
 corrected).
 
-**Not yet committed** — same standing pattern as every prior pass this session: push,
-then confirm green on a real GitHub Actions run before calling it done, not on the live
-Supabase project's own verification alone.
+**Committed and pushed (`b6abeb83`), confirmed GREEN on a real GitHub Actions run**
+(`33551152655`) — all three jobs passed, including `Database suites (throwaway
+Postgres)`, which means `tests/sql/catalog_write_rls.sql` and the baseline patch both
+work from a genuinely fresh database, not just against the live project.
 
 ---
 
