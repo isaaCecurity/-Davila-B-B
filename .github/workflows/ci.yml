@@ -200,14 +200,29 @@ jobs:
       # same database is safe — none of them leave data behind for the next one to trip over.
       # function_privilege_audit.sql is the one exception to the transaction pattern (it's
       # read-only catalog introspection, no transaction needed) and runs fine in the same loop.
+      #
+      # Deliberately NOT `set -e` here: that would abort the whole loop at the first failing
+      # file (alphabetically, catalog_read_rls.sql) and silently skip every file after it —
+      # exactly what happened on the first real run of this job (2026-09-01, run 33523857545),
+      # which reported one failure but never even attempted the other 15 files. Each file is run
+      # to completion, every result is recorded, and the job fails at the end if anything
+      # unexpected happened — so one known issue can never hide a regression in an unrelated file.
       - name: Run every tests/sql/*.sql suite
         run: |
-          set -e
+          declare -a failed
           for f in tests/sql/*.sql; do
             case "$f" in
               tests/sql/fixtures.sql|tests/sql/throwaway_auth_compat_shim.sql) continue ;;
             esac
             echo "::group::$f"
-            psql "$PGURL" -v ON_ERROR_STOP=1 -f "$f"
+            if ! psql "$PGURL" -v ON_ERROR_STOP=1 -f "$f"; then
+              failed+=("$f")
+            fi
             echo "::endgroup::"
           done
+
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::${#failed[@]} suite(s) failed: ${failed[*]}"
+            exit 1
+          fi
+          echo "all suites passed"

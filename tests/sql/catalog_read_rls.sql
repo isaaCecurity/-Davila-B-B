@@ -64,9 +64,10 @@ INSERT INTO public.ingredients (id, tenant_id, name, unit_of_measure, reorder_le
   ('c4000000-0000-4000-8000-0000000000a9','c0000000-0000-4000-8000-0000000000a1','Deleted Flour A','g',0.0000,NULL,true);
 
 -- Note: `recipes_one_active_per_variant` is UNIQUE (tenant_id, product_variant_id)
--- WHERE is_active. The soft-deleted recipe below must therefore be is_active = false,
--- or it collides with the live one — which is itself the BLOCKER-010(a) defect, proven
--- directly in C9b.
+-- WHERE (is_active AND deleted_at IS NULL) — already partial on deleted_at, so this one
+-- was never part of the BLOCKER-010(a) natural-key gap C9a/C9b cover below. The
+-- soft-deleted recipe here is still set is_active = false anyway, to also prove C9c's
+-- "at most one ACTIVE recipe" guarantee holds independent of soft-delete state.
 INSERT INTO public.recipes (id, tenant_id, product_variant_id, name, yield_quantity, version, is_active) VALUES
   ('c5000000-0000-4000-8000-0000000000a1','c0000000-0000-4000-8000-0000000000a1','c3000000-0000-4000-8000-0000000000a1','Recipe A',12.0000,1,true),
   ('c5000000-0000-4000-8000-0000000000b1','c0000000-0000-4000-8000-0000000000b1','c3000000-0000-4000-8000-0000000000b1','Recipe B',24.0000,1,true),
@@ -204,27 +205,29 @@ BEGIN
     (SELECT unit_price::text FROM public.product_variants WHERE id = VAR_A) = '184500.0000',
     'got ' || (SELECT unit_price::text FROM public.product_variants WHERE id = VAR_A));
 
-  -- C9 -- BLOCKER-010(a) evidence: soft delete permanently consumes a natural key.
-  -- Recorded as a defect, NOT fixed here (the fix is a migration and needs approval).
+  -- C9 -- BLOCKER-010(a): natural-key uniques are now partial on deleted_at (fixed live
+  -- 2026-08-14; verified directly against pg_index below rather than assumed). Was
+  -- previously recorded here as a defect ("NOT partial", v_n = 0) — that assertion went
+  -- stale the moment the fix shipped and asserted the opposite of current reality.
   SELECT count(*) INTO v_n
     FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
    WHERE ic.relname IN ('products_tenant_name_key','ingredients_tenant_name_key',
                         'product_categories_tenant_name_key','product_variants_tenant_sku_key')
      AND i.indpred IS NOT NULL;
-  INSERT INTO _results VALUES ('C9a natural-key uniques are NOT partial on deleted_at (defect)',
-    v_n = 0, 'partial indexes among the 4 natural-key uniques = ' || v_n
-             || ' (0 confirms the BLOCKER-010a defect)');
+  INSERT INTO _results VALUES ('C9a natural-key uniques are partial on deleted_at',
+    v_n = 4, 'partial indexes among the 4 natural-key uniques = ' || v_n
+             || ' (4 confirms the BLOCKER-010a fix)');
 
-  -- Behavioural proof of the same defect: the soft-deleted product's name cannot be
-  -- reused. A bakery that deletes "Deleted Product A" can never create it again.
+  -- Behavioural proof of the same fix: a soft-deleted product's name is free to reuse.
+  -- A bakery that deletes "Deleted Product A" can now create it again.
   BEGIN
     INSERT INTO public.products (id, tenant_id, name)
     VALUES (gen_random_uuid(), ORG_A, 'Deleted Product A');
-    INSERT INTO _results VALUES ('C9b soft-deleted name is permanently consumed', false,
-      'name was reusable - defect would be absent');
+    INSERT INTO _results VALUES ('C9b soft-deleted name is reusable', true,
+      'name was reusable - confirms the BLOCKER-010a fix');
   EXCEPTION WHEN unique_violation THEN
-    INSERT INTO _results VALUES ('C9b soft-deleted name is permanently consumed', true,
-      'confirmed 23505: ' || SQLERRM);
+    INSERT INTO _results VALUES ('C9b soft-deleted name is reusable', false,
+      'still 23505 on reuse - fix regressed: ' || SQLERRM);
   END;
 
   -- C9c -- one active recipe per variant is a database guarantee, which is what makes

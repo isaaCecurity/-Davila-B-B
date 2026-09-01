@@ -12,6 +12,7 @@
 // `packages/*` is consumed exclusively by the Expo app. Adding a dependency to lint code
 // that a present dependency already lints would be churn for no coverage.
 const expoConfig = require('eslint-config-expo/flat');
+const globals = require('globals');
 
 module.exports = [
   ...expoConfig,
@@ -24,5 +25,14 @@ module.exports = [
       '**/dist/**',
       '**/.expo/**',
     ],
+  },
+  {
+    // jest.config.js is CommonJS (module.exports, __dirname), not the ESM/browser
+    // code expoConfig's globals assume — without this override every root-level
+    // *.config.js fails lint with "'__dirname' is not defined".
+    files: ['*.config.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
   },
 ];

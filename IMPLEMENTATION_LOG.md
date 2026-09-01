@@ -5,6 +5,74 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later same day) · First real GitHub Actions run of the sql-tests job — 2 new defects found and fixed; 1 stale test corrected
+
+**Context:** the EC2 validation below was, by its own admission, "strong evidence, not an ironclad
+guarantee" that `.github/workflows/ci.yml` would work unmodified on GitHub's own runners
+(different network, different image cache). Commit `e163f1dd` (the SQL-suite CI wiring) had
+already been pushed to `origin/main` at the point this entry starts — checked via
+`GET /repos/.../actions/runs?branch=main`, which showed it as **run #61, conclusion: failure**.
+This entry investigates and resolves that failure via the GitHub REST API (no `gh` CLI available
+in this environment; job logs require write access even on a public repo, so diagnosis used
+`GET /commits/{sha}/check-runs` and `GET /check-runs/{id}/annotations`, which are public).
+
+**Defect 1 — `sql-tests` job aborted after the first failing file, never running the other 15.**
+The "Run every tests/sql/*.sql suite" step used `set -e` inside the loop. `tests/sql/*.sql` glob
+sorts alphabetically, and `catalog_read_rls.sql` (see Defect 3) sorts first — so the loop died on
+file 1 of 16 and every file after it, including `security_multiorg_sync.sql`'s already-documented
+`rate_limit_events` gap, silently never ran. **Fix:** removed `set -e`; the loop now runs every
+file to completion, collects failures in an array, and fails the job at the end listing all of
+them by name — so one known issue can never again hide a regression anywhere else.
+
+**Defect 2 — `Lint & typecheck` job failing on `bakeflow-frontend/jest.config.js:18`:
+`'__dirname' is not defined`.** Confirmed pre-existing and unrelated to the SQL work: `git log`
+shows `jest.config.js` was added in `28ab4751` (P11.3), and every one of the last 10 CI runs on
+`main` — back through that commit — has `conclusion: failure`, so this was never actually green,
+just never diagnosed. Root cause: `bakeflow-frontend/eslint.config.js` applies
+`eslint-config-expo/flat`, whose globals assume ESM/browser code; `jest.config.js` is CommonJS
+(`module.exports`, `__dirname`) and nothing supplied Node globals for root-level `*.config.js`
+files. **Fix:** added a `{ files: ['*.config.js'], languageOptions: { globals: globals.node } }`
+override (the `globals` package was already present via `eslint-config-expo`'s own dependency
+tree — no new dependency added). Verified locally: `corepack npm run lint` now passes clean.
+
+**Defect 3 (stale test, not an environment bug) — `catalog_read_rls.sql` C9a/C9b still assert the
+BLOCKER-010a defect *exists*, which is backwards: BLOCKER-010a was resolved live 2026-08-14, and
+the current baseline (`supabase/migrations/20260809_live_schema.sql:1076,1113,1126,1150`) already
+carries all 4 natural-key unique indexes as `WHERE (deleted_at IS NULL)` — confirmed directly via
+`grep` against the baseline, not assumed. C9a asserted `v_n = 0` (no partial indexes = defect
+present); flipped to `v_n = 4`. C9b asserted a soft-deleted product's name throws
+`unique_violation` on reuse; flipped to assert the insert now succeeds. Also corrected a
+tangential stale comment (originally attributing `recipes_one_active_per_variant`'s partial index
+to the same defect — that index was already partial on `deleted_at` independently and was never
+part of the BLOCKER-010a gap). `BLOCKERS.md` already correctly shows BLOCKER-010a RESOLVED
+2026-08-14, so this brings the test in line with an already-decided, already-shipped fix — not a
+new judgment call.
+
+**Not fixed, deliberately:** `security_multiorg_sync.sql`'s S13 failure
+(`rate_limit_events` — RLS enabled + forced, zero policies, `verify_rls_coverage()` correctly
+flags it as "no policies defined, almost certainly unintended"). Traced this session to confirm
+it's real and not a test bug: the table's only grants are to `service_role`, accessed exclusively
+through `enforce_rate_limit()` (`SECURITY DEFINER`, owned by `postgres`, which carries BYPASSRLS
+on this image — so the function works fine regardless of the missing policies). Whether the
+"deny-all, zero policies" state is the intended final design (and `verify_rls_coverage()`/this
+test should be told to allow it) or a genuine gap needing an actual policy is a security-posture
+decision already flagged in `BLOCKERS.md`/`NOTIFICATIONS.md` from a prior pass — not re-decided
+here.
+
+**Verification gap, stated plainly:** the C9a/C9b fix could not be exercised in a local throwaway
+container this pass — Docker Desktop's daemon started fine, but pulling `supabase/postgres` hit
+the same DNS-to-`auth.docker.io` failure documented below (confirmed still Docker-specific, not
+system-wide: plain `nslookup auth.docker.io` resolves correctly via both the default resolver and
+`8.8.8.8`). Did not re-provision another throwaway EC2 instance for a 2-file, schema-verifiable
+fix. The fix is grounded in a direct `grep` of the baseline's actual index definitions, not a
+guess — but per the Evidence rule, it is not recorded as "passing" until the next real GitHub
+Actions run confirms it.
+
+**Files changed:** `.github/workflows/ci.yml`, `bakeflow-frontend/eslint.config.js`,
+`tests/sql/catalog_read_rls.sql`. `.venv/Scripts/python.exe -m pytest -q` — 12 passed.
+
+---
+
 ## 2026-09-01 (later same day) · P11.1 SQL-suite CI wiring — validated end-to-end on a throwaway AWS EC2 instance; 9 real defects found and fixed; 14/16 suites pass clean
 
 **Context:** picks up directly from the earlier entry below. Local Docker Desktop validation
