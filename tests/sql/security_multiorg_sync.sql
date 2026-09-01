@@ -297,12 +297,26 @@ BEGIN
            'public.process_sync_batch_context_validated(uuid,jsonb,uuid)','EXECUTE')),
     'authenticated/anon EXECUTE checked');
 
-  -- S13 -- schema invariants
+  -- S13 -- schema invariants.
+  --
+  -- rate_limit_events (RLS enabled+forced, zero policies) is the one known exception:
+  -- verify_rls_coverage() correctly flags any zero-policy table as "almost certainly
+  -- unintended", but this one was deliberately built that way and verified live, not
+  -- overlooked -- P6.6 (CURRENT_TASK.md) confirms an ordinary authenticated session gets
+  -- 42501 both reading rate_limit_events and calling enforce_rate_limit() directly; the
+  -- table is reachable only through that SECURITY DEFINER function (owned by postgres,
+  -- which carries BYPASSRLS on this image, so FORCE + zero policies never blocks it).
+  -- Allowlisted here at the test level, not by changing assert_schema_invariants() itself,
+  -- so the live invariant-checker keeps raising loudly for every OTHER table and for any
+  -- NEW zero-policy table added later -- same pattern as function_privilege_audit.sql's
+  -- KNOWN_PUBLIC_FUNCTIONS/known_intentional_mismatches allowlists.
   BEGIN
     PERFORM public.assert_schema_invariants();
     INSERT INTO _results VALUES ('S13 schema invariants clean', true, 'no violations');
   EXCEPTION WHEN OTHERS THEN
-    INSERT INTO _results VALUES ('S13 schema invariants clean', false, SQLERRM);
+    INSERT INTO _results VALUES ('S13 schema invariants clean',
+      SQLERRM = 'schema invariant violations:' || E'\n  [RLS] rate_limit_events: no policies defined (deny-all, almost certainly unintended)',
+      SQLERRM);
   END;
 END
 $suite$;

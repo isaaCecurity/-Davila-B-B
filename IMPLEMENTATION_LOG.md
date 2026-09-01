@@ -5,6 +5,48 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later still) · Third real GitHub Actions run confirms the fix; rate_limit_events RLS "gap" turns out to already be a decided, verified design — allowlisted at the test level, not guessed
+
+**Context:** commit `feb327a5` (previous entry) pushed and triggered run `33527874910`. Result:
+`Lint & typecheck` success, `Spec coverage` success, `Database suites` failure — but now naming
+exactly one file: `tests/sql/security_multiorg_sync.sql`, on exactly the already-known finding
+(log: `[RLS] rate_limit_events: no policies defined (deny-all, almost certainly unintended)`).
+Confirms both earlier fixes this same day (C1b, I10) actually work on a real runner, not just in
+theory.
+
+**Before touching S13, checked whether this "gap" was ever actually undecided.** `BLOCKERS.md` has
+no `rate_limit_events` entry at all — the prior pass's "already flagged" language in
+`NOTIFICATIONS.md`/`CURRENT_TASK.md` turned out to describe a test failure, not an open blocker.
+Searching `CURRENT_TASK.md` found the real answer: P6.6 already built and shipped
+`enforce_rate_limit()` + `rate_limit_events` as a deliberate service-role-only primitive, and
+verified live at the time — "an ordinary authenticated session cannot call `enforce_rate_limit()`
+or read `rate_limit_events` at all (42501 both ways)". Re-verified independently against the live
+project (`tvfyxpafbpnkneujcnvr`) via `mcp__supabase__execute_sql` rather than trusting the doc
+alone: `information_schema.role_table_grants` shows only `postgres`/`service_role` hold any
+privilege on the table (zero for `authenticated`/`anon`), and `pg_class`/`pg_policy` confirm
+`relrowsecurity`, `relforcerowsecurity` both true with 0 policies — exactly what
+`verify_rls_coverage()` flags, and exactly the state P6.6 intentionally built. `postgres` owns
+`enforce_rate_limit()` (SECURITY DEFINER) and carries BYPASSRLS on this image, so FORCE + zero
+policies never blocks the one legitimate access path.
+
+**Fix:** rather than weakening the live `assert_schema_invariants()`/`verify_rls_coverage()`
+functions (which should keep raising loudly for every other table, and for any new zero-policy
+table added later), S13 in `security_multiorg_sync.sql` now allowlists this one exact, fully-
+qualified finding string at the test level — same precedent as
+`function_privilege_audit.sql`'s `KNOWN_PUBLIC_FUNCTIONS`/`known_intentional_mismatches` tables.
+Any other invariant violation, on this table or any other, still fails the test loudly.
+
+**Net result:** all three CI jobs should now be green on the next push — not by masking anything,
+but because the two real infrastructure bugs (loop early-abort, lint globals) are fixed, the three
+genuinely stale test assertions (C9a/C9b, cascading C1b, I10) are corrected to match already-
+shipped, already-verified reality, and the one remaining "failure" turned out to already be a
+decided, live-verified design rather than an open question — confirmed independently rather than
+taken on faith either way.
+
+**Files changed:** `tests/sql/security_multiorg_sync.sql` (S13).
+
+---
+
 ## 2026-09-01 (later still) · Second real GitHub Actions run — 2 more real defects found; sql-tests job now isolates exactly one pre-existing, already-decided item
 
 **Context:** commit `dc6b82f8` (previous entry) pushed and triggered run `33526011685`. Job
