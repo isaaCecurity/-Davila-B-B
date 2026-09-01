@@ -5,6 +5,66 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (latest) · Full live database audit (security + data integrity) — one real finding, fixed
+
+**Context:** user asked, before moving to the next task, to check the whole live
+database (all tables/rows) for security holes and logical errors.
+
+**Security sweep — clean.** RLS enabled AND forced on all 40 public tables (zero gaps);
+the one zero-policy table (`rate_limit_events`) is the already-documented, deliberate
+P6.6 design. Zero `anon` grants on any table. Re-ran `function_privilege_audit.sql`'s
+three checks directly: zero anon-executable SECURITY DEFINER functions beyond the
+reviewed allowlist, zero mismatched-overload grants, zero trigger functions with a
+direct EXECUTE grant. Read all 108 RLS policies' `qual`/`with_check` looking for any
+missing a tenant/actor scope — found 5, all legitimate (3 are `supabase_auth_admin`-only
+JWT-hook reads, 2 are `authenticated`-wide reads on genuinely global, non-tenant
+reference catalogs — `roles`/`permissions`). Storage: all 4 buckets non-public, every
+`storage.objects` policy requires the object's folder-path tenant segment to match
+`current_tenant_id()`. Zero `NOT VALID` (unenforced-against-existing-rows) constraints
+anywhere. `get_advisors(security)` re-checked fresh — identical to the already-reviewed
+baseline, no new findings; `get_advisors(performance)` flagged only efficiency items
+(unused/duplicate indexes, per-row `auth.uid()` re-evaluation), and the two
+`multiple_permissive_policies` cases (`profiles`, `daily_financial_audits`) were read in
+full and are safe, intentional role overlaps, not privilege escalation.
+
+**Data integrity sweep — one real finding.** Checked: stock ledger vs.
+trigger-maintained `product_stock_levels`/`ingredient_stock_levels` (exact match, zero
+drift, zero negative-stock violations); ticket money invariants (`total_amount`'s
+generated-column formula, `subtotal_amount` vs. `sum(ticket_items.line_total)` — zero
+mismatches); `document_sequences.current_value` vs. actual max ticket number in use per
+tenant (exact match, no gaps/dupes); `production_batches` status/`actual_quantity`/
+`completed_at` consistency (clean); `deleted_at`/`deleted_by` pairing across every
+table with both columns (one apparent mismatch on `permissions`, explained: 4
+permission keys soft-deleted by the original 2026-08-09 seed migration with no human
+actor, matching `docs/ROLES-AND-PERMISSIONS.md`'s own documented "granted to no role at
+all" list — not a bug); money-column scale/precision (zero rows exceed 4 decimal
+places); cross-tenant structural checks (`warehouses`/`branches` tenant match, etc.) —
+all clean.
+
+**The one real finding:** ticket `2e37d57d-ec56-431e-9805-06b9f8368b89` — `status
+='completed'`, a genuine historical sale (real `ticket_items`, real `-2.0000` sale
+`stock_movements` row), but `completed_at IS NULL` and no invoice. Root-caused, not
+guessed: created 2026-08-21, before `tickets.completed_at` existed (P9.8, added
+2026-08-28) and before `complete_ticket()`'s `reference_type` fix (2026-08-22) — its
+stock movement still carries the pre-fix `reference_type='order'`. No CHECK constraint
+requires `completed_at` when `status='completed'`, so nothing had caught this until this
+audit. Consequence: `get_daily_revenue_summary()` buckets revenue by `completed_at`, so
+this real sale was silently excluded from every day's revenue report.
+
+**Fixed by explicit user decision** (asked, not guessed, since it's a live data change):
+backfilled `completed_at = created_at` for this one row, matching what `complete_ticket()`
+would have stamped at the time. Verified live in a rolled-back transaction first, then
+applied via migration `backfill_completed_at_for_pre_p98_ticket`; confirmed afterward
+`select count(*) from tickets where status='completed' and completed_at is null` → 0.
+Did not add an invoice or touch the stock movement's `reference_type` — neither was
+asked for, and both are separate, more consequential decisions.
+
+**Not committed as a repo change** — this was a live data fix (a migration recording
+what was done, applied directly), not a schema/code change; no file edits resulted
+beyond this log entry.
+
+---
+
 ## 2026-09-01 (latest) · BLOCKER-010(c) resolved — catalog write path confirmed, two new RPCs built (P4.1b COMPLETE)
 
 **Context:** user picked "BLOCKER-010(c): catalog write mechanism" from a set of offered
