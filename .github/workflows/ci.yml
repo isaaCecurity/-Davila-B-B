@@ -9,24 +9,20 @@
 # with the runner at the end of every run; nothing here ever touches the live production
 # project (tvfyxpafbpnkneujcnvr), and no production credential is used or needed.
 #
-# STATUS (2026-09-01): validated end-to-end against a real throwaway instance (an AWS EC2 box
-# with Docker — local Docker Desktop had an unrelated DNS issue reaching Docker Hub's CDN, see
-# IMPLEMENTATION_LOG.md), not just written against known facts. The exact chain this job runs
-# (shim -> baseline -> seed -> fixtures -> all suites) was run repeatedly from a genuinely fresh
-# database until every environment-caused failure was found and fixed: two default-privilege
-# gaps (functions AND tables both need an explicit REVOKE the baseline never had — this
-# project's `postgres` role auto-grants authenticated/anon on anything it creates, invisible on
-# live only because every object had already been individually locked down over many prior
-# migrations), a missing `private` schema/function, a function-ordering bug (has_role used
-# before it was defined), a missing storage.buckets/objects stub, and several test files with
-# stale assumptions (hardcoded role ids that only happened to match live's legacy values, a
-# missing shared fixture row, a batch-number collision). Final result: 14/16 suites pass clean;
-# the other 2 fail on pre-existing, already-known issues unrelated to this environment work (a
-# stale test asserting a since-resolved defect, and the documented rate_limit_events RLS gap) —
-# see IMPLEMENTATION_LOG.md 2026-09-01 for the full trace. Re-run this job's own steps locally
-# after any future baseline/fixture change; a first CI run on GitHub's actual runners is still
-# the true proof this exact YAML works there (different network, different image cache state)
-# — treat it as confirmation, not as something already guaranteed by the above.
+# STATUS (2026-09-01): GREEN on GitHub's own runners, confirmed (run 33528550754, commit
+# 00b857d9), not just validated on a throwaway AWS EC2 box beforehand. The first three real runs
+# on GitHub each found something the EC2 pass couldn't have: run 1 found the sql-tests loop's
+# `set -e` masking every file after the first alphabetical failure, plus a Lint config gap
+# (jest.config.js's CommonJS globals) broken on every run since it was added; run 2, once the
+# loop fix let every file actually run, found a cascading fixture side effect (fixing one stale
+# assertion changed the row count another assertion depended on) and a second stale test using a
+# domain_operation value since removed from its allowlist; run 3 confirmed all of the above and
+# was the first fully green run. One earlier "known failure" (security_multiorg_sync.sql's
+# rate_limit_events RLS finding) turned out, on inspection, to already be a decided and
+# live-verified design (P6.6) rather than an open gap — allowlisted at the test level with that
+# evidence, not guessed. Full trace of all of this: IMPLEMENTATION_LOG.md 2026-09-01 (four
+# entries). Re-run this job's own steps locally after any future baseline/fixture change; watch
+# the next real run rather than assuming green stays green.
 #
 
 name: CI

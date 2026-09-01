@@ -1197,7 +1197,7 @@ business database; backups must not yield readable data (AD-013).
 
 | ID | Type | Status |
 |---|---|---|
-| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **COMPLETE** (2026-09-01) — `sql-tests` job validated end-to-end against a throwaway database; 14/16 suites pass, 2 fail on pre-existing unrelated issues; a real GitHub Actions run is the one remaining confirmation, see below |
+| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **COMPLETE** (2026-09-01) — confirmed GREEN on a real GitHub Actions run (run 33528550754, commit 00b857d9), all 3 jobs and all 16 SQL suites passing; see below |
 | P11.2 | Shared DB fixture library | **COMPLETE** (2026-09-01) — `tests/sql/fixtures.sql` |
 | P11.3 | Unit tests (frontend) | ✅ **DELIVERED 2026-08-28.** `jest-expo` runner (`bakeflow-frontend/jest.config.js`, `npm test`), wired into `.github/workflows/ci.yml`. 39 assertions covering `packages/types/scalars.ts` (`isZeroDecimalString`/`isNegativeDecimalString`/`compareDecimalStrings`) and `packages/validation/decimal.ts` (every money/quantity schema). A real tsconfig quirk found and fixed: `@types/jest`'s ambient globals were not auto-included under this project's `moduleDetection: "force"` + `moduleResolution: "bundler"` config — each test file needs an explicit `/// <reference types="jest" />`, documented in `docs/TESTING-STRATEGY.md`. |
 | P11.4 | Integration tests | NOT_STARTED |
@@ -1248,14 +1248,18 @@ already been individually locked down over many prior migrations) — plus a fun
 bug, a missing `private` schema, a missing `storage` stub, and several stale test assumptions.
 Full list: `IMPLEMENTATION_LOG.md` 2026-09-01 (second entry that day).
 
-**Final state:** shim/baseline/seed/fixtures all apply clean to a fresh database; **14/16** real
-test suites pass. The other 2 fail on pre-existing, already-documented issues unrelated to this
-work (a stale test asserting a since-resolved defect, and the known `rate_limit_events` RLS
-gap) — flagged, not guessed at under this pass's scope. `.github/workflows/ci.yml`'s `sql-tests`
-job header updated to reflect this. **Still open:** an actual run on GitHub's own runners is the
-final proof this exact YAML works there (different network/cache state than the EC2 validation)
-— treat the validation above as strong confirmation, not an ironclad guarantee of the first real
-CI run.
+**Confirmed GREEN on GitHub's own runners, 2026-09-01 (run 33528550754, commit 00b857d9) —
+all 16 SQL suites pass.** The EC2 pass above got to 14/16; three real GitHub Actions runs after
+that found and fixed what EC2 couldn't have: the `sql-tests` loop's `set -e` was silently
+skipping every file after the first alphabetical failure (fixed — it now runs all 16 and reports
+every failure by name), a Lint config gap broken on every run since `jest.config.js` was added
+(fixed — a `*.config.js` Node-globals override), a cascading fixture side effect from the
+BLOCKER-010a stale-test fix (C1b's expected row count), and a second stale test using a
+`domain_operation` value since removed from its allowlist. The `rate_limit_events` "gap" turned
+out, on inspection, to already be a decided and live-verified design (P6.6) — re-confirmed
+directly against the live project via `mcp__supabase__execute_sql`, not just trusted — and is now
+allowlisted at the test level with that evidence. Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01
+(four entries).
 
 **Verified on GitHub 2026-08-11.** Run **31822495609** is green: `Typecheck` and `Lint`
 both executed and passed on a Linux runner with `--max-warnings=0` and the npm pin intact.

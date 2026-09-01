@@ -4,6 +4,34 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## SQL-suite CI wiring — now GREEN for real on GitHub's own runners (2026-09-01)
+
+Follow-up to the entry below. Pushed the EC2-validated work, and — as flagged at the time — the
+first real GitHub Actions run found things the EC2 box couldn't: the loop that runs all 16 SQL
+test files was silently stopping after the first failure and never running the rest, and the
+frontend Lint job had actually been broken on every single run since 2026-08-28, unnoticed. Both
+fixed. Took three pushes total, each one finding something real; watched every run rather than
+assuming green stays green.
+
+The two "pre-existing gaps" from the entry below both got resolved, not left open:
+- `catalog_read_rls.sql`'s stale test (checking for a bug already fixed 2026-08-14) is corrected
+  — plus a knock-on effect the first fix caused in a second assertion, only visible once the
+  suite actually ran end-to-end.
+- The `rate_limit_events` "gap" turned out not to be a gap at all — you (or whoever built P6.6)
+  already deliberately locked that table down to service-role-only and verified it live at the
+  time. Checked this directly against your live database before touching anything, rather than
+  trusting the old note. The test now knows about this one intentional exception; it still fails
+  loudly for anything else.
+
+All three CI jobs are green: `.github/workflows/ci.yml` run **33528550754**, commit `00b857d9`.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-01 (four entries), `BACKEND_ROADMAP.md` P11.1.
+
+**Committed and pushed** — 5 commits this pass (`dc6b82f8` through `00b857d9`), each one after
+its own real GitHub Actions run confirmed what it fixed.
+
+---
+
 ## SQL-suite CI wiring done — 14/16 pass, 2 pre-existing gaps flagged for you (2026-09-01)
 
 The database test suites now run in CI against a throwaway database (no production key
@@ -15,13 +43,8 @@ table someone creates, and the file meant to let you rebuild the database from s
 accounted for that — meaning a rebuilt database would have quietly had weaker security than the
 one you're running now, until this pass caught it.
 
-**Two things surfaced that are pre-existing and not new, but you may want to prioritize fixing:**
-- One old test (`catalog_read_rls.sql`) is checking for a bug that was actually already fixed
-  back on 2026-08-14 — it just wasn't updated to know that. Not touched here since fixing test
-  assertions correctly needs someone to confirm what the *current* intended behavior actually
-  is, not a guess made in passing.
-- The other failing test is the `rate_limit_events` table having no access policy, already
-  flagged in this project before — still open, still low-priority, still not new.
+**Two things surfaced that are pre-existing and not new** — see the entry above for how both
+were resolved in the following pass.
 
 Your AWS EC2 box, security group, and key pair were all torn down at the end — confirmed
 terminated, not just requested.

@@ -1,5 +1,23 @@
 # BakeFlow — Current Task
 
+## ✅ SQL-suite CI wiring — GREEN on GitHub's own runners; P11.1 + P11.2 COMPLETE (2026-09-01)
+
+**Update, same day:** the "one thing still genuinely open" below (a real GitHub Actions run) has
+happened — three times, in fact, since the first two each found something real. Fixed, in order:
+(1) the `sql-tests` loop's `set -e` was silently skipping every file after the first alphabetical
+failure — now runs all 16 and reports every failure by name; (2) `Lint & typecheck` had been
+broken on every run since 2026-08-28 on an unrelated `jest.config.js` globals gap; (3) fixing the
+`catalog_read_rls.sql` C9a/C9b assertions (below) had a cascading effect on C1b's expected row
+count, only visible once the suite actually ran end-to-end; (4) a second stale test
+(`p3_7_inventory_sync.sql` I10) used a `domain_operation` value since removed from its allowlist.
+The `rate_limit_events` "gap" mentioned below turned out to already be a decided, live-verified
+design (P6.6) — checked directly against the live database rather than assumed — and is now
+allowlisted at the test level with that evidence. **All three CI jobs are green:** run
+`33528550754`, commit `00b857d9`. Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01 (four entries).
+5 commits made and pushed this pass. The section below is kept as-written for its own history.
+
+---
+
 ## ✅ SQL-suite CI wiring — validated end-to-end on a throwaway EC2 instance; P11.1 + P11.2 COMPLETE (2026-09-01)
 
 Continuing directly from BLOCKER-002's resolution below: user asked to wire `tests/sql/*.sql`
