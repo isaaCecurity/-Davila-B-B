@@ -134,6 +134,10 @@ begin
 end $$;
 
 -- =================== T3: unsupported domain_operation -> REJECTED, not silently pending ===================
+-- Uses expense.reverse, not inventory.adjust -- same staleness as p3_7_protocol_correctness.sql
+-- A3, found and fixed the same pass (P11.1 throwaway-DB validation, 2026-09-01): inventory.adjust
+-- has had a real handler since 2026-08-30, so it no longer exercises the dispatcher's
+-- unsupported_operation_type fallback this test means to check.
 do $$
 declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
 begin
@@ -142,7 +146,7 @@ begin
       'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
       'branch_id', 'ac000000-0000-4000-8000-00000000da01',
       'entity_id', gen_random_uuid(), 'entity_type', 'inventory',
-      'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
       'device_created_at', now()::text, 'payload', '{}'::jsonb
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;

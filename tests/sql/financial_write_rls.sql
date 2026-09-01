@@ -82,10 +82,12 @@ ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
 -- requires the creator to hold a user_roles row in the ticket's own tenant. Same defect
 -- class as sales_read_rls.sql / delivery_read_rls.sql, found again on this suite's
 -- first-ever run.
+-- Role ids looked up by key, not hardcoded -- see inventory_read_rls.sql's note on why (found
+-- and fixed same day, P11.1 throwaway-DB validation, 2026-09-01).
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
-  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001',NULL),
-  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000003',NULL),
-  ('d0000000-0000-4000-8000-0000000000b1','d1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001',NULL)
+  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000001',(select id from public.roles where key='owner'),NULL),
+  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000003',(select id from public.roles where key='branch_manager'),NULL),
+  ('d0000000-0000-4000-8000-0000000000b1','d1000000-0000-4000-8000-000000000001',(select id from public.roles where key='owner'),NULL)
 ON CONFLICT DO NOTHING;
 
 -- has_branch_access() bypasses only for owner/admin (read live: public.has_branch_access).

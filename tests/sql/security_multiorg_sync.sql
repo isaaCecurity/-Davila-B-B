@@ -45,13 +45,15 @@ ON CONFLICT (id) DO UPDATE
 
 -- Two memberships for one profile: impossible before guard_user_role_integrity()
 -- stopped requiring user_roles.tenant_id = profiles.tenant_id.
+-- Role id looked up by key, not hardcoded -- see inventory_read_rls.sql's note on why (found
+-- and fixed same day, P11.1 throwaway-DB validation, 2026-09-01).
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
   ('aaaaaaaa-0000-4000-8000-000000000001','11111111-0000-4000-8000-000000000001',
-   '00000000-0000-4000-8000-000000000007','aaaaaaaa-0000-4000-8000-0000000000a1'),
+   (select id from public.roles where key='driver'),'aaaaaaaa-0000-4000-8000-0000000000a1'),
   ('bbbbbbbb-0000-4000-8000-000000000001','11111111-0000-4000-8000-000000000001',
-   '00000000-0000-4000-8000-000000000007','bbbbbbbb-0000-4000-8000-0000000000b2'),
+   (select id from public.roles where key='driver'),'bbbbbbbb-0000-4000-8000-0000000000b2'),
   ('aaaaaaaa-0000-4000-8000-000000000001','22222222-0000-4000-8000-000000000002',
-   '00000000-0000-4000-8000-000000000007','aaaaaaaa-0000-4000-8000-0000000000a1')
+   (select id from public.roles where key='driver'),'aaaaaaaa-0000-4000-8000-0000000000a1')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.branch_assignments (tenant_id, profile_id, branch_id, is_default) VALUES
@@ -69,6 +71,12 @@ INSERT INTO public.sync_devices (id, user_id, platform) VALUES
 ON CONFLICT (id) DO UPDATE SET revoked_at = NULL;
 
 CREATE TEMP TABLE _results(test text, passed boolean, detail text) ON COMMIT DROP;
+-- Missing here despite being this project's own established convention (compare
+-- tests/sql/p3_7_*.sql) -- found live 2026-09-01 running this file against a genuinely fresh
+-- throwaway database, where `authenticated` has no default-privilege auto-grant on a temp
+-- table the way it does on a `public`-schema one. Fixed rather than left broken for a role
+-- switch this file performs further down.
+GRANT ALL ON _results TO authenticated;
 
 -- ------------------------------------------------------------ S1..S13 core --
 DO $suite$

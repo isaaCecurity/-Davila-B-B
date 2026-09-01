@@ -62,11 +62,13 @@ ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
 -- profile as created_by with tenant_id = org B: guard_order_actor_and_assignment()
 -- requires the creator to hold a user_roles row in the ticket's own tenant. Same defect
 -- as sales_read_rls.sql -- found live 2026-08-23 running this suite for the first time.
+-- Role ids looked up by key, not hardcoded -- see inventory_read_rls.sql's note on why (found
+-- and fixed same day, P11.1 throwaway-DB validation, 2026-09-01).
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
-  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003','fa000000-0000-4000-8000-0000000000a1'),
-  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL),
-  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000006','fa000000-0000-4000-8000-0000000000a1'),
-  ('f0000000-0000-4000-8000-0000000000b1','f1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
+  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000001',(select id from public.roles where key='branch_manager'),'fa000000-0000-4000-8000-0000000000a1'),
+  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000002',(select id from public.roles where key='owner'),NULL),
+  ('f0000000-0000-4000-8000-0000000000a1','f1000000-0000-4000-8000-000000000003',(select id from public.roles where key='cashier'),'fa000000-0000-4000-8000-0000000000a1'),
+  ('f0000000-0000-4000-8000-0000000000b1','f1000000-0000-4000-8000-000000000002',(select id from public.roles where key='owner'),NULL)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.branch_assignments (tenant_id, profile_id, branch_id, is_default) VALUES

@@ -1197,8 +1197,8 @@ business database; backups must not yield readable data (AD-013).
 
 | ID | Type | Status |
 |---|---|---|
-| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **PARTIAL** — see below |
-| P11.2 | Shared DB fixture library | NOT_STARTED |
+| P11.1 | CI pipeline (runs pytest + SQL suite + typecheck + lint) | **COMPLETE** (2026-09-01) — `sql-tests` job validated end-to-end against a throwaway database; 14/16 suites pass, 2 fail on pre-existing unrelated issues; a real GitHub Actions run is the one remaining confirmation, see below |
+| P11.2 | Shared DB fixture library | **COMPLETE** (2026-09-01) — `tests/sql/fixtures.sql` |
 | P11.3 | Unit tests (frontend) | ✅ **DELIVERED 2026-08-28.** `jest-expo` runner (`bakeflow-frontend/jest.config.js`, `npm test`), wired into `.github/workflows/ci.yml`. 39 assertions covering `packages/types/scalars.ts` (`isZeroDecimalString`/`isNegativeDecimalString`/`compareDecimalStrings`) and `packages/validation/decimal.ts` (every money/quantity schema). A real tsconfig quirk found and fixed: `@types/jest`'s ambient globals were not auto-included under this project's `moduleDetection: "force"` + `moduleResolution: "bundler"` config — each test file needs an explicit `/// <reference types="jest" />`, documented in `docs/TESTING-STRATEGY.md`. |
 | P11.4 | Integration tests | NOT_STARTED |
 | P11.5 | API/service tests | NOT_STARTED |
@@ -1228,14 +1228,34 @@ for `packages/*` — because flat config does not merge across directories. Both
 now RESOLVED. Coverage was verified by counting linted files, not by trusting exit 0 —
 **24 files** (7 app + 17 root).
 
-**Still open, deliberately.** The **SQL suites are not in CI** and P11.1 cannot be
-COMPLETE until they are. They need a live Postgres and credentials — the
-"repository cannot rebuild the schema" half of this (**BLOCKER-002**) is **RESOLVED**
-(2026-08-31, see `BLOCKERS.md`), but the remaining half is unchanged: a CI database
-would need either a throwaway Postgres stood up in the runner (using the now-verified
-baseline — not yet built) or pointing CI at production, which means storing a
-privileged key in GitHub secrets. That's still a human decision, left undone rather
-than guessed. `tests/sql/*.sql` remain a manual local gate.
+**Validated end-to-end, 2026-09-01.** User decided: a throwaway Postgres in the CI runner, not
+production credentials. Local Docker Desktop hit a persistent DNS-resolution failure pulling
+images (unrelated to GitHub's own runner network), so validation ran instead on a throwaway AWS
+EC2 instance (Docker, torn down completely afterward — instance terminated, security group and
+key pair deleted, confirmed not just requested).
+
+Building this surfaced a real prerequisite gap — none of the 16 `tests/sql/*.sql` suites are
+actually self-contained; all of them reference a small set of organization/branch/profile/
+warehouse/recipe/ingredient/product rows that exist only in the live project's history and were
+never captured anywhere in the repo (this is `P11.2`, previously NOT_STARTED, now addressed via
+`tests/sql/fixtures.sql`). Running the full chain (auth/storage compat shim -> baseline -> seed
+-> fixtures -> all suites) against a genuinely fresh database repeatedly, fixing one failure at
+a time, found **nine real, previously-unknown defects** — most significantly, two missing
+`REVOKE` statements in the baseline's own GRANT sections (this project has a default privilege
+that auto-grants `authenticated`/`anon` on every new function/table `postgres` creates; the
+baseline only ever captured positive `GRANT`s, invisible on live only because everything had
+already been individually locked down over many prior migrations) — plus a function-ordering
+bug, a missing `private` schema, a missing `storage` stub, and several stale test assumptions.
+Full list: `IMPLEMENTATION_LOG.md` 2026-09-01 (second entry that day).
+
+**Final state:** shim/baseline/seed/fixtures all apply clean to a fresh database; **14/16** real
+test suites pass. The other 2 fail on pre-existing, already-documented issues unrelated to this
+work (a stale test asserting a since-resolved defect, and the known `rate_limit_events` RLS
+gap) — flagged, not guessed at under this pass's scope. `.github/workflows/ci.yml`'s `sql-tests`
+job header updated to reflect this. **Still open:** an actual run on GitHub's own runners is the
+final proof this exact YAML works there (different network/cache state than the EC2 validation)
+— treat the validation above as strong confirmation, not an ironclad guarantee of the first real
+CI run.
 
 **Verified on GitHub 2026-08-11.** Run **31822495609** is green: `Typecheck` and `Lint`
 both executed and passed on a Linux runner with `--max-warnings=0` and the npm pin intact.

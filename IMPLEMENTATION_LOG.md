@@ -5,6 +5,299 @@ Never record planned work here.
 
 ---
 
+## 2026-09-01 (later same day) · P11.1 SQL-suite CI wiring — validated end-to-end on a throwaway AWS EC2 instance; 9 real defects found and fixed; 14/16 suites pass clean
+
+**Context:** picks up directly from the earlier entry below. Local Docker Desktop validation
+was blocked by a persistent DNS-resolution failure reaching Docker Hub's CDN. User's own local
+machine also lacked enough RAM to run Docker comfortably, so proposed a cloud fallback: a
+throwaway AWS EC2 instance with Docker, reached over SSH from local PowerShell/Bash. Their
+`~/.aws/credentials` were initially invalid (`InvalidClientTokenId`); user refreshed them
+(`aws sts get-caller-identity` confirmed working, account `269742496546`, root credentials —
+flagged to the user, proceeded on their instruction).
+
+**EC2 setup, minimal footprint, torn down completely afterward:**
+- Region `eu-north-1` (account default). Dedicated key pair (`bakeflow-throwaway-ci-test`,
+  private key saved to session scratchpad, never committed) and a dedicated security group
+  (`bakeflow-throwaway-ci-sg`) with SSH restricted to the author's own current public IP
+  (`105.113.116.247/32`) — verified via `curl checkip.amazonaws.com` and confirmed in the
+  security group's own rule listing.
+- `t3.medium`, Ubuntu 24.04 LTS (`ami-0fe71de6f2bab5fbf`), 20GB gp3, tagged
+  `Purpose=SQL-suite-CI-validation-DELETE-ME` for easy identification.
+  `--instance-initiated-shutdown-behavior terminate` set as a safety net.
+  User-data script installed Docker CE + `postgresql-client` on first boot (apt, Docker's own
+  official repo) — polled via SSH for a completion marker file rather than assumed.
+- Files copied to the instance via `scp`: the baseline schema, `supabase/seed.sql`, and every
+  `tests/sql/*.sql` file. `supabase/postgres:17.6.1.165` pulled successfully on the instance
+  (confirming the image and tag are valid — this alone couldn't be verified locally).
+- **Cleanup performed at the end, confirmed not just requested:** `terminate-instances` +
+  polled `describe-instances` until state=`terminated`; `delete-security-group`;
+  `delete-key-pair`; local private-key file removed. No AWS resources or costs left running.
+
+**Nine real, previously-unknown defects found by actually applying the full chain (shim ->
+baseline -> seed -> fixtures -> all 16 suites) against a genuinely fresh database, repeated from
+scratch after each fix until the failure moved past that specific point — not assumed fixed
+from reasoning alone:**
+
+1. **`auth.jwt()` missing entirely on the stock `supabase/postgres` image**; `auth.uid()`/
+   `auth.role()`/`auth.email()` present but only read the legacy per-claim GUC convention
+   (`request.jwt.claim.sub`), not the JSON-blob `request.jwt.claims` GUC every
+   `tests/sql/*.sql` suite actually sets. Live's versions (pg_get_functiondef'd directly from
+   tvfyxpafbpnkneujcnvr) check both, for backward compatibility — this project's live database
+   was evidently upgraded past what the base image ships. Fixed via a new file,
+   `tests/sql/throwaway_auth_compat_shim.sql`, applied BEFORE the baseline, containing all four
+   functions copied verbatim from live. Explicitly documented as throwaway-only, never for a
+   real database.
+2. **`storage` schema exists but is completely empty on the stock image** — no
+   `storage.buckets`/`storage.objects` tables, no `storage.foldername()`. The baseline's own
+   storage section (bucket row INSERTs, `storage.objects` RLS policies using `foldername()`)
+   needs at least a minimal shape. Added a deliberately minimal (not full-fidelity) stub to the
+   same shim file: `storage.buckets`/`storage.objects` with just the columns the baseline
+   actually uses, `storage.foldername()` copied verbatim from live, RLS enabled, and (a further
+   sub-finding) both tables explicitly `ALTER ... OWNER TO postgres` — `GRANT ALL` alone is
+   insufficient for `CREATE POLICY`, which requires table ownership, not just privileges. Also
+   discovered along the way: on this image `postgres` is deliberately NOT a superuser (matching
+   real hosted Supabase, where even `postgres` can't touch the `auth` schema) — only
+   `supabase_admin` is; the shim must run as that role.
+3. **`has_role()` used before it was defined.** `has_branch_access()` (a `LANGUAGE sql`
+   function, validated eagerly at `CREATE FUNCTION` time, unlike `plpgsql`'s lazy validation)
+   calls `public.has_role(...)`, but the baseline's "alphabetically ordered" FUNCTIONS section
+   defined `has_role`/`has_role_in` later in the file. Applying the baseline to a fresh database
+   failed outright with "function public.has_role(text[]) does not exist" — a bug BLOCKER-002's
+   earlier verification never caught because it never actually re-ran the FUNCTIONS section
+   against an empty database, only confirmed each function's body was individually valid DDL.
+   Isolated to exactly one violation (confirmed via a 5-pass retry-apply of just the FUNCTIONS
+   section: pass 1 created 96/97, pass 2 the last one, passes 3-5 no further change) before
+   fixing it properly: moved `has_role`/`has_role_in` to immediately before
+   `has_branch_access()` in the actual source file, rather than leaving a retry-loop workaround
+   in the apply process.
+4. **The entire `private` schema and its one function, `private.can_manage_target_role`, were
+   missing from the baseline** despite three RLS policies, a GRANT, and one other function body
+   all referencing it — the file's own header even claimed "1 [function] in private" but never
+   actually created the schema or the function. Added `CREATE SCHEMA IF NOT EXISTS private;`
+   near the top of the file and the function itself (pg_get_functiondef'd from live) placed
+   after `has_role` in the FUNCTIONS section, for the same eager-validation reason as #3.
+5. **Default-privilege gap, functions**: this project has a default privilege configured for
+   the `postgres` role in schema `public` that auto-grants EXECUTE to
+   `postgres`/`anon`/`authenticated`/`service_role` on every NEW function it creates (confirmed
+   via `pg_default_acl` on both the live project and the throwaway image — identical
+   configuration on both). The baseline's "FUNCTION EXECUTE GRANTS" section was ALL positive
+   `GRANT` statements with zero `REVOKE`s, correctly capturing live's current *intended* grants
+   but never counteracting this auto-grant — invisible on live only because every function had
+   already been individually locked down via many prior migrations (including two from
+   yesterday's own SECURITY FIX entries). Applying the baseline to a fresh database silently
+   reintroduced anon-executable access on 88 functions and left 32 trigger functions
+   authenticated-executable — caught by `tests/sql/function_privilege_audit.sql` itself
+   reporting real findings where live has zero. Fixed with one blanket
+   `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public, private FROM PUBLIC, anon, authenticated;`
+   at the top of that section, before the existing positive grants (which are correct and stay
+   unchanged) — the same shape as every earlier "SECURITY FIX" in this project's history, just
+   applied once instead of per-function.
+6. **Same default-privilege gap, tables.** Identical root cause, this time for
+   INSERT/UPDATE/DELETE on tables (`pg_default_acl` defaclobjtype='r':
+   `{postgres=arwdDxtm,authenticated=arwdm,...}` for `postgres` in `public`). Caught by
+   `tests/sql/inventory_write_rls.sql` A0: a direct `INSERT INTO stock_movements` as
+   `authenticated` succeeded when it must be denied (CLAUDE.md rule 7 — stock changes are
+   RPC-only). Fixed the same way: one blanket
+   `REVOKE ALL ON ALL TABLES IN SCHEMA public, private FROM PUBLIC, anon, authenticated;` before
+   the section's existing precise per-table grants.
+7. **Three stale positive GRANT statements for functions fixed live YESTERDAY, after the
+   baseline was already generated**: `guard_driver_trip_transition()`,
+   `guard_ticket_driver_trip_assignment()`, `prevent_driver_trip_delete()` — all three had their
+   `anon`/`authenticated` EXECUTE grants revoked live on 2026-08-31 (migrations
+   `harden_prevent_driver_trip_delete_grant`, `harden_guard_trigger_function_grants`), but the
+   baseline file's own GRANT statements for them were never regenerated to match, so applying it
+   to a fresh database silently reintroduced the exact bug those migrations fixed — including
+   the file's own header comment, which had explicitly documented the anomaly as "not fixed
+   here" and was now stale in the other direction (claiming unfixed what was, by the time this
+   was found, already fixed). Removed the three stale `GRANT ... TO authenticated`/`TO anon`/
+   `TO PUBLIC` lines (kept `TO service_role`, correct and unchanged); rewrote the header comment
+   to describe the actual current, correct state instead.
+8. **Five test files hardcoded literal role UUIDs** (`security_multiorg_sync.sql`,
+   `sales_read_rls.sql`, `delivery_read_rls.sql`, `financial_write_rls.sql`,
+   `inventory_read_rls.sql`) copied from live's `roles` table — which happens to carry simple,
+   deliberately-pinned ids for 7 of 8 roles (`00000000-...-0001` = owner, etc., an artifact of
+   an older seeding approach) rather than the random ids `supabase/seed.sql` generates today for
+   every environment, exactly the practice `seed.sql`'s own header explicitly warns against
+   ("never reference a role or permission by literal id"). All failed with "unknown role" from
+   `guard_user_role_integrity()` against a fresh database, where these ids don't exist. Fixed
+   all ~15 occurrences across the 5 files to look up role ids by key via
+   `(select id from public.roles where key='...')`, matching every other test file's own
+   convention.
+9. **A missing shared fixture and a numbering collision it caused.**
+   `tests/sql/fixtures.sql`'s original transitive-closure walk (documented in its own header,
+   written 2026-09-01 earlier the same day) never checked `production_batches` as a "world"
+   table, so a live-only `scheduled` batch (`b3000000-...-da01`) that `p3_7_production_sync.sql`
+   (P1/P2) and `p3_7_production_output_waste_sync.sql` (O1) both depend on was missing. Added it
+   plus its two `production_batch_ingredients` rows. First attempt hardcoded
+   `batch_number='BATCH-000001'` to match live's actual value, which desynced
+   `document_sequences`' counter for the `production_batch` sequence — the next
+   trigger-auto-numbered batch a test file created also computed 'BATCH-000001' and collided
+   (`production_batches_tenant_number_key`). Fixed by leaving `batch_number` unset and letting
+   `assign_batch_number()`/`next_document_number()` assign it normally, keeping the sequence
+   consistent — tests reference the batch by `id`, never by its number, so this has no
+   downstream effect.
+
+**Also found and fixed, smaller:** `security_multiorg_sync.sql` created its own `_results` temp
+table but — unlike every newer file, which does this as an established convention — never
+`GRANT ALL ... TO authenticated` on it, so a role switch later in the file failed with
+"permission denied for table _results" (temp tables don't inherit the same
+`public`-schema default-privilege auto-grant tables do). Fixed to match the established
+convention.
+
+**Two genuinely stale tests found, fixed as *test* staleness, not environment bugs — same
+"CREATE OR REPLACE" pattern as the ordering bug in #3, just at the assertion level**:
+`p3_7_protocol_correctness.sql` A3 and `p3_7_sync_apply_and_pull.sql` T3 both used
+`domain_operation='inventory.adjust'` with an empty payload to exercise the dispatcher's
+"unsupported_operation_type" fallback — correct when originally written (before `inventory.adjust`
+had a real handler), but `apply_inventory_adjust()` was built 2026-08-30, so an empty payload now
+correctly reaches THAT handler's own validation (`22023 invalid_request`) instead. Both switched
+to `domain_operation='expense.reverse'` — the one domain operation still allowlisted but
+genuinely unhandled (BLOCKER-028) — restoring each test's original intent. `p3_7_customer_sync.sql`
+D1 asserted the OLD `domain_operation` CHECK constraint string (before yesterday's deliberate
+allowlist tightening removed `inventory.receive`/`.consume`/`.transfer`/`production.complete`) —
+correctly caught the drift when run fresh; updated the anchor string to the new, reviewed
+definition rather than deleting the check, so it keeps catching any FUTURE unreviewed drift the
+same way.
+
+**Two pre-existing issues found, deliberately NOT fixed here — confirmed unrelated to this
+environment work, would fail identically against live today:**
+- `catalog_read_rls.sql` C9a/C9b/C1b: asserts the *absence* of a fix for BLOCKER-010a (partial
+  natural-key unique indexes on `deleted_at`) that was actually resolved live back on
+  2026-08-14 — this test predates that fix and now asserts the opposite of current reality.
+  Needs its own investigation/update, not a guess made under this pass's time pressure — flagged
+  in `NOTIFICATIONS.md` rather than silently patched.
+- `security_multiorg_sync.sql` S13: the already-known, already-documented `rate_limit_events`
+  RLS-enabled-no-policy gap (referenced multiple times elsewhere in this project's history) —
+  confirmed still the ONLY failure in this file (22/23, matching the previously-established
+  pattern), not a new throwaway-DB-specific problem.
+
+**Final result, confirmed live on the EC2 instance, fresh database, full chain from scratch:**
+shim, baseline, seed, and fixtures all apply with exit 0; 14/16 real test suites pass clean
+(`delivery_read_rls`, `driver_field_sale_rls`, `driver_trips_rls`, `financial_write_rls`,
+`function_privilege_audit`, `inventory_read_rls`, `inventory_write_rls`, `p3_7_customer_sync`,
+`p3_7_financial_sync`, `p3_7_production_output_waste_sync`, `p3_7_production_sync`,
+`p3_7_protocol_correctness`, `p3_7_sync_apply_and_pull`, `sales_read_rls`); the remaining 2
+(`catalog_read_rls`, `p3_7_inventory_sync`) fail on pre-existing, already-documented issues
+unrelated to this pass — `p3_7_inventory_sync.sql` specifically still tests
+`domain_operation='inventory.consume'`, removed from the allowlist yesterday (BLOCKER-026);
+not fixed here (same reasoning as catalog_read_rls — a real, separate, pre-existing item, not
+guessed at under this pass's scope).
+
+**Files changed this pass:** `supabase/migrations/20260809_live_schema.sql` (schema fix, has_role
+reorder, blanket function+table REVOKEs, 3 stale grant removals, header corrections),
+`tests/sql/throwaway_auth_compat_shim.sql` (new), `tests/sql/fixtures.sql` (production_batches
+fixture added, batch_number fix), `tests/sql/security_multiorg_sync.sql`,
+`tests/sql/sales_read_rls.sql`, `tests/sql/delivery_read_rls.sql`,
+`tests/sql/financial_write_rls.sql`, `tests/sql/inventory_read_rls.sql` (role-id lookups),
+`tests/sql/p3_7_protocol_correctness.sql`, `tests/sql/p3_7_sync_apply_and_pull.sql`,
+`tests/sql/p3_7_customer_sync.sql` (stale assertions corrected), `.github/workflows/ci.yml`
+(header updated to reflect validated status).
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
+## 2026-09-01 · P11.1 SQL-suite CI wiring — throwaway-Postgres approach chosen; P11.2 fixture library built and dry-run validated; CI job drafted but NOT yet end-to-end validated (blocked on environment access)
+
+**Context:** user asked to wire the SQL test suites into CI "using a throwaway test" (rejecting
+the alternative of pointing CI at production with a stored key). This picks up directly from
+BLOCKER-002's resolution the prior day, which fixed schema *reproducibility* but explicitly left
+"how would CI actually run these" as a separate, undecided question.
+
+**Investigated before writing anything:** whether the 16 `tests/sql/*.sql` suites are actually
+self-contained. They are NOT. Every file wraps itself in `BEGIN...ROLLBACK` and creates its own
+*operational* rows (tickets, payments, stock_movements, etc.) inline, but `grep -L "insert into
+public.organizations" *.sql` matched all 16 files — none of them ever insert into
+organizations/branches/profiles/warehouses/recipes/ingredients/product_variants/products/
+product_categories. Every suite references a small, fixed set of already-existing rows by
+literal UUID that exist only in the live project's accumulated history, never captured in any
+committed migration or seed file. This is exactly `P11.2` ("Shared DB fixture library",
+previously NOT_STARTED) — confirmed as a genuine, necessary prerequisite for CI-wiring, not
+something that could be skipped.
+
+**Fixture extraction, done carefully, not by copying live data wholesale:** every literal UUID
+across all 16 suite files was extracted (`grep -ohE` for UUID literals → 143 distinct values)
+and cross-referenced against the live database's organizations/branches/profiles/warehouses/
+recipes/ingredients/product_variants/products/product_categories/customers tables. Only 11
+matched directly. Walking THEIR OWN foreign keys (recipe → product_variant → product → category;
+a second product_variant → product) surfaced 6 more rows no test file names directly but
+structurally requires — 17 total. **Real finding along the way:** the live warehouse these
+fixtures sit in
+(`b0000000-0000-4000-8000-00000000da01`) also holds 30+ `ingredient_stock_levels` and 30+
+`product_stock_levels` rows that are NOT referenced by any test file — accumulated incidental
+debris from weeks of ad-hoc manual testing, not deliberate fixture design. Decided explicitly
+NOT to mirror that wholesale (fragile, unbounded, encodes accidental state) — built
+`tests/sql/fixtures.sql` with only the rows tests actually need, using clean round opening-stock
+numbers instead of the live drifted values.
+
+**`tests/sql/fixtures.sql` dry-run validated against the live project**, inside
+`BEGIN...ROLLBACK` (zero permanent changes) — full script + a closing verification block, run
+twice:
+- First run failed: `stock_movements_reference_consistent` CHECK violation
+  (`(reference_type IS NULL) = (reference_id IS NULL)`) — the original draft set
+  `reference_type='manual'` with `reference_id` left NULL. Fixed by setting `reference_id` to
+  the warehouse id, mirroring `apply_inventory_adjust()`'s own live pattern.
+- Second run failed the verification block itself, not the inserts: the closing checks asserted
+  *exact* row counts at the fixture warehouse (`= 3` ingredient levels, `= 2` product levels),
+  which is correct against a truly fresh database but wrong against the live project used for
+  this dry-run (which legitimately has 20+ extra unrelated rows there from the debris noted
+  above). Fixed by changing the verification to existence-checks scoped to the specific fixture
+  ingredient/variant ids, not warehouse-wide totals — correct against both a fresh database and
+  the live one.
+- Third run: clean. All inserts succeeded, verification passed, rolled back.
+- **Not yet validated:** a true from-empty-database run (baseline + seed + fixtures.sql, nothing
+  else) — that requires the throwaway environment this whole effort is building, which wasn't
+  available yet when this file was finished. Disclosed, not silently skipped.
+
+**CI job drafted** (`.github/workflows/ci.yml`, new `sql-tests` job): a `supabase/postgres:
+17.6.1.165` service container (not vanilla `postgres` — the baseline DDL needs `auth.uid()`,
+`auth.jwt()`, the `storage` schema, and the `supabase_vault` extension, none of which a plain
+Postgres image has), health-checked via `pg_isready`, then applies baseline → seed → fixtures →
+every `tests/sql/*.sql` file in sequence (each self-contained via its own transaction). Chosen
+over `postgres:17` + hand-rolled `auth`/`storage` stubs specifically to avoid re-deriving
+Supabase's own RLS-relevant function definitions and risk a subtle divergence from real
+behavior. **This job has NOT been run anywhere yet** — see below for why — and its own header
+comment says so explicitly rather than implying it's a proven gate.
+
+**Local validation blocked — full network troubleshooting trail, for the record:**
+1. Docker Desktop's daemon came up, but `docker pull supabase/postgres:17.6.1.165` failed on DNS
+   resolution to `production.cloudfront.docker.com` from inside Docker Desktop's WSL2 network
+   context (confirmed via direct error message, not inferred).
+2. Isolated whether this was specific to the (large, Supabase-published) target image: `docker
+   pull postgres:17` (the small, standard official image) failed identically on the exact same
+   host — ruling that out. `docker pull hello-world` (a tiny single-layer image) succeeded,
+   confirming basic docker.io registry routing works; only the larger-blob CDN path is affected.
+3. Confirmed via `nslookup production.cloudfront.docker.com` from the same machine's own shell
+   that this hostname resolves fine outside Docker Desktop's specific network namespace —
+   pointing at Docker Desktop's internal WSL2 DNS resolver specifically, not a host-wide DNS
+   outage.
+4. Attempted fix 1: added explicit DNS servers (`"dns": ["8.8.8.8", "1.1.1.1"]`) to
+   `~/.docker/daemon.json`, restarted Docker Desktop. Did not fix it.
+5. Attempted fix 2: `wsl --shutdown` (forces full termination of every WSL2 distro, including
+   Docker Desktop's internal one — more thorough than restarting the app alone) + relaunch. Did
+   not fix it either; same DNS failure on retry.
+6. Also noted, same session: the `supabase` MCP server itself intermittently failed with
+   `ENOTFOUND mcp.supabase.com` at least twice, self-recovering both times — consistent with
+   broader, not-fully-explained local network instability rather than a Docker-specific
+   misconfiguration.
+7. User then proposed a cloud fallback — an AWS EC2 instance with Docker preinstalled, reached
+   over SSH from local PowerShell, rather than fighting the local network further. Verified
+   AWS CLI (2.36.25) and an SSH client (OpenSSH 10.3p1) are both present locally, and that
+   `~/.aws/credentials`/`~/.aws/config` files already exist — but `aws sts get-caller-identity`
+   returned `InvalidClientTokenId`: a genuine auth rejection (the request reached AWS and was
+   refused), not a network/DNS symptom like everything else this session. The user's stored
+   credentials are stale/invalid and need to be refreshed on their end before EC2 provisioning
+   can proceed — correctly left to them rather than asking for secrets to be pasted into chat.
+
+**Docs updated:** none yet beyond this entry — `BACKEND_ROADMAP.md` P11.1, `CURRENT_TASK.md`,
+and `NOTIFICATIONS.md` still need updating to reflect this in-progress state; deferred to avoid
+writing them twice while the AWS credential refresh (and therefore the actual validation
+outcome) is still pending.
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
 ## 2026-08-31 (same day, later still) · BLOCKER-002 actually resolved — schema baseline regenerated and independently verified; two more trigger-grant hygiene fixes
 
 **Context:** user asked to "solve blocker 2" after the prior entry below reopened it. A

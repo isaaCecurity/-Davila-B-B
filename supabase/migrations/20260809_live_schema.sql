@@ -50,19 +50,17 @@
 --   storage.buckets rows                : 4  (avatars, delivery-proofs, product-images, receipts)
 --   storage.objects RLS policies        : 4
 --
--- KNOWN LIVE ANOMALY CAPTURED AS-IS (not silently fixed by this file):
---   public.prevent_driver_trip_delete() — a BEFORE DELETE trigger function on
---   driver_trips — still carries an EXECUTE grant to `anon` and to PUBLIC
---   (pg_proc.proacl = {=X/postgres,postgres=X/postgres,anon=X/postgres,
---   authenticated=X/postgres,service_role=X/postgres}), unlike its four sibling
---   "prevent_*_delete/mutation" trigger functions (prevent_cash_session_delete,
---   prevent_financial_mutation, prevent_stock_movement_mutation,
---   prevent_audit_log_mutation), which are correctly locked down to
---   {postgres, service_role} only. This looks like the same class of drift as
---   the two SECURITY FIX entries in IMPLEMENTATION_LOG.md 2026-08-31 (a public/
---   anon EXECUTE grant surviving on a function that should be locked down) but
---   was NOT fixed here — this file mirrors live reality exactly, it does not
---   remediate it. Flagged for the main session / BLOCKERS.md.
+-- FIXED SINCE FIRST GENERATED (2026-09-01): the paragraph that used to be here flagged
+-- public.prevent_driver_trip_delete() (plus, found in the same sweep,
+-- guard_driver_trip_transition()/guard_ticket_driver_trip_assignment()) as carrying a stray
+-- anon/authenticated EXECUTE grant, mirrored as-is rather than fixed. All three were fixed live
+-- the same day this file was first generated (migrations harden_prevent_driver_trip_delete_grant
+-- and harden_guard_trigger_function_grants) — but this file's own GRANT statements for them
+-- were never updated to match, so applying it to a fresh database silently reintroduced the
+-- exact bug it had documented. Found by tests/sql/function_privilege_audit.sql itself, run
+-- against a throwaway database built from this file (P11.1 validation). All three now correctly
+-- show only {postgres, service_role} in this file's FUNCTION EXECUTE GRANTS section, matching
+-- live and matching their four correctly-locked-down "prevent_*_delete/mutation" siblings.
 --
 -- SCOPE: this file targets the `public` schema plus the minimal `storage`
 -- objects (bucket rows + storage.objects policies) BakeFlow depends on. It
@@ -99,6 +97,19 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS supabase_vault WITH SCHEMA vault;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+
+
+-- ============================================================
+-- SECTION: SCHEMAS
+-- ============================================================
+-- The `private` schema (and its one function, private.can_manage_target_role) was entirely
+-- missing from this file until 2026-09-01 despite three RLS policies, a GRANT, and one other
+-- function body all referencing it -- the file's own header claimed "1 [function] in private"
+-- but never actually created the schema or the function. Found the same way as the has_role
+-- ordering bug: applying this file to a genuinely fresh database, which is exactly what BLOCKER
+-- -002's earlier verification never did for anything beyond table/constraint/index DDL. See
+-- IMPLEMENTATION_LOG.md 2026-09-01.
+CREATE SCHEMA IF NOT EXISTS private;
 
 
 -- ============================================================
@@ -4950,6 +4961,66 @@ begin
   return new;
 end $function$;
 
+-- has_role/has_role_in moved here (out of strict alphabetical order, ahead of
+-- has_branch_access) 2026-09-01: has_branch_access() is LANGUAGE sql, which Postgres
+-- validates eagerly at CREATE FUNCTION time (unlike plpgsql's lazy validation) -- calling
+-- public.has_role(...) before has_role itself was defined made this file fail applying
+-- to a genuinely fresh database with "function public.has_role(text[]) does not exist".
+-- Found via the P11.1 throwaway-database CI validation exercise, not caught by BLOCKER-002's
+-- earlier verification (which checked function bodies were individually valid DDL via
+-- pg_get_functiondef, but never actually re-ran the FUNCTIONS section start-to-finish against
+-- an empty database — exactly the gap this exercise was built to close). See
+-- IMPLEMENTATION_LOG.md 2026-09-01.
+CREATE OR REPLACE FUNCTION public.has_role(role_keys text[])
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public'
+AS $function$
+  select coalesce((auth.jwt() -> 'roles') ?| role_keys, false)
+$function$;
+
+CREATE OR REPLACE FUNCTION public.has_role_in(p_actor uuid, p_tenant uuid, p_role_keys text[])
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1
+      FROM public.user_roles ur
+      JOIN public.roles r ON r.id = ur.role_id
+     WHERE ur.profile_id = p_actor
+       AND ur.tenant_id  = p_tenant
+       AND ur.deleted_at IS NULL
+       AND r.deleted_at  IS NULL
+       AND r.key = ANY (p_role_keys)
+  );
+$function$;
+
+-- Was entirely missing from this file (schema and function both) until 2026-09-01 despite
+-- being referenced by three RLS policies and a GRANT further down -- see the SCHEMAS section
+-- note near the top of this file. Placed here (after has_role) because it calls
+-- public.has_role(), which -- like has_branch_access below -- must exist first for this
+-- LANGUAGE sql function to validate at CREATE time.
+CREATE OR REPLACE FUNCTION private.can_manage_target_role(p_role_id uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT CASE
+    WHEN public.has_role(ARRAY['owner']) THEN EXISTS (
+      SELECT 1 FROM public.roles r WHERE r.id = p_role_id
+    )
+    WHEN public.has_role(ARRAY['admin']) THEN EXISTS (
+      SELECT 1 FROM public.roles r
+      WHERE r.id = p_role_id AND r.key NOT IN ('owner','admin')
+    )
+    ELSE false
+  END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.has_branch_access(target_branch_id uuid)
  RETURNS boolean
  LANGUAGE sql
@@ -4995,33 +5066,6 @@ AS $function$
             AND ba.branch_id=target_branch_id
         )
       )
-  );
-$function$;
-
-CREATE OR REPLACE FUNCTION public.has_role(role_keys text[])
- RETURNS boolean
- LANGUAGE sql
- STABLE
- SET search_path TO 'public'
-AS $function$
-  select coalesce((auth.jwt() -> 'roles') ?| role_keys, false)
-$function$;
-
-CREATE OR REPLACE FUNCTION public.has_role_in(p_actor uuid, p_tenant uuid, p_role_keys text[])
- RETURNS boolean
- LANGUAGE sql
- STABLE SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
-  SELECT EXISTS (
-    SELECT 1
-      FROM public.user_roles ur
-      JOIN public.roles r ON r.id = ur.role_id
-     WHERE ur.profile_id = p_actor
-       AND ur.tenant_id  = p_tenant
-       AND ur.deleted_at IS NULL
-       AND r.deleted_at  IS NULL
-       AND r.key = ANY (p_role_keys)
   );
 $function$;
 
@@ -7059,6 +7103,19 @@ CREATE POLICY warehouses_update ON public.warehouses AS PERMISSIVE FOR UPDATE TO
 -- ============================================================
 -- SECTION: TABLE GRANTS (to anon/authenticated/service_role/supabase_auth_admin)
 -- ============================================================
+-- Blanket REVOKE first, added 2026-09-01 -- same root cause and same fix shape as the
+-- FUNCTION EXECUTE GRANTS section above: this project has a default privilege configured for
+-- the `postgres` role in schema `public` that auto-grants INSERT/SELECT/UPDATE/DELETE to
+-- `authenticated` (and `postgres`/`service_role`) on every NEW table it creates (see
+-- pg_default_acl, defaclobjtype='r': {postgres=arwdDxtm,authenticated=arwdm,...}). Every
+-- statement below is a precise, deliberate positive GRANT (e.g. stock_movements only ever
+-- grants authenticated SELECT, never INSERT -- direct writes are RPC-only per CLAUDE.md rule
+-- 7), but none of them was ever preceded by a REVOKE, so the default auto-grant silently gave
+-- `authenticated` more access than intended on a fresh database. Found live 2026-09-01
+-- (tests/sql/inventory_write_rls.sql A0: direct INSERT into stock_movements as authenticated
+-- succeeded when it must be denied) -- the exact same class of gap as the FUNCTION EXECUTE
+-- GRANTS fix just above, just for tables instead of functions.
+REVOKE ALL ON ALL TABLES IN SCHEMA public, private FROM PUBLIC, anon, authenticated;
 
 GRANT SELECT ON TABLE public.audit_log TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.audit_log TO service_role;
@@ -7147,6 +7204,21 @@ GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE pub
 -- ============================================================
 -- SECTION: FUNCTION EXECUTE GRANTS (public + private schemas)
 -- ============================================================
+-- Blanket REVOKE first, added 2026-09-01 (this section originally had none at all -- every
+-- statement below was a positive GRANT, with nothing counteracting the default privilege this
+-- project has configured for the `postgres` role in schema `public`: every NEW function it
+-- creates automatically gets EXECUTE granted to postgres/anon/authenticated/service_role (see
+-- `pg_default_acl`, verified live: {postgres=X,anon=X,authenticated=X,service_role=X}). On the
+-- live database this was invisible because every function had already been individually
+-- REVOKE'd from anon/authenticated over many prior migrations (see IMPLEMENTATION_LOG.md's
+-- several SECURITY FIX / hygiene entries) -- but this file never captured those REVOKEs, only
+-- the GRANTs that came after them. Applying it to a genuinely fresh database (which inherits
+-- the same default-privilege auto-grant, confirmed live) left every function anon/authenticated
+-- -executable regardless of what this section's GRANTs said -- caught by
+-- tests/sql/function_privilege_audit.sql itself reporting 88 findings where live has zero.
+-- service_role and postgres are deliberately NOT revoked here -- both need broad access and the
+-- GRANTs below re-establish exactly what each function needs for authenticated/service_role.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public, private FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION private.can_manage_target_role(p_role_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_organization_invite(p_raw_token text) TO authenticated;
@@ -7213,7 +7285,6 @@ GRANT EXECUTE ON FUNCTION public.guard_daily_financial_audit_mutation() TO servi
 GRANT EXECUTE ON FUNCTION public.guard_delivery_transition() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_driver_created_order_assignment() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_driver_trip_transition() TO service_role;
-GRANT EXECUTE ON FUNCTION public.guard_driver_trip_transition() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.guard_expense_cash_session() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_order_actor_and_assignment() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_order_item_price() TO service_role;
@@ -7222,7 +7293,6 @@ GRANT EXECUTE ON FUNCTION public.guard_production_batch_transition() TO service_
 GRANT EXECUTE ON FUNCTION public.guard_profile_primary_branch() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_refund_total() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_driver_trip_assignment() TO service_role;
-GRANT EXECUTE ON FUNCTION public.guard_ticket_driver_trip_assignment() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_item_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_status_transition() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_user_role_integrity() TO service_role;
@@ -7241,10 +7311,7 @@ GRANT EXECUTE ON FUNCTION public.open_cash_session(p_branch_id uuid, p_opening_f
 GRANT EXECUTE ON FUNCTION public.open_cash_session(p_branch_id uuid, p_opening_float numeric) TO service_role;
 GRANT EXECUTE ON FUNCTION public.prevent_audit_log_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.prevent_cash_session_delete() TO service_role;
-GRANT EXECUTE ON FUNCTION public.prevent_driver_trip_delete() TO anon;
-GRANT EXECUTE ON FUNCTION public.prevent_driver_trip_delete() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION public.prevent_driver_trip_delete() TO service_role;
-GRANT EXECUTE ON FUNCTION public.prevent_driver_trip_delete() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.prevent_financial_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.prevent_stock_movement_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.process_sync_batch(p_device_id uuid, p_operations jsonb) TO service_role;

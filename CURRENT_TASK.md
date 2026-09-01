@@ -1,5 +1,50 @@
 # BakeFlow — Current Task
 
+## ✅ SQL-suite CI wiring — validated end-to-end on a throwaway EC2 instance; P11.1 + P11.2 COMPLETE (2026-09-01)
+
+Continuing directly from BLOCKER-002's resolution below: user asked to wire `tests/sql/*.sql`
+into CI using a throwaway database (explicitly rejecting production credentials in secrets).
+Local Docker Desktop had a persistent DNS-resolution failure pulling images, so validation ran
+on a throwaway AWS EC2 instance instead (Docker, torn down completely afterward — instance
+terminated, security group and key pair deleted, confirmed not just requested).
+
+**P11.2 (shared fixture library) built along the way, as a real prerequisite:** none of the 16
+SQL suites are self-contained — all depend on organization/branch/profile/warehouse/recipe/
+ingredient/product (and, found later, one production_batches) rows that exist only in the live
+project's history. Built `tests/sql/fixtures.sql` with only the deliberate rows tests actually
+need (explicitly NOT a mirror of the live warehouse's 60+ rows of accumulated ad-hoc-testing
+debris).
+
+**Validated by actually running the full chain repeatedly against a genuinely fresh database**
+(auth/storage compat shim -> baseline -> seed -> fixtures -> all 16 suites), fixing one failure
+at a time until it passed, not by reasoning about what should work. Found and fixed **nine real,
+previously-unknown defects** in the baseline/tests — most significantly, the baseline's GRANT
+sections for both functions AND tables only ever had positive `GRANT`s, never a `REVOKE`, so a
+default privilege this project has configured (auto-granting `authenticated`/`anon` on
+everything `postgres` creates) silently reintroduced access that's correctly locked down on
+live — invisible until tested against a database that doesn't already have every object
+individually hardened by months of prior migrations. Full list of all nine: `IMPLEMENTATION_LOG.md`
+2026-09-01 (second entry).
+
+**Final result: 14/16 suites pass clean.** The other 2 fail on pre-existing, already-documented
+issues unrelated to this work — flagged for you rather than guessed at:
+- `catalog_read_rls.sql` (C9a/C9b/C1b) asserts the *absence* of a fix (BLOCKER-010a) that was
+  actually resolved live back on 2026-08-14 — this test file predates that fix and needs its
+  own update, which wasn't attempted here since it's a separate, real piece of work.
+- `security_multiorg_sync.sql` (S13) — the already-known `rate_limit_events` RLS gap, unrelated
+  to any of this.
+
+`.github/workflows/ci.yml`'s `sql-tests` job header updated to reflect the validated status.
+**One thing still genuinely open:** an actual run on GitHub's own runners is the final
+confirmation this exact YAML works there — different network and image-cache state than the EC2
+validation. Treat the above as strong evidence, not an ironclad guarantee of the first real run.
+
+Full trace: `IMPLEMENTATION_LOG.md` 2026-09-01.
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
 ## ✅ BLOCKER-002 actually resolved — schema baseline regenerated and independently verified (2026-08-31)
 
 User asked to "solve blocker 2" directly. Regenerated `supabase/migrations/20260809_live_schema.sql`

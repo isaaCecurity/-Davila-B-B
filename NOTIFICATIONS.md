@@ -4,6 +4,34 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## SQL-suite CI wiring done — 14/16 pass, 2 pre-existing gaps flagged for you (2026-09-01)
+
+The database test suites now run in CI against a throwaway database (no production key
+involved), as you asked. Validated it for real on the EC2 box you set up — not just written and
+hoped — by running the whole chain repeatedly against a genuinely empty database until every
+failure was tracked down and fixed. Found and fixed 9 real bugs along the way, the biggest one
+being: your database has a setting that automatically gives broad access to any new function or
+table someone creates, and the file meant to let you rebuild the database from scratch never
+accounted for that — meaning a rebuilt database would have quietly had weaker security than the
+one you're running now, until this pass caught it.
+
+**Two things surfaced that are pre-existing and not new, but you may want to prioritize fixing:**
+- One old test (`catalog_read_rls.sql`) is checking for a bug that was actually already fixed
+  back on 2026-08-14 — it just wasn't updated to know that. Not touched here since fixing test
+  assertions correctly needs someone to confirm what the *current* intended behavior actually
+  is, not a guess made in passing.
+- The other failing test is the `rate_limit_events` table having no access policy, already
+  flagged in this project before — still open, still low-priority, still not new.
+
+Your AWS EC2 box, security group, and key pair were all torn down at the end — confirmed
+terminated, not just requested.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-01, `CURRENT_TASK.md`.
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
 ## BLOCKER-002 solved — the repo can rebuild its own database again (2026-08-31)
 
 You asked me to solve it directly. Done: the schema baseline file that's supposed to let the

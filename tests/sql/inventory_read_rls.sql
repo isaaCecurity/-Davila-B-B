@@ -54,10 +54,16 @@ INSERT INTO public.profiles (id, full_name, status, tenant_id, active_tenant_id)
 ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
   tenant_id=EXCLUDED.tenant_id, active_tenant_id=EXCLUDED.active_tenant_id;
 
--- branch_manager = ...0003, owner = ...0001 (live roles table).
+-- Role ids looked up by key, not hardcoded -- seed.sql deliberately does not pin role ids
+-- ("UUID primary keys are generated per environment... never reference a role or permission
+-- by literal id"). The literal '00000000-...-0003'/'...-0001' values here previously worked
+-- only because live's roles table happens to carry legacy pinned ids for most roles (an
+-- artifact of an older seeding approach, not seed.sql's current gen_random_uuid()-based one) --
+-- confirmed broken applying this file to a genuinely fresh database for the first time
+-- (P11.1 throwaway-DB validation, 2026-09-01): "unknown role" from guard_user_role_integrity().
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
-  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003','da000000-0000-4000-8000-0000000000a1'),
-  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
+  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000001',(select id from public.roles where key='branch_manager'),'da000000-0000-4000-8000-0000000000a1'),
+  ('d0000000-0000-4000-8000-0000000000a1','d1000000-0000-4000-8000-000000000002',(select id from public.roles where key='owner'),NULL)
 ON CONFLICT DO NOTHING;
 
 -- THE fixture that makes I2 meaningful: assigned to A1, NOT to A2.

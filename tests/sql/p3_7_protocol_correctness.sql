@@ -320,6 +320,13 @@ begin
 end $$;
 
 -- =================== A3: unsupported domain_operation -> RPC response itself says REJECTED ===================
+-- Uses expense.reverse, not inventory.adjust -- found stale 2026-09-01 (P11.1 throwaway-DB
+-- validation): inventory.adjust was genuinely unimplemented when this test was first written,
+-- but the P3.7 INVENTORY slice built apply_inventory_adjust() on 2026-08-30, so an empty
+-- payload now reaches that handler's own validation (22023 invalid_request) instead of the
+-- dispatcher's unsupported_operation_type fallback this test means to exercise.
+-- expense.reverse is the one domain_operation still allowlisted but genuinely unhandled
+-- (BLOCKER-028, deliberately deferred) -- see BLOCKERS.md.
 do $$
 declare v_res jsonb;
 begin
@@ -328,7 +335,7 @@ begin
       'operation_id', gen_random_uuid(), 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
       'branch_id', 'ac000000-0000-4000-8000-00000000da01',
       'entity_id', gen_random_uuid(), 'entity_type', 'inventory',
-      'operation_type', 'EVENT', 'domain_operation', 'inventory.adjust',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
       'device_created_at', now()::text, 'payload', '{}'::jsonb
     )));
   insert into _results values ('A3 unsupported domain_operation -> RPC response reports REJECTED directly (not stale PENDING)',

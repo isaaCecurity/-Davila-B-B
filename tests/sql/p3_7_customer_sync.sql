@@ -822,10 +822,17 @@ begin
     v_ticket_row.status || ' ' || v_ticket_row.result::text);
 end $$;
 
--- =================== D1: domain_operation CHECK constraint unchanged ===================
+-- =================== D1: domain_operation CHECK constraint matches the current, reviewed
+-- allowlist ===================
+-- Anchor string updated 2026-09-01 (P11.1 throwaway-DB validation): the previous anchor
+-- predated the same-day allowlist tightening that removed inventory.receive/.consume/.transfer
+-- and production.complete (BLOCKER-026/027, deliberate scope decisions, not an accident) --
+-- this assertion correctly caught that drift when run against a fresh database, which is
+-- exactly what it's for. Updated to the new reviewed definition rather than deleted, so it
+-- keeps catching any FUTURE unreviewed drift the same way.
 insert into _results
-  select 'D1 domain_operation CHECK constraint definition unchanged',
-    pg_get_constraintdef(oid) = 'CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY[''ticket.create''::text, ''ticket.transition''::text, ''ticket.item_update''::text, ''inventory.adjust''::text, ''inventory.receive''::text, ''inventory.consume''::text, ''inventory.waste''::text, ''inventory.transfer''::text, ''production.start''::text, ''production.complete''::text, ''production.cancel''::text, ''production.record_output''::text, ''production.record_waste''::text, ''payment.create''::text, ''payment.reverse''::text, ''expense.create''::text, ''expense.reverse''::text, ''customer.create''::text, ''customer.update''::text]))))',
+  select 'D1 domain_operation CHECK constraint matches the current, reviewed allowlist',
+    pg_get_constraintdef(oid) = 'CHECK (((domain_operation IS NULL) OR (domain_operation = ANY (ARRAY[''ticket.create''::text, ''ticket.transition''::text, ''ticket.item_update''::text, ''inventory.adjust''::text, ''inventory.waste''::text, ''production.start''::text, ''production.record_output''::text, ''production.record_waste''::text, ''production.cancel''::text, ''payment.create''::text, ''payment.reverse''::text, ''expense.create''::text, ''expense.reverse''::text, ''customer.create''::text, ''customer.update''::text]))))',
     pg_get_constraintdef(oid)
   from pg_constraint where conname = 'sync_operations_domain_operation_check';
 

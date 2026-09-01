@@ -3,17 +3,31 @@
 # Runs the three checks that are reproducible from the repository alone:
 # lint, typecheck, and the pytest spec-coverage suite.
 #
-# DELIBERATELY NOT RUN HERE: tests/sql/*.sql. Those suites assert against a live
-# Postgres instance and need both a database and credentials.
+# tests/sql/*.sql run in the `sql-tests` job below, against a THROWAWAY Postgres service
+# container in the runner (supabase/postgres — includes the auth/storage/vault schemas and
+# extensions the baseline DDL needs, not just vanilla Postgres). This container is destroyed
+# with the runner at the end of every run; nothing here ever touches the live production
+# project (tvfyxpafbpnkneujcnvr), and no production credential is used or needed.
 #
-# BLOCKER-002 (repo could not rebuild the schema) was RESOLVED 2026-08-31 —
-# supabase/migrations/20260809_live_schema.sql is now a verified, complete baseline
-# (see BLOCKERS.md). That removes the "no reproducible schema" half of the original
-# blocker, but NOT the other half: pointing CI at a database built from this baseline
-# still means either standing up a throwaway Postgres in the runner (a real setup cost,
-# not yet built) or pointing CI at the live production project, which means putting a
-# privileged key in GitHub secrets. That remains a human decision. The SQL suites stay
-# a local, manually executed gate until it's made. Do not wire them in by inventing it.
+# STATUS (2026-09-01): validated end-to-end against a real throwaway instance (an AWS EC2 box
+# with Docker — local Docker Desktop had an unrelated DNS issue reaching Docker Hub's CDN, see
+# IMPLEMENTATION_LOG.md), not just written against known facts. The exact chain this job runs
+# (shim -> baseline -> seed -> fixtures -> all suites) was run repeatedly from a genuinely fresh
+# database until every environment-caused failure was found and fixed: two default-privilege
+# gaps (functions AND tables both need an explicit REVOKE the baseline never had — this
+# project's `postgres` role auto-grants authenticated/anon on anything it creates, invisible on
+# live only because every object had already been individually locked down over many prior
+# migrations), a missing `private` schema/function, a function-ordering bug (has_role used
+# before it was defined), a missing storage.buckets/objects stub, and several test files with
+# stale assumptions (hardcoded role ids that only happened to match live's legacy values, a
+# missing shared fixture row, a batch-number collision). Final result: 14/16 suites pass clean;
+# the other 2 fail on pre-existing, already-known issues unrelated to this environment work (a
+# stale test asserting a since-resolved defect, and the documented rate_limit_events RLS gap) —
+# see IMPLEMENTATION_LOG.md 2026-09-01 for the full trace. Re-run this job's own steps locally
+# after any future baseline/fixture change; a first CI run on GitHub's actual runners is still
+# the true proof this exact YAML works there (different network, different image cache state)
+# — treat it as confirmation, not as something already guaranteed by the above.
+#
 
 name: CI
 
@@ -123,3 +137,77 @@ jobs:
 
       - name: Run spec-coverage suite
         run: python -m pytest -q
+
+  sql-tests:
+    name: Database suites (throwaway Postgres)
+    runs-on: ubuntu-latest
+    services:
+      db:
+        # supabase/postgres, not vanilla postgres: the baseline DDL references auth.uid(),
+        # auth.jwt(), the storage schema (storage.objects/buckets/foldername), and the
+        # supabase_vault extension — none of which exist in a plain postgres image. Pin the
+        # exact tag deliberately (matches supabase/config.toml's major_version = 17); do not
+        # float this to `latest` or a bare major-version tag.
+        image: supabase/postgres:17.6.1.165
+        env:
+          POSTGRES_PASSWORD: throwaway_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGURL: postgresql://postgres:throwaway_ci_password@localhost:5432/postgres
+      # supabase_admin, not postgres: on this image `postgres` is deliberately NOT a
+      # superuser (matches real hosted Supabase, where even the postgres role can't touch the
+      # auth schema) — only supabase_admin can. Used for exactly one step below.
+      PGURL_ADMIN: postgresql://supabase_admin:throwaway_ci_password@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Wait for the throwaway database to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 5432 -U postgres && exit 0
+            sleep 2
+          done
+          echo "database never became ready" >&2
+          exit 1
+
+      # Must run BEFORE the baseline: a function inside it calls auth.jwt(), which the stock
+      # image doesn't have at all. See the shim file's own header for the full story.
+      - name: Apply throwaway auth-compatibility shim (not for real databases)
+        run: psql "$PGURL_ADMIN" -v ON_ERROR_STOP=1 -f tests/sql/throwaway_auth_compat_shim.sql
+
+      - name: Apply baseline schema DDL
+        run: psql "$PGURL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809_live_schema.sql
+
+      - name: Apply platform seed data (roles, permissions)
+        run: psql "$PGURL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+
+      - name: Apply shared test-tenant fixtures
+        run: psql "$PGURL" -v ON_ERROR_STOP=1 -f tests/sql/fixtures.sql
+
+      # Every file here (fixtures.sql and throwaway_auth_compat_shim.sql excluded, both applied
+      # above) wraps itself in its own BEGIN...ROLLBACK, so running them in sequence against the
+      # same database is safe — none of them leave data behind for the next one to trip over.
+      # function_privilege_audit.sql is the one exception to the transaction pattern (it's
+      # read-only catalog introspection, no transaction needed) and runs fine in the same loop.
+      - name: Run every tests/sql/*.sql suite
+        run: |
+          set -e
+          for f in tests/sql/*.sql; do
+            case "$f" in
+              tests/sql/fixtures.sql|tests/sql/throwaway_auth_compat_shim.sql) continue ;;
+            esac
+            echo "::group::$f"
+            psql "$PGURL" -v ON_ERROR_STOP=1 -f "$f"
+            echo "::endgroup::"
+          done

@@ -69,10 +69,12 @@ ON CONFLICT (id) DO UPDATE SET status='active', deleted_at=NULL,
 -- requires the creator to hold a user_roles row in the ticket's own tenant (the
 -- system supports multi-org membership by design), and rejects the INSERT outright
 -- otherwise. Found live 2026-08-23 running this suite for the first time end-to-end.
+-- Role ids looked up by key, not hardcoded -- see inventory_read_rls.sql's note on why (found
+-- and fixed same day, P11.1 throwaway-DB validation, 2026-09-01).
 INSERT INTO public.user_roles (tenant_id, profile_id, role_id, branch_id) VALUES
-  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000003','ea000000-0000-4000-8000-0000000000a1'),
-  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL),
-  ('e0000000-0000-4000-8000-0000000000b1','e1000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001',NULL)
+  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000001',(select id from public.roles where key='branch_manager'),'ea000000-0000-4000-8000-0000000000a1'),
+  ('e0000000-0000-4000-8000-0000000000a1','e1000000-0000-4000-8000-000000000002',(select id from public.roles where key='owner'),NULL),
+  ('e0000000-0000-4000-8000-0000000000b1','e1000000-0000-4000-8000-000000000002',(select id from public.roles where key='owner'),NULL)
 ON CONFLICT DO NOTHING;
 
 -- THE fixture that makes S13 meaningful: assigned to A1, NOT to A2.
