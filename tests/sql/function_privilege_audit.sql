@@ -8,9 +8,14 @@
 -- DO block raises an exception if either found anything — so a plain psql run fails loudly under
 -- ON_ERROR_STOP=1 instead of requiring a human to notice an empty vs. non-empty SELECT.
 --
--- EXECUTED 2026-08-31 against project tvfyxpafbpnkneujcnvr: both queries returned zero rows
--- live, after two real findings this same file exists to prevent were found and fixed earlier
--- the same day (see IMPLEMENTATION_LOG.md 2026-08-31, both entries).
+-- EXECUTED 2026-08-31 against project tvfyxpafbpnkneujcnvr: all three checks return zero rows
+-- live today, after four real findings this file exists to prevent were found and fixed the
+-- same day (see IMPLEMENTATION_LOG.md 2026-08-31): the complete_production_batch/
+-- fail_production_batch anon-executable overload (Check 1/2's motivation), 9 pre-existing
+-- anon-executable RPCs (Check 1's motivation), and two further trigger-function grant leaks
+-- found afterward while generating the new schema baseline — prevent_driver_trip_delete() and
+-- guard_driver_trip_transition()/guard_ticket_driver_trip_assignment() (Check 3's motivation,
+-- added after these were found).
 --
 -- Why this file exists: TESTING-STRATEGY.md §3 already has "the single most valuable test in
 -- the suite" — a query asserting every public table has RLS enabled AND has policies, because a
@@ -104,13 +109,36 @@ having count(*) > 1
 order by proname;
 
 -- ============================================================================================
--- VERDICT: fail loudly if either check above found anything, matching every other suite's
+-- CHECK 3: no TRIGGER function in public should have any direct EXECUTE grant to anon or
+-- authenticated. A trigger function is invoked automatically by Postgres when its trigger
+-- fires (with NEW/OLD/TG_* bound) — it is never meant to be called directly via RPC, and doing
+-- so outside trigger context errors immediately regardless of privilege. Found live 2026-08-31
+-- while generating the new schema baseline (BLOCKER-002): prevent_driver_trip_delete() carried
+-- PUBLIC/anon/authenticated EXECUTE unlike its four correctly-locked-down siblings, and
+-- guard_driver_trip_transition()/guard_ticket_driver_trip_assignment() carried a direct grant
+-- to `authenticated` that survived an earlier same-day REVOKE FROM PUBLIC because that REVOKE
+-- never touched the separate, direct `authenticated` grant. This check does not depend on
+-- SECURITY DEFINER/INVOKER (unlike Check 1) because the risk here is needless attack surface
+-- and drift-prone hygiene, not privilege escalation specifically.
+-- ============================================================================================
+select p.proname, pg_get_function_identity_arguments(p.oid) as args,
+  'trigger function has a direct EXECUTE grant to anon or authenticated; trigger functions should never be directly callable' as finding
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.prorettype = 'trigger'::regtype
+  and (has_function_privilege('anon', p.oid, 'EXECUTE') or has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+order by p.proname;
+
+-- ============================================================================================
+-- VERDICT: fail loudly if any check above found anything, matching every other suite's
 -- raise-on-failure convention.
 -- ============================================================================================
 do $verdict$
 declare
   v_check1 integer;
   v_check2 integer;
+  v_check3 integer;
 begin
   select count(*) into v_check1
   from pg_proc p
@@ -141,9 +169,16 @@ begin
       and (bool_or(anon_exec) <> bool_and(anon_exec) or bool_or(auth_exec) <> bool_and(auth_exec))
   ) t;
 
-  if v_check1 > 0 or v_check2 > 0 then
-    raise exception 'function_privilege_audit FAILED: % anon-executable finding(s), % mismatched-overload finding(s) -- see the result sets above',
-      v_check1, v_check2;
+  select count(*) into v_check3
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.prorettype = 'trigger'::regtype
+    and (has_function_privilege('anon', p.oid, 'EXECUTE') or has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+
+  if v_check1 > 0 or v_check2 > 0 or v_check3 > 0 then
+    raise exception 'function_privilege_audit FAILED: % anon-executable finding(s), % mismatched-overload finding(s), % exposed-trigger-function finding(s) -- see the result sets above',
+      v_check1, v_check2, v_check3;
   end if;
 end
 $verdict$;

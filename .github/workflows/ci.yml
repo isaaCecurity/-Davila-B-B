@@ -4,12 +4,16 @@
 # lint, typecheck, and the pytest spec-coverage suite.
 #
 # DELIBERATELY NOT RUN HERE: tests/sql/*.sql. Those suites assert against a live
-# Postgres instance and need both a database and credentials. The repository cannot
-# currently rebuild the schema (BLOCKER-002 — 17 migrations applied live, 14 files in
-# the repo, zero version overlap), so a CI database would not match production, and
-# pointing CI at the production project would mean putting a privileged key in GitHub
-# secrets. Both are human decisions, so the SQL suites stay a local, manually executed
-# gate until BLOCKER-002 is resolved. Do not wire them in by inventing either half.
+# Postgres instance and need both a database and credentials.
+#
+# BLOCKER-002 (repo could not rebuild the schema) was RESOLVED 2026-08-31 —
+# supabase/migrations/20260809_live_schema.sql is now a verified, complete baseline
+# (see BLOCKERS.md). That removes the "no reproducible schema" half of the original
+# blocker, but NOT the other half: pointing CI at a database built from this baseline
+# still means either standing up a throwaway Postgres in the runner (a real setup cost,
+# not yet built) or pointing CI at the live production project, which means putting a
+# privileged key in GitHub secrets. That remains a human decision. The SQL suites stay
+# a local, manually executed gate until it's made. Do not wire them in by inventing it.
 
 name: CI
 

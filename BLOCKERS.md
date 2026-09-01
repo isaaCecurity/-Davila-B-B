@@ -115,8 +115,71 @@ itself works.
 
 ---
 
-## ⚠️ BLOCKER-002 · Migration history reconciliation — REOPENED 2026-08-31 (was falsely marked RESOLVED)
-**Status:** OPEN · **Affects:** repository integrity / P0.5 & P1.4 / P11.1 CI wiring · **Type:** environment + decision
+## ✅ BLOCKER-002 · Migration history reconciliation — RESOLVED 2026-08-31 (reopened, then actually fixed, same day)
+**Status:** RESOLVED · **Affects:** repository integrity / P0.5 & P1.4 / P11.1 CI wiring · **Type:** environment + decision
+
+**Resolved 2026-08-31 (later the same day it was reopened).** Chose option (a) from the "Needed"
+list below — a fresh, complete DDL dump of the live schema, retiring the incomplete one — since
+it's the only option that actually restores reproducibility rather than formally documenting the
+gap. `supabase/migrations/20260809_live_schema.sql` was regenerated from scratch via live
+catalog introspection (not `pg_dump` — the Supabase CLI has no network path to
+`api.supabase.com` in this environment, confirmed by `supabase db dump --linked` hanging with no
+route; the file's own header documents this and the query-based method used instead).
+
+**Verified, not just generated — every count independently re-checked against the live database
+after generation, in a separate pass from the one that wrote the file:**
+- Tables: **40 in file, 40 live** — exact name-for-name match, zero missing, zero extra (verified
+  via full sorted diff of both name lists, not just a count).
+- Triggers: **58 in file, 58 live** — exact name-for-name match, zero missing, zero extra (same
+  full-diff method).
+- Functions: **97 in file, 97 live** (includes the two intentional `complete_production_batch`/
+  `fail_production_batch` overload pairs from the same day's SECURITY FIX work).
+- RLS policies: **108 total in file (104 public + 4 storage.objects), 108 live** by the same
+  split.
+- RLS enabled+forced: **40/40 tables**, matching live exactly.
+- Section ordering in the file is dependency-correct for a from-scratch rebuild: extensions →
+  sequences → tables (PK/UNIQUE/CHECK inline) → indexes → foreign keys (deliberately deferred
+  until after all tables exist) → functions → triggers → RLS enable/force → RLS policies →
+  grants → storage. Confirmed by reading the file's own section headers.
+- The table/constraint/index DDL — the highest-risk, most hand-assembled portion — was applied
+  verbatim (schema references swapped to a scratch schema) against a scratch schema on the same
+  live database and ran with zero errors, then the scratch schema was dropped. Functions/
+  triggers/policies were extracted via `pg_get_functiondef`/`pg_get_triggerdef`/`pg_policies`
+  formatting — Postgres's own DDL-regeneration, guaranteed syntactically valid by construction —
+  so were not separately re-executed.
+- **What was NOT done, disclosed rather than silently skipped:** a genuine from-empty-database
+  execution of the complete file was not performed. Docker is installed in this environment but
+  its daemon was not running, and bringing up a full local Supabase stack (`supabase start`) to
+  test this would have been a first-time, multi-minute-plus resource commitment not undertaken
+  without flagging it first. The scratch-schema test above is a strong substitute for the highest
+  -risk portion (table/constraint DDL) but is not equivalent to a true empty-database rebuild.
+  Recommended as a follow-up if that stronger guarantee is wanted.
+
+**Two more real findings surfaced during this work, fixed the same day (not part of the original
+blocker, found while generating/reviewing the new baseline):**
+`prevent_driver_trip_delete()` and (separately) `guard_driver_trip_transition()`/
+`guard_ticket_driver_trip_assignment()` each still carried a stray `anon`/`authenticated` EXECUTE
+grant despite being trigger-only functions. Fixed via `REVOKE ALL ... FROM PUBLIC, anon,
+authenticated` (migrations `harden_prevent_driver_trip_delete_grant` and
+`harden_guard_trigger_function_grants`). `tests/sql/function_privilege_audit.sql` gained a third
+check (CHECK 3) specifically for this class — no trigger function should ever carry a direct
+`anon`/`authenticated` grant — so it can't recur silently again.
+
+**Maintenance commitment added** (addressing option (c) — without one, this drifts again exactly
+as it did): `supabase/migrations/MIGRATION_GOVERNANCE.md` §3 now has an explicit rule to
+regenerate the baseline after any schema-changing migration and to never restate a coverage
+count without having just verified it in the same session — the two failures that actually
+caused this blocker.
+
+**CI wiring is a separate, still-open decision — reproducibility being fixed does not resolve
+it.** `.github/workflows/ci.yml` still does not run `tests/sql/*.sql`, and that comment has not
+been changed. Pointing CI at the live production project would mean putting a privileged key in
+GitHub secrets, which remains a decision for the human, not something this reconciliation
+authorizes on its own.
+
+---
+
+## Original reopening entry, 2026-08-31 (earlier the same day) — kept for history
 
 **Reopened 2026-08-31.** While scoping P11 (test/CI infrastructure) work, live-verified this
 blocker's own "RESOLVED" claim below and found it materially false — not merely stale by a

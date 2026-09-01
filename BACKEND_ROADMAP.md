@@ -218,11 +218,19 @@ may proceed.
 **Deliverables:** `ARCHITECTURE_DECISIONS.md` (AD-001…AD-016).
 **Completion criteria:** met.
 
-## P0.5 · Migration reproducibility — COMPLETE (2026-08-20)
+## P0.5 · Migration reproducibility — COMPLETE (2026-08-20, falsely; REOPENED and genuinely RESOLVED 2026-08-31)
 **Objective:** The repository can rebuild the live schema.
 **Dependencies:** P1.
-**Deliverables:** `supabase/migrations/20260809_live_schema.sql` baseline snapshot DDL and `MIGRATION_GOVERNANCE.md`.
-**Completion criteria:** met (BLOCKER-002 RESOLVED).
+**Deliverables:** `supabase/migrations/20260809_live_schema.sql` — regenerated 2026-08-31 via live
+catalog introspection after the 2026-08-20 version was found to be false (23 of 40 tables, zero
+RLS/functions/triggers, undetected for ~3 weeks). The new version was independently re-verified
+name-for-name against the live database (40/40 tables, 58/58 triggers, 97/97 functions, 108/108
+policies, zero discrepancies) rather than merely regenerated and trusted. `MIGRATION_GOVERNANCE.md`
+rewritten to match and to add a maintenance rule (regenerate after schema changes; never restate
+a coverage count without verifying it that session) so this doesn't drift silently again.
+**Completion criteria:** met — see `BLOCKERS.md` BLOCKER-002 (RESOLVED 2026-08-31) for full
+evidence. Do not trust the 2026-08-20 date alone as evidence of anything; that version's claims
+were checked and found false.
 
 ## P0.6 · Security baseline — COMPLETE
 **Objective:** RLS forced everywhere; DEFINER functions hardened.
@@ -236,8 +244,10 @@ may proceed.
 **Gap:** `.github/workflows/ci.yml` now has a lint/typecheck/`npm test`/pytest gate,
 including the new "Unit tests" step added 2026-08-28 — but per P11.1, this workflow's
 actual execution on GitHub (as opposed to the equivalent commands run locally) remains
-unproven. The SQL suites still have no CI path at all — same reasoning as before,
-recorded in the workflow file's own header (BLOCKER-002).
+unproven. The SQL suites still have no CI path at all — BLOCKER-002 (the schema-
+reproducibility half of the reason) is now RESOLVED (2026-08-31), but a separate,
+still-open decision remains (would CI build a throwaway Postgres, or point at
+production with a secrets-stored key?) — see the workflow file's own header.
 
 ---
 
@@ -1001,7 +1011,7 @@ earlier the same day. Corrected to match.
 | # | Criterion | Current |
 |---|---|---|
 | 1 | All required domain services exist (P4.1–P4.6) | ✗ |
-| 2 | Migrations reproducible from the repository | ✗ BLOCKER-002 |
+| 2 | Migrations reproducible from the repository | ✓ BLOCKER-002 RESOLVED 2026-08-31 |
 | 3 | RLS/security tests pass | ✓ 16/16 |
 | 4 | Sync tests pass | ✓ (record path only) |
 | 5 | Authorization tests pass | ✓ |
@@ -1068,7 +1078,7 @@ milestone is stopped on either an unmade business decision or live-database acce
 | P6.4 audit coverage | needs migrations |
 | P6.6 rate limiting / prod config | needs Supabase project config |
 | P3.7 per-entity sync | PARTIAL — tickets slice IMPLEMENTED 2026-08-28, protocol layer hardened 2026-08-29, customer slice IMPLEMENTED 2026-08-29, inventory.adjust/.waste + production.start/.cancel + payment.create/.reverse + expense.create IMPLEMENTED 2026-08-30, production.record_output/.record_waste IMPLEMENTED 2026-08-31; BLOCKER-006 resolved via AD-021 (BLOCKER-009 resolved 2026-08-22); inventory.receive/.transfer/.consume + production.complete decided OUT OF MVP SCOPE 2026-08-31, removed from allowlist (BLOCKER-026/027 RESOLVED); expense.reverse (BLOCKER-028) is the only remaining deliberately-unbuilt item |
-| P0.5 migration reproducibility | BLOCKER-002 (Docker + a decision on 14 stale files) |
+| P0.5 migration reproducibility | BLOCKER-002 — RESOLVED 2026-08-31, see below (this row is a historical snapshot from earlier in the project and was left as originally written elsewhere in this table; do not trust it as current) |
 
 **Frontend work (P8.1) was the next thing built**, exactly as this phase was designed to
 allow, and has since grown well beyond it — see below.
@@ -1219,10 +1229,13 @@ now RESOLVED. Coverage was verified by counting linted files, not by trusting ex
 **24 files** (7 app + 17 root).
 
 **Still open, deliberately.** The **SQL suites are not in CI** and P11.1 cannot be
-COMPLETE until they are. They need a live Postgres and credentials; the repository
-cannot rebuild the schema (**BLOCKER-002**), and pointing CI at production would mean
-storing a privileged key in GitHub secrets. Both halves are human decisions, so they
-were left undone rather than guessed. `tests/sql/*.sql` remain a manual local gate.
+COMPLETE until they are. They need a live Postgres and credentials — the
+"repository cannot rebuild the schema" half of this (**BLOCKER-002**) is **RESOLVED**
+(2026-08-31, see `BLOCKERS.md`), but the remaining half is unchanged: a CI database
+would need either a throwaway Postgres stood up in the runner (using the now-verified
+baseline — not yet built) or pointing CI at production, which means storing a
+privileged key in GitHub secrets. That's still a human decision, left undone rather
+than guessed. `tests/sql/*.sql` remain a manual local gate.
 
 **Verified on GitHub 2026-08-11.** Run **31822495609** is green: `Typecheck` and `Lint`
 both executed and passed on a Linux runner with `--max-warnings=0` and the npm pin intact.
@@ -1234,7 +1247,8 @@ and after enabling, `corepack enable` does not win the PATH race (bare `npm` sti
 the version Node 22.13 ships), so the pinned npm is now invoked through `corepack npm`
 explicitly and asserted before install.
 
-**Blockers:** BLOCKER-002 (for the SQL half only).
+**Blockers:** none for schema reproducibility (BLOCKER-002 RESOLVED 2026-08-31); the
+CI-database-approach decision above remains open but is not itself a numbered blocker.
 **Parallelizable:** with everything — it changes no runtime code.
 
 ---
@@ -1245,7 +1259,7 @@ explicitly and asserted before install.
 |---|---|---|---|
 | P12.1 | Supabase production configuration | NOT_STARTED | |
 | P12.2 | Secrets management | NOT_STARTED | `SUPABASE_*` are auto-injected and must not be set |
-| P12.3 | Migration deployment process | BLOCKED | BLOCKER-002 |
+| P12.3 | Migration deployment process | NOT_STARTED | BLOCKER-002 (schema reproducibility) RESOLVED 2026-08-31; the deployment *process* itself (how a migration reaches production safely) is still not built, a distinct piece of work from reproducibility |
 | P12.4 | Monitoring & logging | NOT_STARTED | |
 | P12.5 | Crash/error reporting | NOT_STARTED | no Sentry package installed |
 | P12.6 | Performance checks | NOT_STARTED | |

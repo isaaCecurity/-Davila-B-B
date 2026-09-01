@@ -1,6 +1,34 @@
 # BakeFlow — Current Task
 
-## ✅ P11 scoping — BLOCKER-002 reopened (was falsely RESOLVED); anon-EXECUTE hygiene fix on 9 functions; permanent function-privilege audit added (2026-08-31)
+## ✅ BLOCKER-002 actually resolved — schema baseline regenerated and independently verified (2026-08-31)
+
+User asked to "solve blocker 2" directly. Regenerated `supabase/migrations/20260809_live_schema.sql`
+from scratch via live catalog introspection (chosen over the blocker's other two options since
+it's the only one that restores real reproducibility). Then independently re-verified it —
+name-for-name, not just counts — against the live database: **40/40 tables, 58/58 triggers,
+97/97 functions, 108/108 policies, zero discrepancies.** Two more stray `anon`/`authenticated`
+grants on trigger functions were found and fixed along the way (`prevent_driver_trip_delete`,
+`guard_driver_trip_transition`, `guard_ticket_driver_trip_assignment`), and the function-
+privilege audit script gained a third check specifically for that class.
+
+**One gap disclosed, not hidden:** a genuine from-empty-database rebuild test was not performed
+— Docker is installed but its daemon isn't running, and starting a full local Supabase stack for
+the first time would have been a real time/resource cost not undertaken without asking first.
+The scratch-schema test that was done (table/constraint DDL applied to a throwaway schema on the
+live database, zero errors) is a strong partial substitute, not a full equivalent.
+
+**BLOCKER-002 is now RESOLVED**, with a maintenance rule added (`MIGRATION_GOVERNANCE.md` §3) so
+this doesn't drift silently again. CI wiring of the SQL suites is explicitly still a SEPARATE,
+open decision (production credentials in GitHub secrets) — resolving reproducibility does not
+resolve that, and it wasn't decided here.
+
+Full detail: `BLOCKERS.md` BLOCKER-002, `IMPLEMENTATION_LOG.md` 2026-08-31 (latest entry).
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
+## P11 scoping — BLOCKER-002 reopened (was falsely RESOLVED); anon-EXECUTE hygiene fix on 9 functions; permanent function-privilege audit added (2026-08-31)
 
 Picked as "most important next area" after the FINANCIAL/production work below, specifically
 because it's the systemic fix for the same-day SECURITY FIX entry further below — a CI-enforced

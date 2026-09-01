@@ -123,17 +123,21 @@ All previously open terminology conflicts have been resolved. For the record:
 
 - **The permission catalog exists.** `ROLES-AND-PERMISSIONS.md` §4 and `FRONTEND-STRUCTURE.md` §3 both stated no permission table existed. `permissions` (25 rows), `role_permissions` (93 grants), and `has_permission(text, uuid)` are all live. Documented in `ROLES-AND-PERMISSIONS.md` §4.
 
-- **BLOCKER-002 ("migration history reconciled") — reopened 2026-08-31, its "RESOLVED" status
-  was false.** `BLOCKERS.md` and `supabase/migrations/MIGRATION_GOVERNANCE.md` both claimed the
-  baseline file `20260809_live_schema.sql` covers "all 37 core tables... and forced RLS
-  policies." Live-verified 2026-08-31: the file has 23 `CREATE TABLE` statements and **zero**
-  RLS policies, functions, or triggers of any kind; the live database has 40 tables today.
-  Entire domains built after 2026-08-10 (production, financial, offline sync, driver trips,
-  audit) are absent from the baseline, and the governance doc's own migration inventory was
-  never updated past that date. `.github/workflows/ci.yml`'s comment — which still describes
-  this as unresolved and is why the SQL test suites are not wired into CI — was the accurate
-  account all along; the "RESOLVED" status elsewhere was the error. See `BLOCKERS.md`
-  BLOCKER-002 for the reconciliation options this now needs a decision on.
+- **BLOCKER-002 ("migration history reconciled") — reopened AND resolved 2026-08-31, same day.**
+  `BLOCKERS.md` and `supabase/migrations/MIGRATION_GOVERNANCE.md` both claimed the baseline file
+  `20260809_live_schema.sql` covers "all 37 core tables... and forced RLS policies." Live-
+  verified: the file had 23 `CREATE TABLE` statements and **zero** RLS policies, functions, or
+  triggers of any kind; the live database has 40 tables. Entire domains built after 2026-08-10
+  (production, financial, offline sync, driver trips, audit) were absent, and the governance
+  doc's own migration inventory was never updated past that date. `.github/workflows/ci.yml`'s
+  comment — which still described this as unresolved — was the accurate account all along; the
+  "RESOLVED" status elsewhere was the error. **Fixed the same day**: the baseline was
+  regenerated from live catalog introspection and independently re-verified name-for-name
+  against the live database (40/40 tables, 58/58 triggers, 97/97 functions, 108/108 policies,
+  zero discrepancies) — see `BLOCKERS.md` BLOCKER-002 for full evidence and
+  `IMPLEMENTATION_LOG.md` 2026-08-31 for the transcript. CI wiring of the SQL suites remains a
+  separate, still-open decision (production credentials in GitHub secrets) — resolving
+  reproducibility does not resolve that.
 
 **Resolved 2026-08-10 by the clarification documents** (`BAKEFLOW-PROJECT-LOGIC-CLARIFICATION.md`, `REPORTING-MODEL.md`, `NOTIFICATIONS-SPEC.md`, `NOTIFICATION-DELIVERY-CHANNELS.md`, `OFFLINE-SYNC-MODEL.md`, `STORAGE-BUCKETS.md`, `SOFT-DELETE-AND-RETENTION.md`):
 

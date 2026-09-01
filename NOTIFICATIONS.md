@@ -4,6 +4,34 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## BLOCKER-002 solved — the repo can rebuild its own database again (2026-08-31)
+
+You asked me to solve it directly. Done: the schema baseline file that's supposed to let the
+database be rebuilt from scratch was regenerated for real this time, and — unlike the version
+from three weeks ago — I checked it name-by-name against the live database rather than trusting
+it: every one of the 40 tables, 58 triggers, 97 functions, and 108 security policies matches
+exactly.
+
+Two more small things turned up and got fixed along the way: two more functions had the same
+kind of stray public-access grant as the ones from earlier today (both harmless — they're
+trigger-internal functions nothing could actually call this way — but closed anyway).
+
+**One honest gap:** I didn't do a full "build the database from nothing" test, since that would
+have meant starting Docker and pulling a full local stack for the first time in this project —
+a real time cost I didn't want to spend without checking with you first. What I did instead
+(testing the riskiest part — the table definitions — against a disposable copy on the same live
+database) is strong but not quite the same guarantee. Happy to do the fuller test if you want it.
+
+Separately, unresolved: whether your CI pipeline should eventually run these database tests
+automatically. That would mean either building a throwaway test database in CI, or giving CI a
+production key — a decision for you, not something I did here.
+
+Full detail: `BLOCKERS.md` BLOCKER-002, `IMPLEMENTATION_LOG.md` 2026-08-31.
+
+**Not committed** — no commit instruction was given this pass.
+
+---
+
 ## P11 scoping — reopened a falsely-"resolved" blocker, and found/fixed a second, smaller privilege hygiene issue (2026-08-31)
 
 Two things worth knowing from picking "test/CI infrastructure" as the next area:

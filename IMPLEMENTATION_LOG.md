@@ -5,6 +5,95 @@ Never record planned work here.
 
 ---
 
+## 2026-08-31 (same day, later still) · BLOCKER-002 actually resolved — schema baseline regenerated and independently verified; two more trigger-grant hygiene fixes
+
+**Context:** user asked to "solve blocker 2" after the prior entry below reopened it. A
+background agent was dispatched to generate a fresh, complete baseline via live catalog
+introspection (chosen over the other two options in the blocker's "Needed" list — the only one
+that restores actual reproducibility rather than documenting the gap). That agent hit a session
+rate limit mid-task, after writing the regenerated `supabase/migrations/20260809_live_schema.sql`
+(7317 lines, up from 375) but before updating the surrounding documentation
+(`MIGRATION_GOVERNANCE.md`, `BLOCKERS.md`, etc.) — confirmed via `git diff --stat` showing only
+that one file changed.
+
+**Verification performed before trusting the agent's output** (this session's own work, not the
+failed agent's):
+- `grep -c` counts on the new file initially looked slightly off from live counts (43 vs 40
+  tables, 59 vs 58 triggers) — investigated rather than accepted or alarmed at. Root cause: sloppy
+  regexes matching comment text, not real defects. Anchored regexes requiring a schema-qualified
+  name (`CREATE TABLE ... schema.table`) or line-start (`^CREATE TRIGGER`) gave exactly 40 tables
+  and 58 triggers.
+- Full sorted-name diff (not just counts) of tables and triggers between file and live: **zero
+  differences** both ways (`diff` exit code 0).
+- Functions: 97 total `CREATE FUNCTION` statements in file = 97 live `pg_proc` rows in `public`;
+  the two expected duplicate names (`complete_production_batch`, `fail_production_batch`, each
+  legitimately two overloads per the earlier SECURITY FIX entry) accounted for and confirmed not
+  new defects.
+- Policies: 108 total (104 public + 4 storage.objects) in file = 108 live (same split).
+- File section ordering read directly from its own `-- SECTION:` headers: extensions → sequences
+  → tables → indexes → foreign keys (deliberately after all tables exist) → functions → triggers
+  → RLS enable/force → RLS policies → grants → storage — dependency-correct for a from-scratch
+  rebuild.
+- Did NOT perform a genuine empty-database rebuild test: `docker --version` succeeded (29.7.2)
+  but `docker ps` failed (`dockerDesktopLinuxEngine` pipe not found — daemon not running).
+  Starting Docker Desktop and pulling a full local Supabase stack for the first time in this
+  environment would have been a real, multi-minute-plus resource commitment not undertaken
+  without flagging it first, so this was disclosed as a gap rather than silently skipped or
+  quietly attempted. The agent's own scratch-schema test (applying the table/constraint/index DDL
+  to a throwaway schema on the same live database, zero errors, then dropped) is a strong partial
+  substitute for the highest-risk portion but is not equivalent.
+
+**Two further real findings, from the agent's own header disclosure, investigated and fixed
+live:**
+- `prevent_driver_trip_delete()` carried `PUBLIC`/`anon`/`authenticated` EXECUTE, unlike its four
+  correctly-locked-down siblings (`prevent_cash_session_delete`, `prevent_financial_mutation`,
+  `prevent_stock_movement_mutation`, `prevent_audit_log_mutation`, all `{postgres, service_role}`
+  only). Confirmed via `proacl` before/after. Fixed:
+  `REVOKE ALL ... FROM PUBLIC, anon, authenticated` (migration
+  `harden_prevent_driver_trip_delete_grant`). Re-verified `proacl` now matches its siblings
+  exactly.
+- Checking ALL trigger functions for the same pattern (not just the one flagged) surfaced a
+  second case my own earlier audit script had missed: `guard_driver_trip_transition()` and
+  `guard_ticket_driver_trip_assignment()` still had a direct `authenticated` grant, surviving the
+  EARLIER same-day `harden_anon_execute_grants_on_driver_and_payment_rpcs_v2` migration — that
+  migration only revoked their `PUBLIC` grant (correctly, since they're trigger-only and were
+  never re-granted to `authenticated` in that migration), but a separate, direct `authenticated`
+  grant predating that migration was never touched. Fixed the same way (migration
+  `harden_guard_trigger_function_grants`). Re-verified: zero trigger functions in `public` now
+  have any `anon`/`authenticated` EXECUTE grant.
+- Root cause noted: my own `function_privilege_audit.sql` Check 1 only examines `SECURITY
+  DEFINER` functions (`p.prosecdef`) — these are `SECURITY INVOKER`, so Check 1 would never have
+  caught them. Added **CHECK 3** to that file: no trigger function (`prorettype = 'trigger'`)
+  should ever have a direct `anon`/`authenticated` grant, regardless of DEFINER/INVOKER, plus a
+  matching branch in the verdict `DO` block. Full file re-verified live end-to-end (all three
+  checks + verdict) after the addition: `function_privilege_audit PASSED`.
+
+**Documentation closed out:**
+- `supabase/migrations/MIGRATION_GOVERNANCE.md` — fully rewritten: accurate current counts
+  (pointing to the baseline file's own header as the source of truth rather than restating
+  numbers here that could go stale again), the 2026-08-10-and-earlier migration inventory kept
+  but explicitly labeled historical/stale, a new §3 rule #4/#5 (regenerate after schema changes;
+  never restate a coverage count without verifying it that session — the two failures that
+  actually caused this blocker), and a §4 "what actually went wrong" record.
+- `BLOCKERS.md` BLOCKER-002 — flipped from OPEN back to RESOLVED, with the full verification
+  evidence above, the two additional hygiene fixes, the maintenance-commitment addition, and an
+  explicit note that CI wiring is a SEPARATE, still-open decision this does not resolve
+  (production credentials in GitHub secrets). The original reopening entry is kept below it,
+  relabeled, for history.
+- `docs/PROJECT-OVERVIEW.md` §7 — the reopening entry updated in place with the resolution,
+  rather than left to imply the blocker was still open.
+- `.github/workflows/ci.yml` — comment updated: the "cannot rebuild the schema" reason is now
+  gone (resolved), the "would need production credentials in secrets" reason remains and is
+  called out as the sole remaining, still-human, reason the SQL suites stay local-only.
+- `BACKEND_ROADMAP.md` — P0.5 flipped back to COMPLETE with the real (not the false 2026-08-20)
+  evidence; P7.1 gate row 2 flipped to ✓; P11.1 and P12.3 sections corrected to distinguish
+  "schema reproducibility: resolved" from "CI/deployment process: still not built" rather than
+  conflating both under BLOCKER-002 as before.
+
+**Not committed** — no explicit commit instruction was given this pass.
+
+---
+
 ## 2026-08-31 (same day, later still) · P11 scoping — BLOCKER-002 reopened; 9-function anon-EXECUTE hygiene fix; permanent function-privilege audit added
 
 **Context:** asked to pick the most important next area; chose P11 (test/CI infrastructure) as
