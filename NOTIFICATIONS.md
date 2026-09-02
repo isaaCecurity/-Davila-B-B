@@ -4,6 +4,26 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Per-supervisor permission overrides are built — plus a real security hole caught before it shipped (2026-09-02)
+
+Built what you asked for: a Branch Manager can now grant or revoke individual permissions
+(customer editing, expense entry, viewing reports, etc.) for one specific Supervisor,
+without changing what every other Supervisor in the bakery can do. Restricted to a safe set
+of Supervisor-relevant permissions only, per your decision — a Branch Manager can't use this
+to accidentally hand a Supervisor admin-level powers like permanently deleting records or
+managing staff. Only a Branch Manager can set these (not even the Owner, per your decision).
+
+While building it, found and fixed a real security gap before it ever reached the live
+database's normal-use path: the database's own default settings had quietly given every
+signed-in user full write access to the new table underneath the safety checks. Caught by
+the very first automated test written against it, fixed the same session with an explicit
+lockdown, verified fixed before moving on.
+
+Fully tested (17 checks, all passing) with zero breakage to the existing catalog-editing
+tests that share the same underlying permission-check code.
+
+---
+
 ## Offline-sync dependency question resolved — deferred, per your call (2026-09-02)
 
 You picked "defer" on the question of whether the sync system needs to handle one offline

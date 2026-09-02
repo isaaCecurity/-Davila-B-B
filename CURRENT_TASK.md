@@ -1,5 +1,39 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-025 DELIVERED — per-supervisor permission overrides built, one real security gap found and fixed (2026-09-02)
+
+Picked as the next task after BLOCKER-022/023. Unlike those two, this one asked for a real
+new capability, not a deferral. Got the owner's decisions on the three genuinely open
+questions first (scope, who may set an override, which permission keys are eligible — see
+`BLOCKERS.md` BLOCKER-025 for the full reasoning), then built:
+
+- **`user_permission_overrides` table** + **`set_supervisor_permission_override()`** RPC —
+  Branch-Manager-only, target must currently hold `supervisor`, permission key must be on a
+  safe 15-key allowlist (explicitly excluding `tickets.update`/`tickets.cancel`, which must
+  never be granted to any role by any mechanism).
+- **`has_permission()` rewritten** to check for an active override first — it wins outright
+  over the role-level grant when present; unchanged fallback otherwise.
+
+**A real security gap was found and fixed before shipping, not assumed:** Supabase's default
+schema privileges had silently granted `authenticated` full write access to the new table —
+caught live by the new test suite's own first assertion, fixed via an explicit `REVOKE`
+migration. Without it, a direct PostgREST write would have bypassed every guard the RPC
+enforces.
+
+**Verified:** `tests/sql/supervisor_permission_overrides.sql`, 17/17 live. Zero regression:
+`tests/sql/catalog_write_rls.sql` re-run in full (18/18) since it's the primary other live
+consumer of `has_permission()`. `pytest -q`: 12/12. CI baseline
+(`20260809_live_schema.sql`) patched in place with the new table/functions/policies.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-02. Docs updated: `BLOCKERS.md`,
+`docs/ROLES-AND-PERMISSIONS.md`, `docs/API-CONTRACT.md`.
+
+**BLOCKER-023** (`sync_changes` retention/purge — already scoped as "no immediate action
+needed") is the last item from the original three-candidate set, and has nothing actionable
+today.
+
+---
+
 ## ✅ BLOCKER-022 resolved — `depends_on_operation_id` deferred by owner decision (2026-09-02)
 
 Picked as the next task after P4.4, per the owner's choice among the standing candidates

@@ -120,7 +120,7 @@ CREATE SEQUENCE IF NOT EXISTS public.sync_change_seq START WITH 1 INCREMENT BY 1
 
 
 -- ============================================================
--- SECTION: TABLES (40 total, columns + PK/UNIQUE/CHECK constraints inline)
+-- SECTION: TABLES (41 total as of 2026-09-02/BLOCKER-025, columns + PK/UNIQUE/CHECK constraints inline)
 -- ============================================================
 
 CREATE TABLE public.audit_log (
@@ -997,9 +997,31 @@ CREATE TABLE public.warehouses (
 ,  CONSTRAINT warehouses_tenant_id_key UNIQUE (tenant_id, id)
 );
 
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025). Placed
+-- at the end of this section (after all 40 original tables) so its inline REFERENCES to
+-- organizations/profiles/permissions never forward-reference a not-yet-created table.
+CREATE TABLE public.user_permission_overrides
+(  id uuid DEFAULT gen_random_uuid() NOT NULL
+,  tenant_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT
+,  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE
+,  permission_id uuid NOT NULL REFERENCES public.permissions(id) ON DELETE RESTRICT
+,  granted boolean NOT NULL
+,  created_at timestamp with time zone DEFAULT now() NOT NULL
+,  updated_at timestamp with time zone DEFAULT now() NOT NULL
+,  created_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL
+,  deleted_at timestamp with time zone
+,  deleted_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL
+,  CONSTRAINT user_permission_overrides_pkey PRIMARY KEY (id)
+);
+
+COMMENT ON TABLE public.user_permission_overrides IS
+  'Per-profile permission overrides, set by a Branch Manager for an individual Supervisor. '
+  'granted=true raises, granted=false lowers/revokes, absence (soft-deleted or no row) means '
+  'the role default from role_permissions applies. See BLOCKER-025.';
+
 
 -- ============================================================
--- SECTION: INDEXES (non-constraint-backed, 238 total)
+-- SECTION: INDEXES (non-constraint-backed, 241 total as of 2026-09-02/BLOCKER-025)
 -- ============================================================
 
 CREATE INDEX idx_audit_log_actor ON public.audit_log USING btree (actor_id);
@@ -1241,6 +1263,11 @@ CREATE INDEX idx_warehouses_deleted_by ON public.warehouses USING btree (deleted
 CREATE INDEX idx_warehouses_tenant ON public.warehouses USING btree (tenant_id);
 CREATE UNIQUE INDEX warehouses_one_default_per_branch ON public.warehouses USING btree (tenant_id, branch_id) WHERE is_default;
 
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides / index_user_permission_overrides_permission_fk, BLOCKER-025).
+CREATE UNIQUE INDEX user_permission_overrides_active_uq ON public.user_permission_overrides USING btree (tenant_id, profile_id, permission_id) WHERE (deleted_at IS NULL);
+CREATE INDEX user_permission_overrides_profile_idx ON public.user_permission_overrides USING btree (tenant_id, profile_id) WHERE (deleted_at IS NULL);
+CREATE INDEX user_permission_overrides_permission_id_idx ON public.user_permission_overrides USING btree (permission_id);
+
 
 -- ============================================================
 -- SECTION: FOREIGN KEYS (173 total, added after all tables exist)
@@ -1422,7 +1449,7 @@ ALTER TABLE public.warehouses ADD CONSTRAINT warehouses_tenant_id_fkey FOREIGN K
 
 
 -- ============================================================
--- SECTION: FUNCTIONS (97 total, ordered by name)
+-- SECTION: FUNCTIONS (98 total as of 2026-09-02/BLOCKER-025, ordered by name)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.accept_organization_invite(p_raw_token text)
@@ -5094,35 +5121,61 @@ AS $function$
     )
 $function$;
 
+-- Fixed 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025): now
+-- override-aware -- an active user_permission_overrides row for the caller wins outright
+-- (COALESCE short-circuits to it); otherwise falls back to the role-level grant, unchanged
+-- in substance from the prior definition. Branch-access check pulled out of the per-row
+-- EXISTS since an override has no role row of its own to check; unchanged in effect.
 CREATE OR REPLACE FUNCTION public.has_permission(required_permission text, target_branch_id uuid DEFAULT NULL::uuid)
  RETURNS boolean
  LANGUAGE sql
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.user_roles ur
-    JOIN public.roles r ON r.id=ur.role_id
-    JOIN public.role_permissions rp ON rp.role_id=r.id
-    JOIN public.permissions p ON p.id=rp.permission_id
-    WHERE ur.profile_id=auth.uid()
-      AND ur.tenant_id=public.current_tenant_id()
-      AND ur.deleted_at IS NULL
-      AND r.deleted_at IS NULL
-      AND p.deleted_at IS NULL
-      AND p.key=required_permission
-      AND (
-        target_branch_id IS NULL
-        OR r.key IN ('owner','admin')
-        OR EXISTS (
-          SELECT 1 FROM public.branch_assignments ba
-          WHERE ba.profile_id=auth.uid()
-            AND ba.tenant_id=public.current_tenant_id()
-            AND ba.branch_id=target_branch_id
-        )
+  SELECT
+    COALESCE(
+      (
+        SELECT upo.granted
+        FROM public.user_permission_overrides upo
+        JOIN public.permissions p ON p.id = upo.permission_id
+        WHERE upo.profile_id = auth.uid()
+          AND upo.tenant_id = public.current_tenant_id()
+          AND upo.deleted_at IS NULL
+          AND p.key = required_permission
+          AND p.deleted_at IS NULL
+      ),
+      EXISTS (
+        SELECT 1
+        FROM public.user_roles ur
+        JOIN public.roles r ON r.id=ur.role_id
+        JOIN public.role_permissions rp ON rp.role_id=r.id
+        JOIN public.permissions p ON p.id=rp.permission_id
+        WHERE ur.profile_id=auth.uid()
+          AND ur.tenant_id=public.current_tenant_id()
+          AND ur.deleted_at IS NULL
+          AND r.deleted_at IS NULL
+          AND p.deleted_at IS NULL
+          AND p.key=required_permission
       )
-  );
+    )
+    AND (
+      target_branch_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM public.user_roles ur
+        JOIN public.roles r ON r.id = ur.role_id
+        WHERE ur.profile_id = auth.uid()
+          AND ur.tenant_id = public.current_tenant_id()
+          AND ur.deleted_at IS NULL
+          AND r.deleted_at IS NULL
+          AND r.key IN ('owner','admin')
+      )
+      OR EXISTS (
+        SELECT 1 FROM public.branch_assignments ba
+        WHERE ba.profile_id=auth.uid()
+          AND ba.tenant_id=public.current_tenant_id()
+          AND ba.branch_id=target_branch_id
+      )
+    );
 $function$;
 
 CREATE OR REPLACE FUNCTION public.is_authorized_for_branch(p_actor uuid, p_tenant uuid, p_branch uuid)
@@ -6662,10 +6715,101 @@ begin
 end
 $function$;
 
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025).
+CREATE OR REPLACE FUNCTION public.set_supervisor_permission_override(
+  p_profile_id uuid,
+  p_permission_key text,
+  p_granted boolean
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant_id uuid;
+  v_permission_id uuid;
+  v_override_id uuid;
+  v_result jsonb;
+  v_allowed_keys text[] := ARRAY[
+    'branch.view','customers.create','customers.update','customers.delete',
+    'financial.audit.confirm','financial.audit.submit',
+    'financial.expense.create','financial.expense.update','financial.view',
+    'reports.view','staff.view',
+    'tickets.create','tickets.view','tickets.correct','tickets.archive'
+  ];
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'authentication required'
+      USING errcode='28000', detail = json_build_object('code','session_expired')::text;
+  END IF;
+
+  v_tenant_id := public.current_tenant_id();
+
+  IF NOT public.has_role_in(auth.uid(), v_tenant_id, ARRAY['branch_manager']) THEN
+    RAISE EXCEPTION 'only a Branch Manager may set a per-supervisor permission override'
+      USING errcode='42501', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  IF NOT public.has_role_in(p_profile_id, v_tenant_id, ARRAY['supervisor']) THEN
+    RAISE EXCEPTION 'target profile does not hold the supervisor role in this organization'
+      USING errcode='P0001', detail = json_build_object('code','not_a_supervisor')::text;
+  END IF;
+
+  IF NOT (p_permission_key = ANY(v_allowed_keys)) THEN
+    RAISE EXCEPTION 'permission key % is not eligible for per-supervisor override', p_permission_key
+      USING errcode='42501', detail = json_build_object('code','permission_not_overridable')::text;
+  END IF;
+
+  SELECT id INTO v_permission_id
+  FROM public.permissions
+  WHERE key = p_permission_key AND deleted_at IS NULL;
+
+  IF v_permission_id IS NULL THEN
+    RAISE EXCEPTION 'unknown permission key: %', p_permission_key
+      USING errcode='22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  IF p_granted IS NULL THEN
+    UPDATE public.user_permission_overrides
+       SET deleted_at = now(), deleted_by = auth.uid()
+     WHERE tenant_id = v_tenant_id
+       AND profile_id = p_profile_id
+       AND permission_id = v_permission_id
+       AND deleted_at IS NULL
+     RETURNING id INTO v_override_id;
+
+    v_result := jsonb_build_object(
+      'profile_id', p_profile_id, 'permission_key', p_permission_key,
+      'granted', null, 'cleared', v_override_id IS NOT NULL
+    );
+
+    IF v_override_id IS NOT NULL THEN
+      PERFORM public.log_audit_event(v_tenant_id, 'user_permission_override', v_override_id, 'update',
+        jsonb_build_object('granted', null),
+        jsonb_build_object('cleared_at', now(), 'cleared_by', auth.uid()));
+    END IF;
+
+    RETURN v_result;
+  END IF;
+
+  INSERT INTO public.user_permission_overrides (tenant_id, profile_id, permission_id, granted, created_by)
+  VALUES (v_tenant_id, p_profile_id, v_permission_id, p_granted, auth.uid())
+  ON CONFLICT (tenant_id, profile_id, permission_id) WHERE deleted_at IS NULL
+  DO UPDATE SET granted = EXCLUDED.granted, updated_at = now()
+  RETURNING id, to_jsonb(user_permission_overrides.*) INTO v_override_id, v_result;
+
+  PERFORM public.log_audit_event(v_tenant_id, 'user_permission_override', v_override_id, 'update',
+    '{}'::jsonb, jsonb_build_object('permission_key', p_permission_key, 'granted', p_granted));
+
+  RETURN v_result;
+END;
+$function$;
+
 
 
 -- ============================================================
--- SECTION: TRIGGERS (58 total)
+-- SECTION: TRIGGERS (59 total as of 2026-09-02/BLOCKER-025)
 -- ============================================================
 
 CREATE TRIGGER audit_log_immutable BEFORE DELETE OR UPDATE ON audit_log FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_mutation();
@@ -6727,9 +6871,12 @@ CREATE TRIGGER trg_guard_user_role_integrity BEFORE INSERT OR UPDATE OF tenant_i
 CREATE TRIGGER user_roles_set_updated_at BEFORE UPDATE ON user_roles FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER warehouses_set_updated_at BEFORE UPDATE ON warehouses FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025).
+CREATE TRIGGER user_permission_overrides_set_updated_at BEFORE UPDATE ON user_permission_overrides FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 
 -- ============================================================
--- SECTION: ROW LEVEL SECURITY ENABLE + FORCE (40 tables)
+-- SECTION: ROW LEVEL SECURITY ENABLE + FORCE (41 tables)
 -- ============================================================
 
 ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
@@ -6808,6 +6955,8 @@ ALTER TABLE public.ticket_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ticket_items FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.tickets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tickets FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.user_permission_overrides ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_permission_overrides FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.warehouses ENABLE ROW LEVEL SECURITY;
@@ -6815,7 +6964,7 @@ ALTER TABLE public.warehouses FORCE ROW LEVEL SECURITY;
 
 
 -- ============================================================
--- SECTION: RLS POLICIES (104 total)
+-- SECTION: RLS POLICIES (105 total as of 2026-09-02/BLOCKER-025)
 -- ============================================================
 
 CREATE POLICY audit_log_select ON public.audit_log AS PERMISSIVE FOR SELECT TO authenticated
@@ -7213,6 +7362,12 @@ CREATE POLICY warehouses_update ON public.warehouses AS PERMISSIVE FOR UPDATE TO
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text])))
   WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id)));
 
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025). Read-only
+-- via RLS -- writes go only through set_supervisor_permission_override(), see the
+-- FUNCTION EXECUTE GRANTS section below for why no write policy exists here.
+CREATE POLICY user_permission_overrides_select ON public.user_permission_overrides AS PERMISSIVE FOR SELECT TO authenticated
+  USING (((profile_id = ( SELECT auth.uid() AS uid)) OR ((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]))) AND (deleted_at IS NULL));
+
 
 -- ============================================================
 -- SECTION: TABLE GRANTS (to anon/authenticated/service_role/supabase_auth_admin)
@@ -7309,6 +7464,11 @@ GRANT INSERT, SELECT, UPDATE ON TABLE public.ticket_items TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.ticket_items TO service_role;
 GRANT INSERT, SELECT ON TABLE public.tickets TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.tickets TO service_role;
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides +
+-- revoke_direct_write_grants_user_permission_overrides, BLOCKER-025). SELECT only --
+-- writes go only through set_supervisor_permission_override(), see below.
+GRANT SELECT ON TABLE public.user_permission_overrides TO authenticated;
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.user_permission_overrides TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.user_roles TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.user_roles TO service_role;
 GRANT SELECT ON TABLE public.user_roles TO supabase_auth_admin;
@@ -7449,6 +7609,10 @@ GRANT EXECUTE ON FUNCTION public.return_driver_trip(p_trip_id uuid, p_items json
 GRANT EXECUTE ON FUNCTION public.rls_auto_enable() TO service_role;
 GRANT EXECUTE ON FUNCTION public.set_active_organization(p_tenant_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_active_organization(p_tenant_id uuid) TO service_role;
+-- Added 2026-09-02 (migration add_supervisor_permission_overrides, BLOCKER-025). No PUBLIC/anon
+-- grant, matching every other tenant-scoped RPC in this file.
+GRANT EXECUTE ON FUNCTION public.set_supervisor_permission_override(p_profile_id uuid, p_permission_key text, p_granted boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.set_supervisor_permission_override(p_profile_id uuid, p_permission_key text, p_granted boolean) TO service_role;
 GRANT EXECUTE ON FUNCTION public.set_updated_at() TO service_role;
 GRANT EXECUTE ON FUNCTION public.start_driver_trip(p_branch_id uuid, p_warehouse_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.start_driver_trip(p_branch_id uuid, p_warehouse_id uuid) TO authenticated;

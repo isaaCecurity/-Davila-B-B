@@ -5,7 +5,94 @@ Never record planned work here.
 
 ---
 
-## 2026-09-02 (latest) · BLOCKER-022 resolved by owner decision — deferred, not built
+## 2026-09-02 (latest) · BLOCKER-025 built — per-supervisor permission overrides, one real security gap found and fixed
+
+**Context:** picked as the next task after BLOCKER-022/023 were resolved. Unlike those two
+(documentation-only deferrals), BLOCKER-025 asked for a real, not-yet-designed capability —
+per-Supervisor, Branch-Manager-configurable permission overrides — with three genuine
+architecture questions open in its own "Needed" list.
+
+**Decisions obtained from the owner before writing any code**, per `CLAUDE.md`'s blocker
+rule (architecture/business-rule decisions are never guessed): (1) scope general, not
+limited to `customer.update`; (2) who may set an override — Branch Manager only, literal,
+not Owner/Admin/self; (3) which permission keys are eligible — a safe allowlist of
+Supervisor-relevant keys, not the full 25-key catalog, specifically to prevent a Branch
+Manager using this to hand a Supervisor admin-tier power like `records.permanent_delete`.
+Full reasoning and the exact allowlist: `BLOCKERS.md` BLOCKER-025.
+
+**Investigated live before designing anything:** `has_permission()`'s exact body (role_
+permissions join + branch-access check), `role_permissions`/`permissions`/`user_roles`
+schema, the RLS/grant pattern on the closest analogous table (`branch_assignments`), the
+`archive_catalog_entity()` RPC as the template for a guarded `SECURITY DEFINER` write
+(auth check, role check, audit logging, error shape), and `private.can_manage_target_role()`
+as a precedent for role-hierarchy checks — before writing the migration.
+
+**Built:** `user_permission_overrides` table (`tenant_id, profile_id, permission_id,
+granted`, soft-delete pair, partial unique index for one active override per profile+
+permission — mirrors BLOCKER-010a's soft-delete/reuse pattern); `set_supervisor_permission_
+override(p_profile_id, p_permission_key, p_granted)` (`SECURITY DEFINER`) enforcing
+Branch-Manager-only caller, target-must-hold-supervisor, and the permission-key allowlist,
+with `log_audit_event()` on every write; `has_permission()` rewritten so an active override
+wins outright over the role-level grant via `COALESCE`, falling back to the original
+`role_permissions` join unchanged when no override exists. Migrations:
+`add_supervisor_permission_overrides`, `index_user_permission_overrides_permission_fk`,
+`revoke_direct_write_grants_user_permission_overrides`.
+
+**Loaded the `supabase-postgres-best-practices` skill mid-task** (should have been before
+the first migration, corrected for the rest) — it flagged the unindexed `permission_id` FK
+column, fixed in the second migration before any test ran against it.
+
+**A real, live security gap was found and fixed, not assumed:** the first version of
+`tests/sql/supervisor_permission_overrides.sql` (PO1) asserted `authenticated` has no
+INSERT/UPDATE/DELETE grant on the new table — and it failed. Supabase's default schema
+privileges on `public` auto-grant `authenticated` full CRUD on every new table unless
+explicitly revoked (the same class of gap `BLOCKER-010c` found on `products`/
+`product_variants`/`product_categories`, but there it was a *missing* grant; here it was an
+*unwanted* one). Without the fix, any authenticated client could have written straight to
+the override table via PostgREST, bypassing every guard the RPC enforces — Branch-Manager-
+only, target-must-be-Supervisor, the allowlist. Fixed live via `REVOKE INSERT, UPDATE,
+DELETE ON user_permission_overrides FROM authenticated` before this ever shipped, migration
+`revoke_direct_write_grants_user_permission_overrides`. A second, minor test-authoring
+finding in the same pass: `audit_log` has its own RLS restricting `SELECT` to
+owner/admin/accountant, so the suite's own audit-log-row assertion (PO13) had to switch JWT
+context to an owner before reading it back, or it silently saw zero rows via RLS rather than
+because nothing was written.
+
+**Verified live** (`tests/sql/supervisor_permission_overrides.sql`, 17/17): raise and lower
+both work; isolation between two Supervisors (one's override never leaks to another);
+clearing (`p_granted := NULL`) reverts to the role default; a non-Branch-Manager (cashier,
+and separately the Owner) cannot call the RPC at all; the target must currently hold
+`supervisor` in the caller's tenant; `staff.manage` (outside the allowlist) is refused;
+`tickets.update` (the doc-mandated "never grant to any role" key) is refused even though it
+would otherwise match a loose "tickets.*" reading; a cross-tenant target fails closed as
+"not a supervisor" rather than leaking; a successful write produces an `audit_log` row; and
+the override does not bypass `has_permission()`'s existing branch-access check (tested both
+for the Supervisor's own assigned branch and an unassigned one).
+
+**Zero-regression check:** re-ran `tests/sql/catalog_write_rls.sql` in full (18/18) after the
+`has_permission()` rewrite, since `archive_catalog_entity`/`restore_catalog_entity` are two
+of its only four live consumers (the others: `archive_ticket`, `apply_customer_create` —
+not separately re-run this pass, lower risk given the fallback branch is structurally
+unchanged from the original function). `.venv/Scripts/python.exe -m pytest -q`: 12/12.
+
+**Baseline file kept in sync**, per `MIGRATION_GOVERNANCE.md`'s standing commitment:
+`supabase/migrations/20260809_live_schema.sql` patched in place with the new table, indexes,
+trigger, RLS policy, both function bodies, and grants, plus updated section-header counts
+(41 tables, 241 indexes, 98 functions, 59 triggers, 105 RLS policies). Not a full from-empty
+rebuild (Docker unavailable in this environment, same disclosed limitation as BLOCKER-002's
+own resolution).
+
+**Docs updated:** `BLOCKERS.md` (BLOCKER-025 RESOLVED), `docs/ROLES-AND-PERMISSIONS.md` (the
+"not built" line corrected with the full built mechanism), `docs/API-CONTRACT.md` (new
+`set_supervisor_permission_override` row), `CURRENT_TASK.md`, `NOTIFICATIONS.md`.
+
+**Not built, out of scope by owner decision, not an oversight:** a settings UI for a Branch
+Manager to manage overrides (frontend, future task); extending the allowlist beyond the 15
+Supervisor-relevant keys; overrides for any role other than Supervisor.
+
+---
+
+## 2026-09-02 · BLOCKER-022 resolved by owner decision — deferred, not built
 
 **Context:** picked as the next task after P4.4 (this session's AWS billing detour is
 recorded separately and does not touch BakeFlow state). Re-read `BLOCKER-022`'s full

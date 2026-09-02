@@ -1491,8 +1491,70 @@ supervisor-only are accepted; U5 (accountant, unaffected, still rejected) is unc
 
 ---
 
-## BLOCKER-025 · Per-supervisor, manager-configurable permission overrides — no schema exists
-**Status:** OPEN · **Affects:** `customer.update` (the specific trigger for this blocker), and potentially any future permission the product wants configurable per-Supervisor rather than per-role · **Type:** architecture decision (new capability, not yet designed)
+## ✅ BLOCKER-025 · Per-supervisor, manager-configurable permission overrides — RESOLVED 2026-09-02
+**Status:** RESOLVED · **Affects:** `customer.update` (the specific trigger for this blocker), and any future permission the product wants configurable per-Supervisor rather than per-role · **Type:** architecture decision (new capability), now built and live-verified
+
+**Decisions, given directly by the owner (2026-09-02), covering every item this blocker's
+own "Needed" list asked for:**
+1. **Schema shape:** `user_permission_overrides` — `(tenant_id, profile_id, permission_id,
+   granted)`, exactly the candidate this blocker named, with a soft-delete pair
+   (`deleted_at`/`deleted_by`) for clearing an override back to the role default. A partial
+   unique index scopes one active override per `(tenant_id, profile_id, permission_id)`,
+   matching this project's established soft-delete/reuse pattern (BLOCKER-010a).
+2. **Additive/subtractive:** both — `granted=true` raises, `granted=false` lowers,
+   `granted=NULL` (via the RPC) clears the override entirely, reverting to whatever
+   `role_permissions` would otherwise grant. This was already the documented intent in
+   `docs/ROLES-AND-PERMISSIONS.md` ("raise, lower, or fully reconfigure"), confirmed rather
+   than re-litigated.
+3. **Generalizes beyond `customer.update`:** yes, to a fixed allowlist of 15
+   Supervisor-relevant keys (`branch.view`, `customers.create/update/delete`,
+   `financial.audit.confirm/submit`, `financial.expense.create/update`, `financial.view`,
+   `reports.view`, `staff.view`, `tickets.create/view/correct/archive`) — **not** the full
+   25-key catalog. Sensitive keys reserved for Owner/Admin/Branch Manager themselves
+   (`records.permanent_delete`, `staff.manage`, `pricing.manage`, `products.manage`,
+   `branch.manage`, `financial.expense.delete`) are excluded by deliberate owner decision, to
+   prevent a Branch Manager using this mechanism to hand a Supervisor admin-tier power.
+   `tickets.update`/`tickets.cancel` are excluded even though a loose "tickets.*" reading
+   would include them — `docs/ROLES-AND-PERMISSIONS.md` says those two must never be granted
+   to any role, by any mechanism, and `tests/sql/supervisor_permission_overrides.sql` PO11 is
+   the permanent regression guard for that specific rule.
+4. **Who may set an override:** **Branch Manager only** — literal, deliberately narrower
+   than every other authority tier in this codebase (Owner and Admin cannot call the RPC
+   either, unless they separately also hold `branch_manager`). Confirmed as PO8/PO8b in the
+   test suite, including the Owner-is-also-refused case specifically, since it's the one a
+   reviewer would most expect to be an oversight rather than intentional.
+5. **Settings UI:** out of scope for this backend pass, as this blocker's own text
+   anticipated — a future frontend task, not re-opened here.
+
+**Built:** `set_supervisor_permission_override(p_profile_id, p_permission_key, p_granted)`
+(`SECURITY DEFINER`), and `has_permission()` rewritten to check for an active override first
+— an override, when present, wins outright over the role-level `role_permissions` grant;
+absent one, behavior is unchanged from before. Migrations: `add_supervisor_permission_
+overrides`, `index_user_permission_overrides_permission_fk` (a real FK-index gap caught by
+the `supabase-postgres-best-practices` skill before it shipped), and `revoke_direct_write_
+grants_user_permission_overrides` — a **real security gap found live**, not theoretical:
+Supabase's default schema privileges auto-grant `authenticated` full INSERT/UPDATE/DELETE on
+every new `public` table unless explicitly revoked (the same class of gap BLOCKER-010c found
+on the catalog tables). Caught by the new suite's own PO1 assertion before this ever shipped
+— without the revoke, any authenticated client could have written directly to the override
+table via PostgREST, bypassing the Branch-Manager-only, target-must-be-Supervisor, and
+allowlist checks entirely.
+
+**Live-verified:** `tests/sql/supervisor_permission_overrides.sql`, 17/17 (PO1–PO14, some
+lettered) — raise, lower, isolation between two Supervisors, clearing reverts to default,
+Branch-Manager-only enforcement (including the Owner case), target-must-be-Supervisor,
+allowlist enforcement (including the `tickets.update` regression guard), cross-tenant
+denial, an `audit_log` row on every write, and that the override does not bypass
+`has_permission()`'s existing branch-access check. Zero regression confirmed against
+`tests/sql/catalog_write_rls.sql` (18/18, re-run in full after the `has_permission()`
+rewrite — the only other live consumers of `has_permission()` are `archive_catalog_entity`/
+`restore_catalog_entity`/`archive_ticket`/`apply_customer_create`). `docs/ROLES-AND-
+PERMISSIONS.md`'s "not built" line is corrected in the same pass. Full detail:
+`IMPLEMENTATION_LOG.md` 2026-09-02.
+
+Original text below, kept for the analysis that led to these decisions.
+
+---
 
 **What was requested, 2026-08-29:** resolving BLOCKER-024, the product owner asked for a
 Branch Manager to be able to grant or revoke customer-edit access for an **individual**
