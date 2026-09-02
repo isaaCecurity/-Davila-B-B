@@ -31,7 +31,6 @@ export interface CreateInviteResult {
 export interface SendInviteEmailInput {
   inviteId: Uuid;
   rawToken: string;
-  appUrl?: string;
 }
 
 export interface SendInviteEmailResult {
@@ -112,7 +111,6 @@ export async function sendInviteEmail(
       body: {
         invite_id: input.inviteId,
         raw_token: input.rawToken,
-        ...(input.appUrl ? { app_url: input.appUrl } : {}),
       },
     });
 
@@ -147,7 +145,7 @@ export async function sendInviteEmail(
  */
 export async function createAndSendInvite(
   client: BakeflowClient,
-  input: CreateInviteInput & { appUrl?: string }
+  input: CreateInviteInput
 ): Promise<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] }> {
   const invite = await createOrganizationInvite(client, {
     email: input.email,
@@ -159,7 +157,6 @@ export async function createAndSendInvite(
   const emailResult = await sendInviteEmail(client, {
     inviteId: invite.inviteId,
     rawToken: invite.rawToken,
-    appUrl: input.appUrl,
   });
 
   return {

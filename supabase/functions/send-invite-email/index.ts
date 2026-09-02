@@ -24,7 +24,6 @@ const RATE_LIMIT_WINDOW_MINUTES = 60;
 interface SendInviteRequestBody {
   invite_id: string;
   raw_token: string;
-  app_url?: string;
 }
 
 // SHA-256 helper in Deno/Web Crypto
@@ -61,7 +60,7 @@ Deno.serve(async (req: Request) => {
       throw new HttpError(400, 'bad_request', 'Invalid JSON body');
     }
 
-    const { invite_id, raw_token, app_url } = body;
+    const { invite_id, raw_token } = body;
 
     if (!invite_id || typeof invite_id !== 'string') {
       throw new HttpError(400, 'validation_error', 'Missing or invalid invite_id');
@@ -145,8 +144,12 @@ Deno.serve(async (req: Request) => {
     const roleName = roleData?.name || 'Staff';
     const branchName = branchData?.name || null;
 
+    // Server-configured only -- never caller-supplied. A client-controlled base URL would
+    // let an authorized inviter (owner/admin/branch_manager) construct an invite link that
+    // embeds the raw token and points at an arbitrary domain (phishing / token exfiltration
+    // to an untrusted host). See audit-findings/SECURITY-AUDIT-2026-09-02.md.
     const deepLinkScheme = Deno.env.get('MOBILE_DEEP_LINK_SCHEME') || 'bakeflow';
-    const appBaseUrl = app_url || Deno.env.get('APP_BASE_URL');
+    const appBaseUrl = Deno.env.get('APP_BASE_URL');
 
     let inviteLink: string;
     if (appBaseUrl) {

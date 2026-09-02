@@ -2811,7 +2811,9 @@ DECLARE
   v_variant   uuid;
   v_qty       numeric;
   v_price     numeric;
-  v_item_ids  uuid[] := '{}';
+  -- Fixed 2026-09-02 (migration fix_db_lint_warnings_array_literals_and_unused_var,
+  -- audit-findings/SECURITY-AUDIT-2026-09-02.md): unambiguous typed empty array, not '{}'.
+  v_item_ids  uuid[] := ARRAY[]::uuid[];
   v_new_item  public.ticket_items;
 BEGIN
   IF v_ticket_id IS NULL OR jsonb_typeof(v_payload -> 'items') <> 'array'
@@ -3861,7 +3863,9 @@ DECLARE
   v_active  uuid;
   v_status  text;
   v_deleted timestamptz;
-  v_roles   text[] := '{}';
+  -- Fixed 2026-09-02 (migration fix_db_lint_warnings_array_literals_and_unused_var,
+  -- audit-findings/SECURITY-AUDIT-2026-09-02.md): unambiguous typed empty array, not '{}'.
+  v_roles   text[] := ARRAY[]::text[];
 BEGIN
   SELECT p.active_tenant_id, p.status, p.deleted_at
     INTO v_active, v_status, v_deleted
@@ -3881,7 +3885,7 @@ BEGIN
   END IF;
 
   IF v_active IS NOT NULL THEN
-    SELECT coalesce(array_agg(DISTINCT r.key), '{}')
+    SELECT coalesce(array_agg(DISTINCT r.key), ARRAY[]::text[])
       INTO v_roles
       FROM public.user_roles ur
       JOIN public.roles r ON r.id = ur.role_id
@@ -6145,14 +6149,17 @@ CREATE OR REPLACE FUNCTION public.sync_pull(p_device_id uuid, p_cursor bigint DE
  SET search_path TO 'public'
 AS $function$
 DECLARE
-  v_actor       uuid;
   v_page_size   int := LEAST(GREATEST(coalesce(p_page_size, 200), 1), 500);
   v_changes     jsonb;
   v_next_cursor bigint;
   v_has_more    boolean;
   v_max_visible bigint;
 BEGIN
-  v_actor := public.sync_validate_device(p_device_id);
+  -- Fixed 2026-09-02 (migration fix_db_lint_warnings_array_literals_and_unused_var,
+  -- audit-findings/SECURITY-AUDIT-2026-09-02.md): sync_validate_device()'s return value
+  -- (owning user_id) was captured but never read -- called for its validation side effect
+  -- only (raises on an invalid/revoked device); RLS does the row-filtering, not this value.
+  PERFORM public.sync_validate_device(p_device_id);
 
   IF p_cursor IS NOT NULL AND p_cursor < 0 THEN
     RAISE EXCEPTION 'cursor must not be negative'

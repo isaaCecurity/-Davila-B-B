@@ -113,7 +113,10 @@ export function handleFunctionError(err: unknown, context: FunctionLogContext): 
       message: err.message,
       stack: err.stack,
     });
-    return errorResponse(500, 'internal_error', err.message);
+    // The real message/stack goes to the structured server log above only -- an unexpected
+    // (non-HttpError) exception may carry DB detail, provider responses, or paths, and the
+    // client response must stay generic. See audit-findings/SECURITY-AUDIT-2026-09-02.md.
+    return errorResponse(500, 'internal_error', 'An unexpected error occurred');
   }
 
   logStructured('error', 'function_error', context, {
