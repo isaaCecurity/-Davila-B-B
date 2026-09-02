@@ -967,10 +967,11 @@ directly. Full reasoning: `ARCHITECTURE_DECISIONS.md` AD-021 postscript 2026-08-
 	flow) are completely unaffected. Regression guard: `tests/sql/p3_7_production_output_waste_sync.sql`
 	S3–S6. Full detail: `IMPLEMENTATION_LOG.md` 2026-08-31 "SECURITY FIX" entry.
 - **Still not built:** `expense.reverse` (`BLOCKER-028`, genuinely undecided — the only
-	remaining open item), `customer.soft_delete`, `depends_on_operation_id` (`BLOCKER-022`),
-	cursor-expiry-via-retention (`BLOCKER-023`), per-supervisor manager-configurable permission
-	overrides (`BLOCKER-025`). P3.7's `domain_operation` allowlist is now fully covered except
-	`expense.reverse`.
+	remaining open item), `customer.soft_delete`, cursor-expiry-via-retention (`BLOCKER-023`),
+	per-supervisor manager-configurable permission overrides (`BLOCKER-025`).
+	`depends_on_operation_id` (`BLOCKER-022`) is resolved as deliberately deferred (owner
+	decision, 2026-09-02) — no entity needs it, not simply unbuilt. P3.7's `domain_operation`
+	allowlist is now fully covered except `expense.reverse`.
 
 ### What the deployed schema does provide
 
@@ -1023,10 +1024,12 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 - **`client_sequence`** (§16) — **resolved 2026-08-29** as a diagnostic-only column, per
 	spec: the doc itself says it is "NOT a substitute for server revisions... do not treat a
 	device sequence as global truth," with no enforcement semantics specified anywhere.
-	Captured, never enforced. **No `depends_on_operation_id`** (§49) remains genuinely open —
-	see `BLOCKER-022`: the doc gives no concrete server-side enforcement semantics to build
-	against, and existing per-handler existence checks already give correct safety for the
-	realistic case.
+	Captured, never enforced. **`depends_on_operation_id`** (§49) — **resolved 2026-09-02 as a
+	deliberate deferral, not an open gap** — see `BLOCKER-022`: the doc gives no concrete
+	server-side enforcement semantics to build against, no scheduled entity needs cross-operation
+	dependency tracking, and existing per-handler existence checks already give correct safety
+	for the realistic case (a dependent operation submitted before its prerequisite is confirmed
+	fails cleanly with a retryable error, and a well-behaved offline client retries).
 - ~~No `ALREADY_APPLIED` status~~ (§24). **Resolved 2026-08-29 as a design decision, not a
 	new CHECK value.** `status` (`PENDING/APPLIED/REJECTED/CONFLICT`) describes the
 	operation's own lifecycle; the response's `replayed:true/false` (added to the replay

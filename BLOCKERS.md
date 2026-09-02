@@ -1310,8 +1310,29 @@ off) rather than a complete, unassisted sale — see `IMPLEMENTATION_LOG.md`.
 
 ---
 
-## BLOCKER-022 · `depends_on_operation_id` has no defined server-side enforcement semantics
-**Status:** OPEN · **Affects:** P3.7 (any future entity whose offline creation legitimately depends on another not-yet-confirmed offline operation, e.g. a customer created just before a ticket that references it) · **Type:** architecture decision (offline sync protocol)
+## ✅ BLOCKER-022 · `depends_on_operation_id` — deferred, not needed yet (owner decision, 2026-09-02)
+**Status:** RESOLVED (deferred) · **Affects:** P3.7 (any future entity whose offline creation legitimately depends on another not-yet-confirmed offline operation, e.g. a customer created just before a ticket that references it) · **Type:** architecture decision (offline sync protocol)
+
+**Decision, given directly by the owner (2026-09-02):** do not build enforcement now. No
+entity currently scheduled (inventory/production/financial handlers already built or in
+progress; none of AD-021's per-entity strategies describe a cross-operation dependency)
+actually needs it, and the existing safety net — sequential in-batch processing plus every
+handler's own existence check on a missing prerequisite, which a well-behaved offline client
+already retries — already gives correct behavior for the realistic case. Building real
+enforcement today would mean inventing a `depends_on_operation_id` column, a waiting/PENDING
+status, a timeout, and a client retry contract against zero concrete use case, which is
+exactly the guessing this blocker was opened to avoid.
+
+**Not closed as "will never be needed."** Revisit if and when a real entity or workflow needs
+a single offline batch to contain an operation that references another operation's
+not-yet-confirmed result (this blocker's own customer-then-ticket example remains the
+reference case, still handled today only via two sequential `process_sync_batch()` calls).
+This mirrors how **BLOCKER-023** was already scoped — no immediate action, decide the concrete
+mechanism only when a real proposal exists to design it against.
+
+Original text below, kept for the analysis that led to this decision.
+
+---
 
 **What was discovered:** `OFFLINE-SYNC-MODEL.md` §49 names `depends_on_operation_id` as
 "possible dependency metadata" and says only that "the sync engine must respect dependency

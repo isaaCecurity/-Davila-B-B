@@ -5,7 +5,38 @@ Never record planned work here.
 
 ---
 
-## 2026-09-01 (latest) · P4.4 ticket write-path test suite — a real idempotency defect found and fixed
+## 2026-09-02 (latest) · BLOCKER-022 resolved by owner decision — deferred, not built
+
+**Context:** picked as the next task after P4.4 (this session's AWS billing detour is
+recorded separately and does not touch BakeFlow state). Re-read `BLOCKER-022`'s full
+existing analysis (`BLOCKERS.md`) before asking anything, rather than re-deriving it: no
+`depends_on_operation_id` column exists on `sync_operations`; no entity currently scheduled
+(inventory/production/financial handlers) needs cross-batch operation dependencies; every
+existing handler already fails cleanly with a retryable not-found error when its
+prerequisite hasn't landed yet, which a well-behaved offline client already retries.
+
+**This is a genuine architecture decision, not something to guess at** — per `CLAUDE.md`'s
+blocker rule, presented the choice to the owner directly (build minimal enforcement now vs.
+defer with no schema/behavior change) rather than picking one. Owner chose: **defer** — do
+not build `depends_on_operation_id` enforcement now, since no concrete use case exists to
+design the waiting-status/timeout/retry contract against, and the existing per-handler
+existence-check safety net is correct for every case that exists today.
+
+**No code, schema, or migration change** — this is a documentation-only resolution, the same
+shape as BLOCKER-008's and BLOCKER-024's role-scope decision.
+
+**Docs updated:** `BLOCKERS.md` (BLOCKER-022 marked RESOLVED (deferred), original analysis
+kept below the resolution for the reasoning trail), `docs/SCHEMA-REFERENCE.md` §12 (two
+"still not built" mentions corrected to reflect deliberate deferral rather than an open gap),
+`NOTIFICATIONS.md` (new entry).
+
+**Not resolved by this, unchanged:** `BLOCKER-023` (`sync_changes` retention/purge — already
+scoped as "no immediate action" and untouched here) and `BLOCKER-025` (per-supervisor
+permission overrides) remain open, next-task candidates.
+
+---
+
+## 2026-09-01 · P4.4 ticket write-path test suite — a real idempotency defect found and fixed
 
 **Context:** picked as the next task after the full database audit, from a set of
 offered options (P4.4 test suite / BLOCKER-022/023 / BLOCKER-025) — no decision needed,

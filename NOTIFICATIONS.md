@@ -4,6 +4,18 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Offline-sync dependency question resolved — deferred, per your call (2026-09-02)
+
+You picked "defer" on the question of whether the sync system needs to handle one offline
+action depending on another not-yet-confirmed one (e.g. a new customer created just before
+an order for them, both made offline). Nothing gets built for this right now — the current
+behavior (a dependent action just fails cleanly and the app retries it later) already
+handles every case that actually comes up today. Documented as a deliberate "not needed yet"
+decision, not a forgotten gap, so it won't get re-raised unless a real feature actually needs
+it.
+
+---
+
 ## Found and fixed a real stock bug while building the ticket-order test suite (2026-09-01)
 
 Building out proper tests for the order lifecycle (confirm, cancel, complete, edit)

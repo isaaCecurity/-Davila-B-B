@@ -1,5 +1,23 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-022 resolved — `depends_on_operation_id` deferred by owner decision (2026-09-02)
+
+Picked as the next task after P4.4, per the owner's choice among the standing candidates
+(BLOCKER-022/023 offline-sync decisions vs. BLOCKER-025 per-supervisor overrides). This is
+an architecture decision, not code — per `CLAUDE.md`'s blocker rule, presented the choice
+directly rather than guessing: build minimal cross-batch dependency enforcement now, or
+defer since no scheduled entity needs it and the existing per-handler existence-check retry
+path is already correct. **Owner chose: defer.** No schema, migration, or behavior change.
+
+`BLOCKERS.md` BLOCKER-022 marked RESOLVED (deferred, not "will never be needed" — revisit if
+a real cross-batch-dependency use case appears). `docs/SCHEMA-REFERENCE.md` §12 corrected in
+two places to stop listing it as an open gap. Full detail: `IMPLEMENTATION_LOG.md` 2026-09-02.
+
+**BLOCKER-023** (`sync_changes` retention/purge) and **BLOCKER-025** (per-supervisor
+permission overrides) remain open — next-task candidates.
+
+---
+
 ## ✅ P4.4 ticket write-path test suite DELIVERED — real idempotency defect found and fixed (2026-09-01)
 
 Picked as the next task after the full-database audit, from a set of offered options.
