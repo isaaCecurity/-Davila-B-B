@@ -1,5 +1,34 @@
 # BakeFlow — Current Task
 
+## ✅ Security audit findings addressed — 4 of 6 fixed and deployed live (2026-09-02)
+
+Reviewed `audit-findings/SECURITY-AUDIT-2026-09-02.md` (an external report) before starting
+BLOCKER-023, per the user's request. Verified every finding against live source/database
+first, then acted:
+
+- **Fixed & deployed:** caller-controlled invite link domain (`app_url` was dead client
+  plumbing, removed entirely — server-configured `APP_BASE_URL` only now); raw internal
+  error messages returned to clients (now generic; real detail still server-logged);
+  three `db lint` warnings (all behavior-preserving hardening, `db lint` now clean).
+- **Reviewed and one real finding fixed:** the "public SECURITY DEFINER RPCs" concern —
+  swept every such function live. One (`set_supervisor_permission_override`, built earlier
+  the same day for BLOCKER-025) had an unintended `anon` grant via Supabase's default
+  function privileges — not exploitable (fails closed on `auth.uid() IS NULL`) but
+  shouldn't have existed. Revoked; `tests/sql/function_privilege_audit.sql` re-run clean.
+- **Deliberately not touched**, matching the report's own caution: `rate_limit_events`'
+  policyless RLS (already fails closed, no client needs access) and the npm dependency
+  upgrade (breaking-change-prone, needs its own scoped task).
+
+A second, independent read-only verification campaign
+(`audit-findings/TEST-CAMPAIGN-2026-09-02.md`) appeared mid-pass and cross-confirmed the
+same findings, including the `anon`-grant issue (from its own live query, timestamped before
+this pass's fix landed).
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-02. `pytest` 12/12, frontend typecheck/lint/Jest
+(39/39) all clean throughout.
+
+---
+
 ## ✅ BLOCKER-025 DELIVERED — per-supervisor permission overrides built, one real security gap found and fixed (2026-09-02)
 
 Picked as the next task after BLOCKER-022/023. Unlike those two, this one asked for a real

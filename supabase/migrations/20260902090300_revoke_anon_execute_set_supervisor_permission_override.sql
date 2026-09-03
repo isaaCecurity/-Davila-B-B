@@ -1,0 +1,18 @@
+-- audit-findings/SECURITY-AUDIT-2026-09-02.md's "public SECURITY DEFINER RPCs" finding,
+-- checked systematically against every anon/authenticated/PUBLIC-grantable SECURITY DEFINER
+-- function in public: set_supervisor_permission_override (built earlier this session for
+-- BLOCKER-025) was the only one with an `anon` grant -- every other RPC in the schema has
+-- `authenticated` only. Root cause: the original migration's `REVOKE ALL ... FROM PUBLIC`
+-- revokes the PUBLIC pseudo-role grant, not a role-specific grant `anon` already held via
+-- Supabase's default function privileges -- the same class of gap as the table-level
+-- default-CRUD-grant issue this same BLOCKER-025 pass already found and fixed on
+-- user_permission_overrides (migration revoke_direct_write_grants_user_permission_overrides).
+-- Not exploitable in practice -- the function's own first check (`auth.uid() IS NULL`)
+-- already rejects anon with 'authentication required' -- but should never have been
+-- reachable at all, matching every other tenant-scoped RPC in this schema.
+--
+-- Independently re-confirmed by a second, separate read-only verification campaign
+-- (audit-findings/TEST-CAMPAIGN-2026-09-02.md, checks 13/14) which found the same anon grant
+-- via its own live catalog query and a direct adversarial anon call (failed closed, 28000
+-- 'authentication required', as expected) before this migration was applied.
+REVOKE EXECUTE ON FUNCTION public.set_supervisor_permission_override(uuid, text, boolean) FROM anon;

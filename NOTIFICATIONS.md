@@ -4,6 +4,33 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Security audit reviewed — 4 issues fixed and live, 2 deliberately left for you to decide (2026-09-02)
+
+Went through the audit report you pointed me to. Checked every item against the real code
+and live database before touching anything — didn't just take the report's word for it.
+
+**Fixed and already live:**
+- An invite email's link could technically be pointed at any domain by whoever sent the
+  invite (a leftover, unused option in the code). Removed it — invite links can now only
+  ever point at the real app.
+- If something unexpected broke inside the invite-sending function, the error sent back to
+  the app could contain internal details it shouldn't. Now it just says something went
+  wrong, while the real detail still gets logged for me/you to see.
+- Three small code-quality warnings from the database's own linter — cleaned up, linter now
+  reports nothing.
+- While checking the report's broader "are the backend functions locked down" concern, found
+  one real gap: the permission-override feature I built earlier today was technically
+  callable by a signed-out visitor (it would have refused them anyway, but it shouldn't have
+  been reachable at all). Closed that door too.
+
+**Left alone on purpose, matching the report's own advice:**
+- A minor internal table's access rules — already safe as-is, no reason to change it.
+- Outdated npm packages — real, but fixing them means upgrading the mobile app's core
+  framework, which is its own project, not a quick patch. Recommend scheduling that
+  separately when you're ready.
+
+---
+
 ## Per-supervisor permission overrides are built — plus a real security hole caught before it shipped (2026-09-02)
 
 Built what you asked for: a Branch Manager can now grant or revoke individual permissions

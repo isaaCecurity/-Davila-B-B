@@ -5,7 +5,102 @@ Never record planned work here.
 
 ---
 
-## 2026-09-02 (latest) · BLOCKER-025 built — per-supervisor permission overrides, one real security gap found and fixed
+## 2026-09-02 (latest) · Security audit findings addressed — 4 of 6 fixed, 1 more caught along the way
+
+**Context:** the user asked to review `audit-findings/SECURITY-AUDIT-2026-09-02.md` (an
+external audit report, not produced by this session) before starting the last open blocker.
+Each finding was independently re-verified against the live source/database before acting —
+none taken on faith from the report. A second, independent report appeared mid-pass,
+`audit-findings/TEST-CAMPAIGN-2026-09-02.md` — a read-only verification campaign by a
+separate process that cross-confirmed the same findings, including the `anon`-grant issue
+below (caught from its own live query, before this pass's fix had been applied).
+
+**Fixed and deployed (medium): caller-controlled invite link domain.** `send-invite-email`
+built the invite link (with the raw token embedded) from a client-supplied `app_url`, no
+allowlist. Verified `appUrl` was dead plumbing — no caller anywhere in the frontend ever set
+it (checked by search before removing, not assumed). Removed entirely from both the Edge
+Function's request contract and the client SDK
+(`bakeflow-frontend/packages/api/mutations/invitations.ts`) rather than adding validation for
+a parameter nothing legitimately uses; `APP_BASE_URL` (server-configured) is now the sole
+source. Redeployed live via `deploy_edge_function`: `send-invite-email` version 3, confirmed
+`ACTIVE` via `list_edge_functions`.
+
+**Fixed and deployed (medium): raw internal error messages returned to clients.** Same
+redeploy. `handleFunctionError`'s unknown-`Error` branch (`supabase/functions/_shared/
+errors.ts`) returned `err.message` verbatim to the caller for any unexpected exception —
+could leak DB/provider detail. Now returns a generic `An unexpected error occurred`; the real
+message/stack still go to the structured server log, unchanged.
+
+**Fixed and verified (low): three `db lint` warnings.** Two (`custom_access_token_hook`,
+`apply_ticket_item_update`) were an untyped `'{}'` literal assigned to a typed array
+variable — already correct at runtime (Postgres infers the type), but unverifiable by static
+analysis; rewritten as `ARRAY[]::type[]`. The third (`sync_pull`'s `v_actor`) was genuinely
+dead code — `sync_validate_device()` is called for its validation side effect only, the
+returned user_id was never read since `sync_pull` is `SECURITY INVOKER` and RLS does the
+filtering — removed rather than just renamed. Migration
+`fix_db_lint_warnings_array_literals_and_unused_var`. Re-ran `supabase db lint --linked
+--schema public --fail-on none` live: **no schema errors found** (was 3 warnings). Zero
+regression: `tests/sql/p3_7_sync_apply_and_pull.sql` re-run in full (11/11 — covers
+`apply_ticket_item_update` and `sync_pull` directly), plus a direct live call to
+`custom_access_token_hook` confirming it still mints a correct `roles` JSON array.
+
+**Reviewed (high): "public SECURITY DEFINER RPCs" attack surface — one real, live finding,
+not theoretical.** Enumerated every `anon`/`authenticated`/`PUBLIC`-grantable `SECURITY
+DEFINER` function in `public` live (`information_schema.routine_privileges` joined to
+`pg_proc`). All had a pinned `search_path` and `authenticated`-only grants **except
+`set_supervisor_permission_override`** (built earlier the same day for BLOCKER-025), which
+`anon` could also call. Root cause: the original migration's `REVOKE ALL ... FROM PUBLIC`
+revokes the PUBLIC pseudo-role grant, not a role-specific grant `anon` already held via
+Supabase's default function privileges — the same class of gap as the table-level
+default-CRUD-grant issue this same day's BLOCKER-025 work already found and fixed on
+`user_permission_overrides` (migration `revoke_direct_write_grants_user_permission_overrides`),
+just on a function instead of a table. Not exploitable in practice — the function's own first
+check (`auth.uid() IS NULL`) already rejects `anon` with `authentication required` — but
+shouldn't have been reachable at all. Fixed live: `REVOKE EXECUTE ... FROM anon`, migration
+`revoke_anon_execute_set_supervisor_permission_override`. Re-verified clean against
+`tests/sql/function_privilege_audit.sql`'s own three checks (all zero rows, re-run live) —
+this is the exact regression suite that would have caught it had it been re-run right after
+BLOCKER-025 shipped, a lesson for future SECURITY DEFINER additions: re-run that suite as
+part of shipping, not just when auditing later.
+
+**Deliberately not touched, per the report's own recommendation (medium):
+`rate_limit_events` has RLS with no policies.** Fails closed for client roles already, which
+is the safe posture; no client workflow needs direct access. Left as a documented,
+deliberate no-policy state rather than inventing unused policies.
+
+**Deliberately not touched, needs its own scoped task (high): npm dependency
+vulnerabilities.** 18 vulnerabilities (4 high, 14 moderate), all transitive through the
+Expo/React Native/Metro toolchain. The report's own caution is correct — `npm audit fix
+--force` proposes breaking framework changes. Not attempted inline; would need a planned,
+validated upgrade as its own task (compatible release group, regenerate lockfile, full
+typecheck/lint/test pass).
+
+**Housekeeping:** two migrations applied live earlier in this pass
+(`fix_db_lint_warnings_array_literals_and_unused_var`,
+`revoke_anon_execute_set_supervisor_permission_override`) had no matching committed file in
+`supabase/migrations/` — only their effect was captured in the `20260809_live_schema.sql`
+baseline patch. Added both files this entry, matching the live-applied SQL exactly, so the
+repo's migration history is complete.
+
+**Verified, zero regression:** `.venv/Scripts/python.exe -m pytest -q` 12/12 (run multiple
+times across this pass); `npm run typecheck --workspace apps/mobile`, `npm run lint
+--workspace apps/mobile`, and `corepack npm test` (39/39 Jest) all clean after the
+`invitations.ts`/`errors.ts` edits.
+
+**Docs updated:** `audit-findings/SECURITY-AUDIT-2026-09-02.md` (a resolution-status table
+added at the top, one row per finding), this entry. `CURRENT_TASK.md`/`NOTIFICATIONS.md`
+updated in the same pass.
+
+**Not resolved by this pass, still open:** BLOCKER-023 (`sync_changes` retention/purge —
+already scoped as "no immediate action needed"), the npm dependency upgrade, and the general
+"review every SECURITY DEFINER RPC body-by-body for tenant/role/branch/input checks"
+recommendation (only the grant-surface layer was swept here, not every function body —
+several were already spot-checked live earlier this session, e.g. `archive_catalog_entity`/
+`complete_ticket`, but not the full set).
+
+---
+
+## 2026-09-02 · BLOCKER-025 built — per-supervisor permission overrides, one real security gap found and fixed
 
 **Context:** picked as the next task after BLOCKER-022/023 were resolved. Unlike those two
 (documentation-only deferrals), BLOCKER-025 asked for a real, not-yet-designed capability —
