@@ -5,7 +5,116 @@ Never record planned work here.
 
 ---
 
-## 2026-09-02 (latest) · Security audit findings addressed — 4 of 6 fixed, 1 more caught along the way
+## 2026-09-03 (latest) · Cost & logic audit — 23 RLS policies + duplicate index fixed, one new permanent regression test
+
+**Context:** the user asked directly for "audits and new tests... to catch errors, bugs,
+logical problems, or future cost problems" — distinct from the two prior audit reports in
+`audit-findings/` (security posture, data integrity). Focused on what neither covered:
+storage/compute growth patterns and a state-machine reachability sweep for the two
+lifecycle entities (production, delivery) not yet checked that way.
+
+**Investigated live, systematically, not from a checklist:** table row counts/sizes
+(`pg_stat_user_tables`), a full project-wide unindexed-FK query, storage bucket file-size
+limits (all four already sensible, 2-10MB with MIME allowlists — no finding), installed
+Postgres extensions (minimal, no `pg_cron`/`pg_net` scheduled-job risk), and the full
+Supabase performance advisor output (`get_advisors(performance)`, 125 findings across 5
+categories, parsed via a local script since the raw payload exceeds the tool's inline
+output limit).
+
+**Fixed: 23 RLS policies re-evaluating `auth.uid()` per row instead of per query**
+(`auth_rls_initplan`, 23 → 0 after fix). Concentrated on `tickets`/`ticket_items` — the
+busiest tables in the app — plus 13 others. Every occurrence is a mechanical `(select
+auth.uid())` substitution, semantically identical, verified against each policy's live
+`pg_policies` definition before writing the replacement — not a blind find-replace.
+`has_role()`/`has_branch_access()`/`current_tenant_id()` deliberately left untouched: the
+advisor didn't flag them, and `has_branch_access()` takes a row-varying argument so can't
+be hoisted regardless. Migration `wrap_auth_uid_in_rls_policies_for_initplan_caching`.
+
+**A real gap in this project's own test coverage surfaced while re-verifying:**
+`tests/sql/sales_write_rls.sql` tests `tickets`/`ticket_items` writes exclusively through
+`update_ticket()`/`confirm_ticket()` RPCs — which are `SECURITY DEFINER` and therefore
+bypass RLS entirely. It had never actually exercised `ticket_items_insert`/`_update` (the
+real direct-PostgREST write path the mobile app uses to add items to a draft ticket) even
+though `authenticated` holds direct INSERT/UPDATE grants on that table. Built a targeted
+direct-path check (5 assertions: own-driver INSERT, cross-driver INSERT denial, own-driver
+UPDATE, cross-driver UPDATE denial via zero-row match, owner org-wide INSERT) — all pass.
+Not written up as a permanent suite file this pass (time-boxed), but the gap itself is
+worth a follow-up: `sales_write_rls.sql` should gain a direct-path section alongside its
+existing RPC-path coverage.
+
+**Fixed: one duplicate index.** `idx_audit_log_entity` /
+`idx_audit_log_tenant_entity_time` were byte-for-byte identical
+(`tenant_id, entity_type, entity_id, occurred_at DESC`). Migration
+`drop_duplicate_audit_log_index`.
+
+**Fixed: 3 real missing indexes, out of 18 raw candidates.** Did NOT blindly index every
+unindexed FK — grepped every migration first and confirmed audit-trail-only columns
+(`archived_by`, `loading_verified_by`, `reconciled_by`, etc.) are write-only across this
+entire codebase, matching its own established convention of not indexing those. The three
+real ones, each confirmed against the live RLS policy text before adding anything:
+`sync_conflicts.actor_id` (own-actor SELECT branch filters it directly, no tenant
+predicate in that branch), `permanent_deletion_challenges.requested_by` (same shape),
+`user_permission_overrides.profile_id` (own-profile branch, built earlier this same
+session for BLOCKER-025 — a gap in that day's own work). Migration
+`add_missing_fk_indexes_confirmed_by_query_pattern`.
+
+**Reviewed, no action taken (by design, not oversight):**
+- `unused_index` (75 findings) — pre-launch database, near-zero real traffic yet;
+  premature to act on, would remove indexes added for known future query patterns
+  (including several from this very session).
+- `multiple_permissive_policies` (7 findings, `profiles`/`daily_financial_audits`) — each
+  pair is two intentionally-separate policies (self-service OR admin-override), standard
+  correct RLS design, not accidental duplication. Not worth merging for marginal gain.
+- `production_batches` has zero `authenticated` grants at all, including SELECT — looked
+  like a broken "production board" read path (documented in `docs/API-CONTRACT.md` as a
+  direct PostgREST read) until traced to `20260901160000_deactivate_ingredient_tracking_
+  for_mvp.sql` (AD-022): a deliberate, already-live-verified, fully-documented product
+  decision from 2026-09-01 to deactivate production tracking for MVP. Not a bug.
+
+**Logic-bug sweep: state-machine reachability**, the same bug class BLOCKER-005/009
+found in tickets (competing/misordered triggers leaving a declared status value
+unreachable). Checked the two other lifecycle entities never swept this way:
+`production_batches` (`guard_production_batch_transition()`) and `deliveries`
+(`guard_delivery_transition()`) — both have a single guard trigger (no competitor), every
+declared status value is reachable, and both are correctly RPC-gated where `authenticated`
+lacks a direct table grant. Clean, no defect found.
+
+**New permanent regression test:** `tests/sql/rls_performance_audit.sql` — read-only,
+catalog-only, same shape as `tests/sql/function_privilege_audit.sql`. CHECK 1 flags any
+RLS policy with a bare (unwrapped) `auth.uid()`/`auth.jwt()`/`auth.role()` call — strips
+already-wrapped occurrences first via regex before checking, so it correctly handles a
+policy mixing wrapped and unwrapped calls rather than a naive substring match. CHECK 2
+flags any two indexes on the same table with byte-for-byte identical definitions. Both
+zero rows live today; this is the permanent guard so a future migration can't silently
+reintroduce either class the way this pass found it.
+
+**Verified, zero regression:** advisor's `auth_rls_initplan` count 23 → 0,
+`duplicate_index` count 1 → 0 (re-ran `get_advisors(performance)` after fixing).
+`tests/sql/sales_write_rls.sql` (21/21), the new direct-path `ticket_items` check (5/5),
+`tests/sql/p3_7_sync_apply_and_pull.sql` (11/11), `tests/sql/financial_write_rls.sql`
+(28/28), `tests/sql/security_multiorg_sync.sql` (22/22), a targeted direct check of the
+remaining 5 rewritten policies (organizations/role_permissions/permanent_deletion_
+challenges/user_roles, 7/7), and the new `rls_performance_audit.sql` itself (both checks
+clean). `.venv/Scripts/python.exe -m pytest -q`: 12/12, run repeatedly across this pass.
+
+**Baseline kept in sync**, per `MIGRATION_GOVERNANCE.md`'s standing commitment:
+`supabase/migrations/20260809_live_schema.sql` patched in place with all 23 rewritten
+policies, the 3 new indexes, the dropped duplicate, and updated section-header counts (243
+indexes).
+
+**Docs:** `audit-findings/COST-AND-LOGIC-AUDIT-2026-09-03.md` (new, full findings writeup),
+this entry, `CURRENT_TASK.md`, `NOTIFICATIONS.md`.
+
+**Not covered by this pass, still open:** the npm dependency upgrade (already flagged,
+deliberately deferred); a full body-by-body review of every `SECURITY DEFINER` RPC's
+internal logic (only the grant *surface* was swept); Supabase project-level infra cost
+settings (log retention, connection pooling, compute tier) — not checkable from here; the
+`unused_index` findings — deliberately deferred to a post-launch pass once real usage data
+exists; the `sales_write_rls.sql` direct-path coverage gap noted above.
+
+---
+
+## 2026-09-02 · Security audit findings addressed — 4 of 6 fixed, 1 more caught along the way
 
 **Context:** the user asked to review `audit-findings/SECURITY-AUDIT-2026-09-02.md` (an
 external audit report, not produced by this session) before starting the last open blocker.

@@ -4,6 +4,37 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## Ran the cost/logic audit you asked for — found and fixed real things (2026-09-03)
+
+Went looking specifically for "will this get expensive or buggy later" problems, since
+the two earlier audits already covered security and data correctness.
+
+**Fixed:**
+- The database was re-checking "who is this?" on every single row it looked at, instead
+  of once per request — on the two busiest tables in the whole app (every sale touches
+  them). Fixed across 23 places this was happening. This is exactly the kind of thing
+  that feels fine today with a handful of test rows and gets slow and expensive once real
+  order volume shows up.
+- One pair of completely duplicate database indexes (double storage/write cost, no
+  benefit) — removed one.
+- Three real missing indexes on tables that will keep growing (added). Deliberately did
+  NOT add indexes everywhere the tool suggested — most of those suggestions were for
+  columns nothing actually searches by, so adding them would have been pure waste in the
+  other direction.
+
+**Checked and confirmed fine, no changes needed:**
+- A "why can't the app read production batches at all" question that looked alarming at
+  first — turned out to be the ingredient-tracking shutdown you asked for a few days ago,
+  working exactly as intended, not a new bug.
+- The other two "big lists of options" the tool suggested (unused indexes, "multiple
+  policy" warnings) — both are normal for how young this database is / how the rules are
+  deliberately written, not real problems.
+
+**Added a permanent check** so if either of the two real bugs above ever creeps back in
+through a future change, an automated test will catch it immediately instead of waiting
+for another audit.
+
+
 ## Security audit reviewed — 4 issues fixed and live, 2 deliberately left for you to decide (2026-09-02)
 
 Went through the audit report you pointed me to. Checked every item against the real code

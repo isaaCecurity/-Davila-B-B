@@ -1021,12 +1021,14 @@ COMMENT ON TABLE public.user_permission_overrides IS
 
 
 -- ============================================================
--- SECTION: INDEXES (non-constraint-backed, 241 total as of 2026-09-02/BLOCKER-025)
+-- SECTION: INDEXES (non-constraint-backed, 243 total as of 2026-09-03 future-cost audit:
+-- +3 new FK-usage indexes, -1 duplicate dropped)
 -- ============================================================
 
 CREATE INDEX idx_audit_log_actor ON public.audit_log USING btree (actor_id);
 CREATE INDEX idx_audit_log_deleted_by ON public.audit_log USING btree (deleted_by) WHERE (deleted_by IS NOT NULL);
-CREATE INDEX idx_audit_log_entity ON public.audit_log USING btree (tenant_id, entity_type, entity_id, occurred_at DESC);
+-- idx_audit_log_entity dropped 2026-09-03 (future-cost audit) -- byte-for-byte duplicate of
+-- idx_audit_log_tenant_entity_time below, pure write/storage cost with zero read benefit.
 CREATE INDEX idx_audit_log_tenant_entity_time ON public.audit_log USING btree (tenant_id, entity_type, entity_id, occurred_at DESC);
 CREATE INDEX idx_audit_log_tenant_time ON public.audit_log USING btree (tenant_id, occurred_at DESC);
 CREATE UNIQUE INDEX branch_assignments_one_default_per_profile ON public.branch_assignments USING btree (tenant_id, profile_id) WHERE is_default;
@@ -1129,6 +1131,9 @@ CREATE INDEX idx_payments_ticket ON public.payments USING btree (ticket_id);
 CREATE INDEX idx_payments_ticket_fkey ON public.payments USING btree (tenant_id, ticket_id);
 CREATE INDEX idx_payments_ticket_received_at ON public.payments USING btree (tenant_id, ticket_id, received_at DESC);
 CREATE INDEX idx_permanent_deletion_challenges_tenant_id ON public.permanent_deletion_challenges USING btree (tenant_id);
+-- Added 2026-09-03 (future-cost audit) -- permanent_deletion_challenges_owner RLS filters
+-- requested_by = auth.uid() AND tenant_id = current_tenant_id() directly on this table.
+CREATE INDEX permanent_deletion_challenges_tenant_requested_by_idx ON public.permanent_deletion_challenges USING btree (tenant_id, requested_by);
 CREATE INDEX idx_product_categories_created_by ON public.product_categories USING btree (created_by);
 CREATE INDEX idx_product_categories_deleted_by ON public.product_categories USING btree (deleted_by) WHERE (deleted_by IS NOT NULL);
 CREATE INDEX idx_product_categories_tenant ON public.product_categories USING btree (tenant_id);
@@ -1217,6 +1222,10 @@ CREATE INDEX idx_sync_changes_org_branch_sequence ON public.sync_changes USING b
 CREATE INDEX idx_sync_changes_org_sequence ON public.sync_changes USING btree (tenant_id, sequence_id);
 CREATE INDEX sync_conflicts_entity_idx ON public.sync_conflicts USING btree (entity_type, entity_id);
 CREATE INDEX sync_conflicts_tenant_status_idx ON public.sync_conflicts USING btree (tenant_id, conflict_status);
+-- Added 2026-09-03 (future-cost audit) -- sync_conflicts_select's own-actor RLS branch
+-- filters actor_id = auth.uid() directly with no other predicate on this table in that
+-- branch (the tenant check is in a subquery against user_roles).
+CREATE INDEX sync_conflicts_actor_id_idx ON public.sync_conflicts USING btree (actor_id);
 CREATE INDEX idx_sync_devices_user_active ON public.sync_devices USING btree (user_id) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_sync_devices_user_id ON public.sync_devices USING btree (user_id);
 CREATE INDEX idx_sync_operations_actor_id ON public.sync_operations USING btree (actor_id);
@@ -1267,6 +1276,10 @@ CREATE UNIQUE INDEX warehouses_one_default_per_branch ON public.warehouses USING
 CREATE UNIQUE INDEX user_permission_overrides_active_uq ON public.user_permission_overrides USING btree (tenant_id, profile_id, permission_id) WHERE (deleted_at IS NULL);
 CREATE INDEX user_permission_overrides_profile_idx ON public.user_permission_overrides USING btree (tenant_id, profile_id) WHERE (deleted_at IS NULL);
 CREATE INDEX user_permission_overrides_permission_id_idx ON public.user_permission_overrides USING btree (permission_id);
+-- Added 2026-09-03 (future-cost audit) -- user_permission_overrides_select's own-profile
+-- RLS branch filters profile_id = auth.uid() with no tenant_id in that branch; the
+-- existing (tenant_id, profile_id) composite index above doesn't help it.
+CREATE INDEX user_permission_overrides_profile_id_idx ON public.user_permission_overrides USING btree (profile_id) WHERE (deleted_at IS NULL);
 
 
 -- ============================================================
@@ -7023,15 +7036,17 @@ CREATE POLICY customers_update ON public.customers AS PERMISSIVE FOR UPDATE TO a
   USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text])))
   WITH CHECK ((tenant_id = current_tenant_id()));
 
+-- auth.uid() wrapped in (select ...) 2026-09-03 (future-cost audit, auth_rls_initplan) --
+-- semantically identical, avoids per-row re-evaluation.
 CREATE POLICY daily_financial_audits_insert ON public.daily_financial_audits AS PERMISSIVE FOR INSERT TO authenticated
-  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (submitted_by = auth.uid()) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text])));
+  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (submitted_by = (select auth.uid())) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text])));
 
 CREATE POLICY daily_financial_audits_select ON public.daily_financial_audits AS PERMISSIVE FOR SELECT TO authenticated
-  USING (((tenant_id = current_tenant_id()) AND (deleted_at IS NULL) AND ((submitted_by = auth.uid()) OR (has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'accountant'::text])))));
+  USING (((tenant_id = current_tenant_id()) AND (deleted_at IS NULL) AND ((submitted_by = (select auth.uid())) OR (has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'accountant'::text])))));
 
 CREATE POLICY daily_financial_audits_update_own_open ON public.daily_financial_audits AS PERMISSIVE FOR UPDATE TO authenticated
-  USING (((tenant_id = current_tenant_id()) AND (submitted_by = auth.uid()) AND (status = ANY (ARRAY['DRAFT'::text, 'PENDING_SYNC'::text, 'REQUIRES_RECONCILIATION'::text])) AND (deleted_at IS NULL)))
-  WITH CHECK (((tenant_id = current_tenant_id()) AND (submitted_by = auth.uid())));
+  USING (((tenant_id = current_tenant_id()) AND (submitted_by = (select auth.uid())) AND (status = ANY (ARRAY['DRAFT'::text, 'PENDING_SYNC'::text, 'REQUIRES_RECONCILIATION'::text])) AND (deleted_at IS NULL)))
+  WITH CHECK (((tenant_id = current_tenant_id()) AND (submitted_by = (select auth.uid()))));
 
 CREATE POLICY daily_financial_audits_update_review ON public.daily_financial_audits AS PERMISSIVE FOR UPDATE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]) AND (deleted_at IS NULL)))
@@ -7056,8 +7071,9 @@ CREATE POLICY driver_trips_select ON public.driver_trips AS PERMISSIVE FOR SELEC
 CREATE POLICY expenses_delete ON public.expenses AS PERMISSIVE FOR DELETE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text])));
 
+-- auth.uid() wrapped 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY expenses_insert ON public.expenses AS PERMISSIVE FOR INSERT TO authenticated
-  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text, 'accountant'::text]) AND (created_by = auth.uid())));
+  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text, 'accountant'::text]) AND (created_by = (select auth.uid()))));
 
 CREATE POLICY expenses_select ON public.expenses AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (deleted_at IS NULL)));
@@ -7098,10 +7114,11 @@ CREATE POLICY organization_invites_insert ON public.organization_invites AS PERM
 CREATE POLICY organization_invites_select ON public.organization_invites AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text]) AND (deleted_at IS NULL)));
 
+-- auth.uid() wrapped 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY organizations_select ON public.organizations AS PERMISSIVE FOR SELECT TO public
   USING (((deleted_at IS NULL) AND (EXISTS ( SELECT 1
    FROM user_roles ur
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = organizations.id) AND (ur.deleted_at IS NULL))))));
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = organizations.id) AND (ur.deleted_at IS NULL))))));
 
 CREATE POLICY organizations_update ON public.organizations AS PERMISSIVE FOR UPDATE TO authenticated
   USING (((id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text])))
@@ -7113,8 +7130,9 @@ CREATE POLICY payments_insert ON public.payments AS PERMISSIVE FOR INSERT TO aut
 CREATE POLICY payments_select ON public.payments AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (deleted_at IS NULL)));
 
+-- auth.uid() wrapped 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY permanent_deletion_challenges_owner ON public.permanent_deletion_challenges AS PERMISSIVE FOR SELECT TO authenticated
-  USING (((requested_by = auth.uid()) AND (tenant_id = current_tenant_id())));
+  USING (((requested_by = (select auth.uid())) AND (tenant_id = current_tenant_id())));
 
 CREATE POLICY permissions_select_authenticated ON public.permissions AS PERMISSIVE FOR SELECT TO authenticated
   USING ((deleted_at IS NULL));
@@ -7203,19 +7221,21 @@ CREATE POLICY profiles_update_admin ON public.profiles AS PERMISSIVE FOR UPDATE 
    FROM user_roles ur
   WHERE ((ur.profile_id = profiles.id) AND (ur.tenant_id = current_tenant_id()) AND (ur.deleted_at IS NULL))))));
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan) -- six
+-- occurrences in this one policy alone.
 CREATE POLICY profiles_update_self ON public.profiles AS PERMISSIVE FOR UPDATE TO public
-  USING ((id = auth.uid()))
-  WITH CHECK (((id = auth.uid()) AND (NOT (tenant_id IS DISTINCT FROM current_tenant_id())) AND (NOT (primary_branch_id IS DISTINCT FROM ( SELECT p.primary_branch_id
+  USING ((id = (select auth.uid())))
+  WITH CHECK (((id = (select auth.uid())) AND (NOT (tenant_id IS DISTINCT FROM current_tenant_id())) AND (NOT (primary_branch_id IS DISTINCT FROM ( SELECT p.primary_branch_id
    FROM profiles p
-  WHERE (p.id = auth.uid())))) AND (NOT (status IS DISTINCT FROM ( SELECT p.status
+  WHERE (p.id = (select auth.uid()))))) AND (NOT (status IS DISTINCT FROM ( SELECT p.status
    FROM profiles p
-  WHERE (p.id = auth.uid())))) AND (NOT (deleted_at IS DISTINCT FROM ( SELECT p.deleted_at
+  WHERE (p.id = (select auth.uid()))))) AND (NOT (deleted_at IS DISTINCT FROM ( SELECT p.deleted_at
    FROM profiles p
-  WHERE (p.id = auth.uid())))) AND (NOT (deleted_by IS DISTINCT FROM ( SELECT p.deleted_by
+  WHERE (p.id = (select auth.uid()))))) AND (NOT (deleted_by IS DISTINCT FROM ( SELECT p.deleted_by
    FROM profiles p
-  WHERE (p.id = auth.uid())))) AND (NOT (active_tenant_id IS DISTINCT FROM ( SELECT p.active_tenant_id
+  WHERE (p.id = (select auth.uid()))))) AND (NOT (active_tenant_id IS DISTINCT FROM ( SELECT p.active_tenant_id
    FROM profiles p
-  WHERE (p.id = auth.uid()))))));
+  WHERE (p.id = (select auth.uid())))))));
 
 CREATE POLICY recipe_ingredients_delete ON public.recipe_ingredients AS PERMISSIVE FOR DELETE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text])));
@@ -7249,10 +7269,11 @@ CREATE POLICY refunds_insert ON public.refunds AS PERMISSIVE FOR INSERT TO authe
 CREATE POLICY refunds_select ON public.refunds AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (deleted_at IS NULL)));
 
+-- auth.uid() wrapped 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY role_permissions_select_authenticated ON public.role_permissions AS PERMISSIVE FOR SELECT TO authenticated
   USING ((EXISTS ( SELECT 1
    FROM user_roles ur
-  WHERE ((ur.role_id = role_permissions.role_id) AND (ur.profile_id = auth.uid()) AND (ur.tenant_id = current_tenant_id()) AND (ur.deleted_at IS NULL)))));
+  WHERE ((ur.role_id = role_permissions.role_id) AND (ur.profile_id = (select auth.uid())) AND (ur.tenant_id = current_tenant_id()) AND (ur.deleted_at IS NULL)))));
 
 CREATE POLICY roles_auth_hook_read ON public.roles AS PERMISSIVE FOR SELECT TO supabase_auth_admin
   USING (true);
@@ -7266,59 +7287,65 @@ CREATE POLICY stock_movements_insert ON public.stock_movements AS PERMISSIVE FOR
 CREATE POLICY stock_movements_select ON public.stock_movements AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (deleted_at IS NULL)));
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan) -- four
+-- occurrences in this one policy alone.
 CREATE POLICY sync_changes_select ON public.sync_changes AS PERMISSIVE FOR SELECT TO public
   USING (((EXISTS ( SELECT 1
    FROM user_roles ur
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = sync_changes.tenant_id) AND (ur.deleted_at IS NULL)))) AND (EXISTS ( SELECT 1
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = sync_changes.tenant_id) AND (ur.deleted_at IS NULL)))) AND (EXISTS ( SELECT 1
    FROM sync_devices d
-  WHERE ((d.user_id = auth.uid()) AND (d.revoked_at IS NULL)))) AND ((branch_id IS NULL) OR (EXISTS ( SELECT 1
+  WHERE ((d.user_id = (select auth.uid())) AND (d.revoked_at IS NULL)))) AND ((branch_id IS NULL) OR (EXISTS ( SELECT 1
    FROM (user_roles ur2
      JOIN roles r ON ((r.id = ur2.role_id)))
-  WHERE ((ur2.profile_id = auth.uid()) AND (ur2.tenant_id = sync_changes.tenant_id) AND (ur2.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text]))))) OR (EXISTS ( SELECT 1
+  WHERE ((ur2.profile_id = (select auth.uid())) AND (ur2.tenant_id = sync_changes.tenant_id) AND (ur2.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text]))))) OR (EXISTS ( SELECT 1
    FROM branch_assignments ba
-  WHERE ((ba.profile_id = auth.uid()) AND (ba.tenant_id = sync_changes.tenant_id) AND (ba.branch_id = sync_changes.branch_id) AND (ba.deleted_at IS NULL)))))));
+  WHERE ((ba.profile_id = (select auth.uid())) AND (ba.tenant_id = sync_changes.tenant_id) AND (ba.branch_id = sync_changes.branch_id) AND (ba.deleted_at IS NULL)))))));
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY sync_conflicts_resolve ON public.sync_conflicts AS PERMISSIVE FOR UPDATE TO public
   USING ((EXISTS ( SELECT 1
    FROM (user_roles ur
      JOIN roles r ON ((r.id = ur.role_id)))
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]))))))
-  WITH CHECK (((resolved_by = auth.uid()) AND (conflict_status = ANY (ARRAY['RESOLVED'::text, 'DISMISSED'::text])) AND (tenant_id = ( SELECT sc.tenant_id
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]))))))
+  WITH CHECK (((resolved_by = (select auth.uid())) AND (conflict_status = ANY (ARRAY['RESOLVED'::text, 'DISMISSED'::text])) AND (tenant_id = ( SELECT sc.tenant_id
    FROM sync_conflicts sc
   WHERE (sc.id = sync_conflicts.id)))));
 
 CREATE POLICY sync_conflicts_select ON public.sync_conflicts AS PERMISSIVE FOR SELECT TO public
-  USING ((((actor_id = auth.uid()) AND (EXISTS ( SELECT 1
+  USING ((((actor_id = (select auth.uid())) AND (EXISTS ( SELECT 1
    FROM user_roles ur
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL))))) OR (EXISTS ( SELECT 1
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL))))) OR (EXISTS ( SELECT 1
    FROM (user_roles ur
      JOIN roles r ON ((r.id = ur.role_id)))
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text])))))));
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = sync_conflicts.tenant_id) AND (ur.deleted_at IS NULL) AND (r.deleted_at IS NULL) AND (r.key = ANY (ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text])))))));
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY sync_devices_insert ON public.sync_devices AS PERMISSIVE FOR INSERT TO public
-  WITH CHECK ((user_id = auth.uid()));
+  WITH CHECK ((user_id = (select auth.uid())));
 
 CREATE POLICY sync_devices_select ON public.sync_devices AS PERMISSIVE FOR SELECT TO public
-  USING ((user_id = auth.uid()));
+  USING ((user_id = (select auth.uid())));
 
 CREATE POLICY sync_devices_update ON public.sync_devices AS PERMISSIVE FOR UPDATE TO public
-  USING ((user_id = auth.uid()))
-  WITH CHECK ((user_id = auth.uid()));
+  USING ((user_id = (select auth.uid())))
+  WITH CHECK ((user_id = (select auth.uid())));
 
 CREATE POLICY sync_operations_select ON public.sync_operations AS PERMISSIVE FOR SELECT TO public
-  USING (((actor_id = auth.uid()) AND (EXISTS ( SELECT 1
+  USING (((actor_id = (select auth.uid())) AND (EXISTS ( SELECT 1
    FROM user_roles ur
-  WHERE ((ur.profile_id = auth.uid()) AND (ur.tenant_id = sync_operations.tenant_id) AND (ur.deleted_at IS NULL))))));
+  WHERE ((ur.profile_id = (select auth.uid())) AND (ur.tenant_id = sync_operations.tenant_id) AND (ur.deleted_at IS NULL))))));
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan) --
+-- tickets/ticket_items are the busiest tables in the app, scanned on every sale.
 CREATE POLICY ticket_items_delete ON public.ticket_items AS PERMISSIVE FOR DELETE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND (EXISTS ( SELECT 1
    FROM tickets o
-  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = auth.uid()) OR (o.assigned_to = auth.uid())))))))));
+  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = (select auth.uid())) OR (o.assigned_to = (select auth.uid())))))))));
 
 CREATE POLICY ticket_items_insert ON public.ticket_items AS PERMISSIVE FOR INSERT TO authenticated
   WITH CHECK (((tenant_id = current_tenant_id()) AND (EXISTS ( SELECT 1
    FROM tickets o
-  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = auth.uid()) OR (o.assigned_to = auth.uid())))))))));
+  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = (select auth.uid())) OR (o.assigned_to = (select auth.uid())))))))));
 
 CREATE POLICY ticket_items_select ON public.ticket_items AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = ( SELECT current_tenant_id() AS current_tenant_id)) AND (deleted_at IS NULL) AND (EXISTS ( SELECT 1
@@ -7328,36 +7355,38 @@ CREATE POLICY ticket_items_select ON public.ticket_items AS PERMISSIVE FOR SELEC
 CREATE POLICY ticket_items_update ON public.ticket_items AS PERMISSIVE FOR UPDATE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND (EXISTS ( SELECT 1
    FROM tickets o
-  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = auth.uid()) OR (o.assigned_to = auth.uid())))))))))
+  WHERE ((o.id = ticket_items.ticket_id) AND (o.tenant_id = ticket_items.tenant_id) AND has_branch_access(o.branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text]) OR (has_role(ARRAY['driver'::text]) AND ((o.created_by = (select auth.uid())) OR (o.assigned_to = (select auth.uid())))))))))
   WITH CHECK ((tenant_id = current_tenant_id()));
 
 CREATE POLICY tickets_insert ON public.tickets AS PERMISSIVE FOR INSERT TO authenticated
-  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text, 'driver'::text]) AND ((has_role(ARRAY['driver'::text]) AND (created_by = auth.uid())) OR (NOT has_role(ARRAY['driver'::text])))));
+  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text, 'cashier'::text, 'driver'::text]) AND ((has_role(ARRAY['driver'::text]) AND (created_by = (select auth.uid()))) OR (NOT has_role(ARRAY['driver'::text])))));
 
 CREATE POLICY tickets_select ON public.tickets AS PERMISSIVE FOR SELECT TO authenticated
   USING (((tenant_id = ( SELECT current_tenant_id() AS current_tenant_id)) AND ( SELECT has_branch_access(tickets.branch_id) AS has_branch_access) AND (deleted_at IS NULL)));
 
 CREATE POLICY tickets_update ON public.tickets AS PERMISSIVE FOR UPDATE TO authenticated
-  USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]) OR (has_role(ARRAY['driver'::text]) AND ((created_by = auth.uid()) OR (assigned_to = auth.uid()))) OR has_role(ARRAY['cashier'::text]))))
-  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]) OR (has_role(ARRAY['driver'::text]) AND ((created_by = auth.uid()) OR (assigned_to = auth.uid()))) OR has_role(ARRAY['cashier'::text]))));
+  USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]) OR (has_role(ARRAY['driver'::text]) AND ((created_by = (select auth.uid())) OR (assigned_to = (select auth.uid())))) OR has_role(ARRAY['cashier'::text]))))
+  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]) OR (has_role(ARRAY['driver'::text]) AND ((created_by = (select auth.uid())) OR (assigned_to = (select auth.uid())))) OR has_role(ARRAY['cashier'::text]))));
 
 CREATE POLICY user_roles_auth_hook_read ON public.user_roles AS PERMISSIVE FOR SELECT TO supabase_auth_admin
   USING (true);
 
+-- auth.uid() wrapped throughout 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY user_roles_delete ON public.user_roles AS PERMISSIVE FOR DELETE TO authenticated
-  USING (((tenant_id = current_tenant_id()) AND (profile_id <> auth.uid()) AND (has_role(ARRAY['owner'::text]) OR (has_role(ARRAY['admin'::text]) AND (EXISTS ( SELECT 1
+  USING (((tenant_id = current_tenant_id()) AND (profile_id <> (select auth.uid())) AND (has_role(ARRAY['owner'::text]) OR (has_role(ARRAY['admin'::text]) AND (EXISTS ( SELECT 1
    FROM roles r
   WHERE ((r.id = user_roles.role_id) AND (r.key <> ALL (ARRAY['owner'::text, 'admin'::text])))))))));
 
 CREATE POLICY user_roles_insert ON public.user_roles AS PERMISSIVE FOR INSERT TO authenticated
-  WITH CHECK (((tenant_id = current_tenant_id()) AND private.can_manage_target_role(role_id) AND (profile_id <> auth.uid())));
+  WITH CHECK (((tenant_id = current_tenant_id()) AND private.can_manage_target_role(role_id) AND (profile_id <> (select auth.uid()))));
 
 CREATE POLICY user_roles_select ON public.user_roles AS PERMISSIVE FOR SELECT TO authenticated
   USING ((((profile_id = ( SELECT auth.uid() AS uid)) OR ((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text]))) AND (deleted_at IS NULL)));
 
+-- auth.uid() wrapped 2026-09-03 (future-cost audit, auth_rls_initplan).
 CREATE POLICY user_roles_update ON public.user_roles AS PERMISSIVE FOR UPDATE TO authenticated
-  USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text]) AND (profile_id <> auth.uid())))
-  WITH CHECK (((tenant_id = current_tenant_id()) AND private.can_manage_target_role(role_id) AND (profile_id <> auth.uid())));
+  USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text]) AND (profile_id <> (select auth.uid()))))
+  WITH CHECK (((tenant_id = current_tenant_id()) AND private.can_manage_target_role(role_id) AND (profile_id <> (select auth.uid()))));
 
 CREATE POLICY warehouses_insert ON public.warehouses AS PERMISSIVE FOR INSERT TO authenticated
   WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text])));

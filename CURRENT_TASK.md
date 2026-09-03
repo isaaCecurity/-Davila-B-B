@@ -1,5 +1,36 @@
 # BakeFlow — Current Task
 
+## ✅ Cost & logic audit DELIVERED — 23 RLS policies + duplicate index fixed, new regression test (2026-09-03)
+
+The user asked directly for a fresh audit pass: "catch errors, bugs, logical problems, or
+future cost problems." Distinct from the two prior audit reports (security posture, data
+integrity) — this targeted what neither covered.
+
+- **Fixed:** 23 RLS policies re-evaluating `auth.uid()` per row instead of per query
+  (`auth_rls_initplan`, hits `tickets`/`ticket_items` — the busiest tables in the app —
+  plus 13 others). Mechanical, semantically-identical `(select auth.uid())` wrap, each one
+  verified against its live policy definition first.
+- **Found in the process:** `sales_write_rls.sql` never actually exercised the real
+  direct-PostgREST `ticket_items` write path (only tested it through RPCs, which bypass
+  RLS). Built and ran a targeted direct-path check (5/5) to close that verification gap.
+- **Fixed:** one duplicate index (`audit_log`, pure waste) and 3 real missing indexes
+  (out of 18 raw candidates — the other 15 are audit-trail columns this codebase already
+  deliberately leaves unindexed, confirmed by grep, not guessed).
+- **Reviewed, no action needed:** `unused_index` (75, pre-launch artifact),
+  `multiple_permissive_policies` (7, intentional design), and `production_batches` having
+  zero client grants at all (traced to a deliberate, already-documented MVP decision —
+  not a bug).
+- **Logic sweep:** checked `production_batches`/`deliveries` state machines for the same
+  "unreachable status" bug class found in tickets before (BLOCKER-005/009). Both clean.
+- **New permanent test:** `tests/sql/rls_performance_audit.sql` — catches this exact bug
+  class (unwrapped `auth.*()` calls, duplicate indexes) automatically going forward.
+
+Verified zero regression across 5 existing test suites (94 assertions total) plus the new
+one. `pytest` 12/12. Full detail: `audit-findings/COST-AND-LOGIC-AUDIT-2026-09-03.md`,
+`IMPLEMENTATION_LOG.md` 2026-09-03.
+
+---
+
 ## ✅ Security audit findings addressed — 4 of 6 fixed and deployed live (2026-09-02)
 
 Reviewed `audit-findings/SECURITY-AUDIT-2026-09-02.md` (an external report) before starting
