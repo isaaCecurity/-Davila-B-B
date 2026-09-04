@@ -930,3 +930,40 @@ ingredient-level stock tracking in MVP at all, there is no COGS to compute from,
 reporting dashboard is scoped to revenue/cash only for v1. `docs/REPORTING-MODEL.md` §85's
 weighted-average-costing lock still stands as the eventual v2 method; nothing here contradicts
 it, it just isn't reachable from an MVP that carries no ingredient cost data.
+
+## AD-023 — Application email stays on Supabase defaults for MVP; the Resend-based transactional email architecture is deferred · APPROVED, deferred 2026-09-04
+
+**Decision (product owner, direct instruction):** a full transactional-email architecture spec
+was supplied (`BakeFlow_Email_Architecture_Claude_Code_Spec.md` — two-path design: Supabase Auth
+SMTP via Resend for auth emails, a server-side Edge Function + Resend API + `email_events`
+outbox/idempotency layer for application emails: welcome, invitations, ticket confirmations,
+invoices). Before implementing, the repo was inspected against the spec's own §21 instruction
+(assessment first, no code). **Decision: for MVP, do not build the Resend/outbox layer at all —
+stay on Supabase's own defaults.** Introduce Resend and the rest of the spec's architecture in a
+later pass, after MVP.
+
+**What "Supabase defaults" means concretely, given what already exists (verified live before
+this decision, not assumed):**
+- Auth emails (signup verification, password reset, email change) continue through Supabase
+  Auth's own built-in email sending — no Resend SMTP configuration, no custom domain/SPF/DKIM/
+  DMARC work for MVP.
+- Application email stays exactly as already built: `send-invite-email` (the only Edge Function
+  that exists), using `_shared/email/factory.ts`'s existing `getEmailProvider()` — which already
+  defaults to `MockEmailProvider` whenever `RESEND_API_KEY` is unset, and only switches to
+  `ResendEmailProvider` if that secret is later configured. No code change was required to
+  "choose" this; it is the factory's existing fallback behavior. Nothing here reduces the
+  invite flow's already-live security posture (auth + org-membership + role gate + rate limit +
+  server-derived recipient, see `BLOCKERS.md` BLOCKER-001) — only the outbox/idempotency/
+  multi-event-type layer from the spec is what's being deferred.
+
+**Explicitly NOT built by this decision, deferred to the post-MVP pass:** the `email_events`
+outbox table, send idempotency, the `sendTransactionalEmail()` service abstraction, any new
+event types (`account.welcome`, `ticket.confirmation` — renamed from the spec's `order.*` per
+AD-011, `invoice.*`), Resend webhook/delivery-status tracking, and the domain/SPF/DKIM/DMARC
+setup itself. None of these block MVP: the only application email the product currently sends
+(organization invitations) already works end-to-end on the mock provider, and the underlying
+spec document is preserved for the later pass rather than discarded.
+
+**Not a re-opening of BLOCKER-001** — invitation delivery remains RESOLVED as recorded there;
+this decision is scoped purely to whether the *broader* Resend architecture gets built now
+(no) or later (yes).
