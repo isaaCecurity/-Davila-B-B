@@ -4,6 +4,23 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION NEEDED: one password-hashing setting to raise in the Supabase Dashboard (2026-09-04)
+
+While going through weak links in the backend, checked how passwords are actually stored.
+They're hashed properly (bcrypt, automatically salted — nothing wrong with the mechanism
+itself), but the "cost" setting — how many rounds of scrambling each password goes through —
+is set lower than what's generally recommended today. Not tied to any actual break-in or
+incident, just below the standard bar.
+
+**What to do:** in the Supabase Dashboard, under Auth settings, raise the password hashing
+cost factor from 6 to 10 or higher. Takes a minute, no code change needed on our side, and
+nobody's existing password breaks or needs to be reset — it only affects passwords going
+forward (next time someone sets or resets theirs).
+
+See `BLOCKERS.md` BLOCKER-029 for the technical detail.
+
+---
+
 ## Ran the cost/logic audit you asked for — found and fixed real things (2026-09-03)
 
 Went looking specifically for "will this get expensive or buggy later" problems, since

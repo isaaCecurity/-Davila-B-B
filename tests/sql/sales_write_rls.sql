@@ -1,4 +1,4 @@
--- BakeFlow — ticket (sales) write-path security suite (SW1..SW21) — P4.4
+-- BakeFlow — ticket (sales) write-path security suite (SW1..SW26) — P4.4
 --
 -- Companion to sales_read_rls.sql (the read path). Proves the five online ticket-write
 -- RPCs (confirm_ticket/cancel_ticket/complete_ticket/archive_ticket/update_ticket) and
@@ -8,6 +8,16 @@
 -- live, SW1) — every one of these lifecycle hops MUST go through an RPC, which is why
 -- this suite calls the RPCs directly (as `authenticated`, via SET LOCAL ROLE + JWT
 -- claims) rather than raw table writes.
+--
+-- SW22-SW26 are a different concern from SW1-SW21 above: `authenticated` DOES hold a
+-- direct INSERT/UPDATE grant on `ticket_items` (unlike `tickets`), so those five prove
+-- the real, live `ticket_items_insert`/`ticket_items_update` RLS policies directly via a
+-- raw INSERT/UPDATE — something no RPC-based assertion in this file exercises, since
+-- every RPC above is SECURITY DEFINER and bypasses RLS entirely. This closes a real
+-- coverage gap: the 2026-09-03 cost/logic audit proved these same policies out ad hoc
+-- while rewriting them to wrap auth.uid() for InitPlan caching, but never saved the
+-- check into a permanent file until now — see
+-- audit-findings/COST-AND-LOGIC-AUDIT-2026-09-03.md.
 --
 -- STATUS: EXECUTED live against project tvfyxpafbpnkneujcnvr (rolled-back transaction).
 --
@@ -418,6 +428,96 @@ BEGIN
     v_raised <> 'no exception', 'raised: ' || left(v_raised, 150));
 END
 $tenant$;
+
+-- ================================================== direct ticket_items write path (RLS) ===
+DO $direct_items$
+DECLARE
+  v_ticket  uuid := gen_random_uuid();
+  v_item_id uuid;
+  v_raised  text;
+BEGIN
+  -- fresh draft ticket in branch A1
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','5a900000-0000-4000-8000-000000000001',
+                      'tenant_id','5a000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('owner'))::text, true);
+  INSERT INTO public.tickets (id, tenant_id, branch_id, fulfilment_type, status, created_by)
+  VALUES (v_ticket, '5a000000-0000-4000-8000-0000000000a1', '5a100000-0000-4000-8000-0000000000a1', 'pickup', 'draft', '5a900000-0000-4000-8000-000000000001');
+
+  -- ---- cashier (has a branch_assignments row for branch A1) ----
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','5a900000-0000-4000-8000-000000000002',
+                      'tenant_id','5a000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('cashier'))::text, true);
+
+  -- SW22 — a direct INSERT into ticket_items, as authenticated, for an in-branch ticket
+  -- succeeds under ticket_items_insert's real live policy.
+  v_raised := 'no exception';
+  BEGIN
+    INSERT INTO public.ticket_items (id, tenant_id, ticket_id, product_variant_id, quantity, unit_price)
+    VALUES (gen_random_uuid(), '5a000000-0000-4000-8000-0000000000a1', v_ticket, '5a400000-0000-4000-8000-0000000000a1', 2.0000, 100.0000)
+    RETURNING id INTO v_item_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('SW22 cashier can directly INSERT a ticket_item into an in-branch ticket',
+    v_raised = 'no exception' AND v_item_id IS NOT NULL, 'raised: ' || left(v_raised, 150));
+
+  -- SW23 — a direct UPDATE (quantity) on that row, as the same cashier, succeeds.
+  v_raised := 'no exception';
+  BEGIN
+    UPDATE public.ticket_items SET quantity = 3.0000 WHERE id = v_item_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('SW23 cashier can directly UPDATE quantity on their branch''s ticket_item',
+    v_raised = 'no exception', 'raised: ' || left(v_raised, 150));
+
+  -- SW24 — line_total is GENERATED ALWAYS (confirmed live) — a direct write attempting
+  -- to set it is refused by Postgres itself, before RLS is even consulted.
+  v_raised := 'no exception';
+  BEGIN
+    UPDATE public.ticket_items SET line_total = 999.0000 WHERE id = v_item_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('SW24 a direct write to the generated column line_total is refused',
+    v_raised <> 'no exception', 'raised: ' || left(v_raised, 150));
+
+  -- ---- branch_manager with no branch_assignments row (SW20's fixture actor) ----
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','5a900000-0000-4000-8000-000000000005',
+                      'tenant_id','5a000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('branch_manager'))::text, true);
+
+  -- SW25 — has_branch_access() denies a direct INSERT into the same branch's ticket for
+  -- an actor with no branch_assignments row (an RLS WITH CHECK failure, not a grant issue).
+  v_raised := 'no exception';
+  BEGIN
+    INSERT INTO public.ticket_items (id, tenant_id, ticket_id, product_variant_id, quantity, unit_price)
+    VALUES (gen_random_uuid(), '5a000000-0000-4000-8000-0000000000a1', v_ticket, '5a400000-0000-4000-8000-0000000000a1', 1.0000, 100.0000);
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('SW25 a branch_manager with no branch_assignments row is refused (has_branch_access)',
+    v_raised <> 'no exception', 'raised: ' || left(v_raised, 150));
+
+  -- ---- owner (org A) attempting to reach org B's fixture ticket ----
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','5a900000-0000-4000-8000-000000000001',
+                      'tenant_id','5a000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('owner'))::text, true);
+
+  -- SW26 — a direct INSERT referencing org B's ticket (the SW21 cross-tenant fixture) is
+  -- refused: WITH CHECK requires tenant_id=current_tenant_id() (org A) AND a matching
+  -- ticket row whose own tenant_id equals that same value — org B's ticket never
+  -- satisfies that join under an org A session, regardless of role.
+  v_raised := 'no exception';
+  BEGIN
+    INSERT INTO public.ticket_items (id, tenant_id, ticket_id, product_variant_id, quantity, unit_price)
+    VALUES (gen_random_uuid(), '5a000000-0000-4000-8000-0000000000a1', '5a600000-0000-4000-8000-0000000000b1', '5a400000-0000-4000-8000-0000000000a1', 1.0000, 100.0000);
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('SW26 an org A actor cannot directly INSERT a ticket_item against an org B ticket',
+    v_raised <> 'no exception', 'raised: ' || left(v_raised, 150));
+END
+$direct_items$;
 
 RESET ROLE;
 

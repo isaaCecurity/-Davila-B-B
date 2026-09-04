@@ -1,6 +1,11 @@
--- BakeFlow — P3.7 per-entity sync application + pull RPC (T1..T9, P1..P2)
+-- BakeFlow — P3.7 per-entity sync application + pull RPC (T1..T10, P1..P2)
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_sync_apply_and_pull.sql
+--
+-- T10 added 2026-09-04 (weak-link remediation pass, Item D): process_sync_batch_context_
+-- validated() gained a 500-operation cap after a review found no bound existed on
+-- jsonb_array_length(p_operations) at all, letting one call drive unbounded server-side
+-- work. T10 proves an oversized batch is rejected before any operation inside it runs.
 --
 -- EXECUTED 2026-08-28 against project tvfyxpafbpnkneujcnvr: 11/11 passed, after finding and
 -- fixing two real defects during first authoring (see IMPLEMENTATION_LOG.md 2026-08-28 for
@@ -40,6 +45,7 @@
 --   T7 idempotent replay -> the second call reports replayed=true, exactly one ticket exists
 --   T8 sync_conflicts RLS: the operation's own actor AND a manager-tier role can see it
 --   T9 sync_conflicts RLS: an unrelated caller with no membership row cannot
+--   T10 a batch over the 500-operation cap -> rejected before any operation inside it runs
 --   P1 sync_pull returns new sync_changes rows with correct next_cursor/has_more
 --   P2 sync_pull refuses a revoked device (inherited from sync_validate_device(), the
 --      unmodified existing function — re-verified independently here)
@@ -314,6 +320,40 @@ select set_config('request.jwt.claims', json_build_object(
   'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
   'roles', array['driver']
 )::text, true);
+
+-- =================== T10: oversized batch -> rejected before any operation runs ===================
+-- 2026-09-04 weak-link remediation (cap_sync_batch_operation_count): a single call with no
+-- cap on jsonb_array_length(p_operations) could drive unbounded server-side work. Proves the
+-- 500-operation cap rejects an oversized batch AND that none of the operations inside it were
+-- processed (zero partial side effects), not just that the call itself fails.
+do $$
+declare
+  v_marker_opid uuid := gen_random_uuid();
+  v_raised text := 'no exception';
+  v_oversized jsonb;
+begin
+  -- 501 elements: 500 dummy placeholders plus one real-shaped (but never-reached) operation
+  -- whose operation_id we can positively check is absent afterward.
+  select (select jsonb_agg(jsonb_build_object('x', g)) from generate_series(1,500) g)
+         || jsonb_build_array(jsonb_build_object(
+              'operation_id', v_marker_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+              'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+              'entity_id', gen_random_uuid(), 'entity_type', 'tickets',
+              'operation_type', 'CREATE', 'domain_operation', 'ticket.create',
+              'device_created_at', now()::text, 'payload', jsonb_build_object('fulfilment_type','pickup')
+            ))
+    into v_oversized;
+
+  begin
+    perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001', v_oversized);
+  exception when others then v_raised := sqlerrm;
+  end;
+
+  insert into _results values ('T10 a 501-operation batch is rejected before any operation inside it is processed',
+    v_raised like '%exceeds the maximum of 500 operations%'
+      and not exists (select 1 from public.sync_operations where operation_id = v_marker_opid),
+    'raised: ' || left(v_raised, 150));
+end $$;
 
 -- =================== P1/P2: sync_pull ===================
 do $$

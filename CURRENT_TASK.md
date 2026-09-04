@@ -1,5 +1,40 @@
 # BakeFlow — Current Task
 
+## ✅ Weak-link remediation pass DELIVERED — 6 real fixes, plan-mode approved before any code changed (2026-09-04)
+
+Follow-up to an "attack surfaces / weak links" audit request: a Plan agent designed the fix
+for each finding, the user approved the plan, then it was executed item by item, each
+verified live before moving to the next.
+
+- **Fixed:** a real TOCTOU race in `enforce_rate_limit()` itself (the shared primitive
+  every rate-limited RPC uses); `create_organization_invite()` had no rate limit of its own
+  (added 20/hour); `process_sync_batch` had no cap on operations-per-call (added 500, per
+  EB-017); `expenses` had zero audit trail on any write path (added a trigger covering
+  both); 3 dead-but-present table grants found by a brand-new permanent test
+  (`table_privilege_audit.sql`, the table-grant analog of `function_privilege_audit.sql`);
+  one previously-proven-but-never-saved `ticket_items` direct-write test finally committed.
+- **Investigated and found already safe:** the original audit's stock-level concurrency
+  concern — `adjust_stock()` already takes a row lock, the trigger already does an atomic
+  upsert. Dropped from the plan before any fix was written.
+- **Deliberately deferred, not fixed, with reasons recorded:** CORS wildcard (no browser
+  client exists yet — `TECHNICAL_DEBT.md` TD-018), bcrypt cost factor 6 (Supabase Dashboard
+  setting, not this repo — `BLOCKERS.md` BLOCKER-029 + a `NOTIFICATIONS.md` entry), a full
+  `SECURITY DEFINER` body-review (scoped for later, not attempted this pass), and three
+  items that were already deferred by standing decisions (dependency CVEs, `sync_changes`
+  retention/`BLOCKER-023`, email idempotency/`AD-023`) — none re-opened or re-designed.
+- **`BLOCKER-028`** (expense reversal) got a one-line addendum, not a resolution: the audit
+  gap is closed, the underlying product decision it's waiting on is unchanged.
+
+Verified: every migration applied and confirmed live, every new/extended test run live
+(zero regression across `sales_write_rls.sql`, `financial_write_rls.sql`,
+`p3_7_financial_sync.sql`, `p3_7_sync_apply_and_pull.sql`, `table_privilege_audit.sql`,
+`rate_limit_enforcement.sql`), baseline schema file patched in place, `pytest` 12/12.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-04. **Not yet committed** — no commit
+instruction given this pass.
+
+---
+
 ## ✅ Cost & logic audit DELIVERED — 23 RLS policies + duplicate index fixed, new regression test (2026-09-03)
 
 The user asked directly for a fresh audit pass: "catch errors, bugs, logical problems, or

@@ -62,6 +62,21 @@
 -- show only {postgres, service_role} in this file's FUNCTION EXECUTE GRANTS section, matching
 -- live and matching their four correctly-locked-down "prevent_*_delete/mutation" siblings.
 --
+-- FIXED SINCE FIRST GENERATED (2026-09-04, weak-link remediation pass): four more in-place
+-- behavioral patches. (1) authenticated held INSERT/UPDATE grants on
+-- document_sequences/product_stock_levels and INSERT on profiles with no matching RLS policy
+-- for any of them -- all three tables are RLS-enabled AND forced, so none were ever a live
+-- bypass, but all three were unnecessary attack surface; revoked (migration
+-- revoke_dead_authenticated_grants_no_matching_policy). (2) enforce_rate_limit() had a
+-- check-then-act TOCTOU race (no lock between its SELECT count(*) and its INSERT); fixed with
+-- a pg_advisory_xact_lock keyed on (scope, tenant_id) (migration
+-- fix_enforce_rate_limit_toctou). (3) create_organization_invite() had no rate limit of its
+-- own (only the separate email-dispatch step did); added a 20/hour cap (migration
+-- rate_limit_organization_invite_create). (4) process_sync_batch_context_validated() had no
+-- cap on operations-per-call; added a 500-operation cap per EB-017's batch-size guidance
+-- (migration cap_sync_batch_operation_count). All four are reflected in this file's GRANT
+-- section and the three named functions' bodies respectively.
+--
 -- SCOPE: this file targets the `public` schema plus the minimal `storage`
 -- objects (bucket rows + storage.objects policies) BakeFlow depends on. It
 -- does not attempt to reproduce Supabase-managed schemas (auth, storage's own
@@ -3751,6 +3766,11 @@ BEGIN
     RAISE EXCEPTION 'owner and admin invitations must be organization-wide'
       USING errcode='P0001', detail=json_build_object('code','invalid_transition')::text;
   END IF;
+
+  -- 2026-09-04 (rate_limit_organization_invite_create): after every other check, so a
+  -- malformed/unauthorized request never consumes a legitimate caller's quota.
+  PERFORM public.enforce_rate_limit(v_tenant, auth.uid(), 'org_invite_create', 20, 60);
+
   v_raw := encode(extensions.gen_random_bytes(32),'hex');
   INSERT INTO public.organization_invites
     (tenant_id,email,role_id,branch_id,token_hash,expires_at,created_by)
@@ -3973,6 +3993,12 @@ BEGIN
     RAISE EXCEPTION 'enforce_rate_limit: limit and window_minutes must be positive'
       USING errcode = 'P0001', detail = json_build_object('code', 'invalid_request')::text;
   END IF;
+
+  -- 2026-09-04 (fix_enforce_rate_limit_toctou): serialize concurrent callers for the same
+  -- (tenant_id, scope) so the count-check below can't be raced past p_limit. See that
+  -- migration's header for the alternatives considered (counter row + FOR UPDATE; a
+  -- unique/exclusion constraint; SERIALIZABLE isolation) and why this one line was chosen.
+  PERFORM pg_advisory_xact_lock(hashtext(p_scope || ':rate_limit'), hashtext(p_tenant_id::text));
 
   -- Counted per (tenant, scope), not per actor: the resource this protects (recipient
   -- inboxes, a transactional-email provider's quota and sender reputation) is a
@@ -5284,6 +5310,33 @@ AS $function$
   values (p_tenant_id, auth.uid(), p_entity_type, p_entity_id, p_action, p_before, p_after);
 $function$;
 
+-- 2026-09-04 (add_expenses_audit_trail): expenses had no audit trail at all -- neither the
+-- sync/RPC path (apply_expense_create) nor any direct-write RLS path ever called
+-- log_audit_event. Hand-written, per-table AFTER trigger, matching this file's existing
+-- guard_*_transition() convention rather than a generic reusable abstraction (expenses is
+-- the first table getting this treatment; revisit only if a second and third table need
+-- the same -- rule of three). Scope is auditability only -- BLOCKER-028
+-- (expense.reverse/immutability) remains open and unchanged.
+CREATE OR REPLACE FUNCTION public.log_expense_mutation()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public.log_audit_event(NEW.tenant_id, 'expense', NEW.id, 'insert', NULL, to_jsonb(NEW));
+    RETURN NEW;
+  ELSIF TG_OP = 'UPDATE' THEN
+    PERFORM public.log_audit_event(NEW.tenant_id, 'expense', NEW.id, 'update', to_jsonb(OLD), to_jsonb(NEW));
+    RETURN NEW;
+  ELSE
+    PERFORM public.log_audit_event(OLD.tenant_id, 'expense', OLD.id, 'delete', to_jsonb(OLD), NULL);
+    RETURN OLD;
+  END IF;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.next_document_number(p_tenant_id uuid, p_doc_type text)
  RETURNS text
  LANGUAGE plpgsql
@@ -5460,6 +5513,13 @@ BEGIN
   IF jsonb_typeof(p_operations) <> 'array' THEN
     RAISE EXCEPTION 'p_operations must be a JSON array'
       USING errcode = '22023', detail = json_build_object('code','invalid_transition')::text;
+  END IF;
+
+  -- 2026-09-04 (cap_sync_batch_operation_count): bound per-call server-side work. See
+  -- that migration's header for the EB-017 batch-size guidance this cap is based on.
+  IF jsonb_array_length(p_operations) > 500 THEN
+    RAISE EXCEPTION 'batch exceeds the maximum of 500 operations per call (got %)', jsonb_array_length(p_operations)
+      USING errcode = '22023', detail = json_build_object('code','batch_too_large','max_operations',500)::text;
   END IF;
 
   FOR op IN SELECT value FROM jsonb_array_elements(p_operations) LOOP
@@ -6849,6 +6909,9 @@ CREATE TRIGGER driver_trips_bump_revision BEFORE UPDATE ON driver_trips FOR EACH
 CREATE TRIGGER driver_trips_guard_transition BEFORE UPDATE OF status ON driver_trips FOR EACH ROW EXECUTE FUNCTION guard_driver_trip_transition();
 CREATE TRIGGER driver_trips_no_delete BEFORE DELETE ON driver_trips FOR EACH ROW EXECUTE FUNCTION prevent_driver_trip_delete();
 CREATE TRIGGER driver_trips_set_updated_at BEFORE UPDATE ON driver_trips FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+-- 2026-09-04 (add_expenses_audit_trail): AFTER, not BEFORE like the guard trigger below --
+-- this one only observes, never validates or blocks.
+CREATE TRIGGER expenses_audit_trail AFTER INSERT OR UPDATE OR DELETE ON expenses FOR EACH ROW EXECUTE FUNCTION log_expense_mutation();
 CREATE TRIGGER expenses_guard_cash_session BEFORE INSERT OR UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION guard_expense_cash_session();
 CREATE TRIGGER expenses_set_updated_at BEFORE UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER ingredients_set_updated_at BEFORE UPDATE ON ingredients FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -7436,7 +7499,11 @@ GRANT INSERT, SELECT, UPDATE ON TABLE public.daily_financial_audits TO authentic
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.daily_financial_audits TO service_role;
 GRANT INSERT, SELECT ON TABLE public.deliveries TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.deliveries TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.document_sequences TO authenticated;
+-- 2026-09-04 (table_privilege_audit.sql): INSERT/UPDATE revoked -- no matching RLS policy
+-- existed for either (RLS is enabled+forced, so both were dead surface, not a live bypass).
+-- The real write path is next_document_number()/assign_order_number(), SECURITY DEFINER
+-- trigger context, unaffected by this grant either way.
+GRANT SELECT ON TABLE public.document_sequences TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.document_sequences TO service_role;
 GRANT SELECT ON TABLE public.driver_trips TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.driver_trips TO service_role;
@@ -7461,7 +7528,11 @@ GRANT SELECT ON TABLE public.permissions TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.permissions TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.product_categories TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.product_categories TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.product_stock_levels TO authenticated;
+-- 2026-09-04 (table_privilege_audit.sql): INSERT/UPDATE revoked -- no matching RLS policy
+-- existed for either (RLS is enabled+forced, so both were dead surface, not a live bypass).
+-- The real write path is apply_stock_movement(), SECURITY DEFINER trigger context,
+-- unaffected by this grant either way.
+GRANT SELECT ON TABLE public.product_stock_levels TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.product_stock_levels TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.product_variants TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.product_variants TO service_role;
@@ -7471,7 +7542,11 @@ GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE pub
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.production_batches TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.products TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.products TO service_role;
-GRANT INSERT, SELECT, UPDATE ON TABLE public.profiles TO authenticated;
+-- 2026-09-04 (table_privilege_audit.sql): INSERT revoked -- no matching RLS policy existed
+-- for it (RLS is enabled+forced, so it was dead surface, not a live bypass). Profiles are
+-- inserted only by the auth.users signup trigger (service-role context). UPDATE is kept --
+-- profiles_update_self/profiles_update_admin both cover it.
+GRANT SELECT, UPDATE ON TABLE public.profiles TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.profiles TO service_role;
 GRANT SELECT ON TABLE public.profiles TO supabase_auth_admin;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.rate_limit_events TO service_role;
@@ -7620,6 +7695,9 @@ GRANT EXECUTE ON FUNCTION public.has_role_in(p_actor uuid, p_tenant uuid, p_role
 GRANT EXECUTE ON FUNCTION public.is_authorized_for_branch(p_actor uuid, p_tenant uuid, p_branch uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.is_member_of(p_actor uuid, p_tenant uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.log_audit_event(p_tenant_id uuid, p_entity_type text, p_entity_id uuid, p_action text, p_before jsonb, p_after jsonb) TO service_role;
+-- 2026-09-04 (add_expenses_audit_trail): trigger function, never directly callable --
+-- service_role only, matching every other trigger function's grant shape in this file.
+GRANT EXECUTE ON FUNCTION public.log_expense_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.next_document_number(p_tenant_id uuid, p_doc_type text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.open_cash_session(p_branch_id uuid, p_opening_float numeric) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.open_cash_session(p_branch_id uuid, p_opening_float numeric) TO service_role;

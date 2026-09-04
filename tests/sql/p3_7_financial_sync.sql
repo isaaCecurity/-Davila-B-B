@@ -643,6 +643,29 @@ begin
 
   insert into _results values ('E1 cashier expense.create -> APPLIED, revision 1',
     v_row.status='APPLIED' and (v_row.result->>'revision')='1', v_row.status||' '||v_row.result::text);
+
+  -- E1b — 2026-09-04 weak-link remediation (Item E): apply_expense_create() itself never
+  -- called log_audit_event -- expenses had no audit trail at all until the new
+  -- expenses_audit_trail AFTER trigger was added. Proves the trigger-based fix covers the
+  -- sync/RPC write path (financial_write_rls.sql's F25-F27 cover the direct-write path).
+  -- audit_log_select is owner/admin/accountant-only, so this needs its own role switch --
+  -- restored to the driver/branch_manager context E2 expects immediately after.
+  reset role;
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['owner']
+  )::text, true);
+  insert into _results
+  select 'E1b apply_expense_create() leaves an audit_log row via the expenses_audit_trail trigger',
+    count(*) = 1, 'audit_log rows for this expense = ' || count(*)
+  from public.audit_log
+  where entity_type = 'expense' and entity_id = (v_row.result->>'expense_id')::uuid and action = 'insert';
+
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver','branch_manager']
+  )::text, true);
 end $$;
 
 -- =================== E2: invalid category ===================

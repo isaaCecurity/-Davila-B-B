@@ -1770,6 +1770,36 @@ sync-facing name for a constrained direct edit — and, if the former, whether t
 `expenses_update` RLS policy's direct-edit path should be narrowed or retired once a reversal
 mechanism exists, so the two paths don't contradict each other.
 
+**2026-09-04 stopgap, not a resolution:** a weak-link remediation pass found `expenses` had no
+audit trail at all — not even for the live direct-edit path this blocker already flags as
+contradicting AD-021. Closed the *auditability* gap only (a new `expenses_audit_trail` AFTER
+trigger logs every INSERT/UPDATE/DELETE to `audit_log`, covering both the sync/RPC path and the
+direct-write path — see `tests/sql/financial_write_rls.sql` F25-F27 and
+`tests/sql/p3_7_financial_sync.sql` E1b). This does **not** answer the question above: the
+direct-edit path is now at least visible in the audit trail, but still un-reversed and still
+architecturally in tension with AD-021's append-only intent. The decision this blocker is
+waiting on is unchanged.
+
+---
+
+## BLOCKER-029 · Supabase Auth bcrypt cost factor is 6, below the standard-recommended minimum of 10
+**Status:** OPEN · **Affects:** none currently — no work blocked · **Type:** missing external action (Supabase Dashboard config, not this repo)
+
+Found during the 2026-09-04 weak-link remediation pass. Verified live by reading a real
+`encrypted_password` value from `auth.users`: `$2a$06$...` — the `06` is bcrypt's cost factor,
+below the commonly-recommended minimum of 10 for interactive password hashing (higher cost =
+more brute-force resistance, traded against login latency). This is a Supabase Auth project
+setting (GoTrue configuration), not a migration or anything controllable from this repo's SQL —
+confirmed no `supabase/migrations/*.sql` file or MCP tool can change it.
+
+**Not urgent, not tied to any known exploit** — flagging because it's below the standard
+recommendation, not because of an active incident.
+
+**Needed:** the human raises the cost factor to 10+ in the Supabase Dashboard's Auth
+configuration. Existing user password hashes are unaffected until their next password
+change/reset (bcrypt cost is stored per-hash, not global), so no forced-reset campaign is
+needed.
+
 ---
 
 ## Template

@@ -5,7 +5,130 @@ Never record planned work here.
 
 ---
 
-## 2026-09-03 (latest) · Cost & logic audit — 23 RLS policies + duplicate index fixed, one new permanent regression test
+## 2026-09-04 (latest) · Weak-link remediation pass — 6 real fixes, 3 documentation-only deferrals, 2 items left deliberately deferred
+
+**Context:** continuing directly from a "where are potential attack surfaces and weak links"
+audit request. Two live investigations (one direct, one via a targeted Explore agent reading
+the actual migration SQL) confirmed which findings were real, actionable bugs versus already
+safe, a Plan agent designed the fix for each actionable item, and the user approved the
+resulting plan (`C:\Users\HP\.claude\plans\jazzy-swimming-prism.md`) before any code changed.
+
+**Investigation finding that changed scope before any fix was written:** the "concurrent-write
+TOCTOU on stock levels" risk from the original audit turned out to already be safe —
+`adjust_stock()` takes an explicit `SELECT ... FOR UPDATE` row lock, and the `stock_movements`
+trigger separately uses an atomic `INSERT ... ON CONFLICT DO UPDATE` with a post-increment
+negative check. Dropped from the plan. The investigation instead found a **different, real**
+race in `enforce_rate_limit()` itself (Item C below).
+
+**Item A — saved a proven-but-never-committed direct-write RLS test.** Added SW22-SW26 to
+`tests/sql/sales_write_rls.sql`: raw INSERT/UPDATE on `ticket_items` as `authenticated`
+(succeeds for the owning tenant/branch, denied for out-of-branch/out-of-tenant, `line_total`
+write refused as a `GENERATED ALWAYS` column). 5/5 live.
+
+**Item B — new permanent test `tests/sql/table_privilege_audit.sql`**, mirroring
+`function_privilege_audit.sql`'s conventions for the analogous table-grant version of the
+same recurring bug class (Supabase's default privileges have silently over-granted
+`authenticated`/`anon` at least three times this project). CHECK 1 flags any table grant with
+no matching RLS policy for that command+role; CHECK 2 is a small explicit allowlist
+(`user_permission_overrides`) for tables that must never get a direct write grant regardless.
+**Found 3 real (non-exploitable) findings on first run:** `authenticated` held INSERT/UPDATE on
+`document_sequences`/`product_stock_levels` and INSERT on `profiles` with zero matching
+policy — all three tables are RLS-enabled AND forced (confirmed live), so none were ever a
+live bypass, but all were unnecessary surface; the real write path for each is a
+`SECURITY DEFINER` trigger, unaffected either way. Fixed via migration
+`revoke_dead_authenticated_grants_no_matching_policy` (confirmed no client code references
+these tables for anything but SELECT, via grep, before revoking). Both checks return zero
+rows after the fix.
+
+**Item C — `enforce_rate_limit()` TOCTOU fix.** Confirmed race by reading the live function
+body: `SELECT count(*)` then, conditionally, `INSERT`, no lock, no constraint — under READ
+COMMITTED, concurrent callers for the same `(tenant_id, scope)` could all pass the count-check
+before any committed its insert. Fixed with `pg_advisory_xact_lock(hashtext(scope), hashtext
+(tenant_id))`, added after input validation and before the count-check. Migration
+`fix_enforce_rate_limit_toctou`. **Manually verified live** (documented limitation: true
+concurrent-session racing doesn't fit this repo's single-connection sequential test
+convention, so this is a one-time check, not a permanent automated test): two back-to-back
+calls with `p_limit=1` against a shared `(tenant_id, scope)` produced exactly one success and
+one `rate_limited` rejection, with exactly one row landing in `rate_limit_events`.
+
+**Item D — rate-limit/size-cap coverage extended to two previously-unbounded RPCs.**
+`create_organization_invite()` had no rate limit of its own (only the separate email-dispatch
+step did) — added a 20/hour cap (migration `rate_limit_organization_invite_create`).
+`process_sync_batch_context_validated()` had no cap on `jsonb_array_length(p_operations)` at
+all — a single call could drive unbounded server-side work — added a 500-operation cap per
+EB-017's own batch-size guidance (migration `cap_sync_batch_operation_count`). Deliberately
+did NOT add rate limiting to `record_payment`/`confirm_ticket` — both already have real
+business friction bounding their cost, matching CLAUDE.md's "don't add validation for
+scenarios that can't happen." New file `tests/sql/rate_limit_enforcement.sql`: RL1-RL5 prove
+`enforce_rate_limit()`'s sequential behavior is unchanged by the lock (it's
+`service_role`/`postgres`-only, never `authenticated`-executable directly — confirmed live,
+so these run as the suite's own connecting role, not `authenticated`); RL6/RL6b prove a
+caller who fails an earlier check never reaches the limiter and consumes no quota; RL7/RL8
+prove `create_organization_invite()`'s new 20/hour cap end to end (20 succeed, the 21st is
+refused). 9/9 live — this RPC had zero `tests/sql` coverage of any kind before this pass.
+Added `T10` to `tests/sql/p3_7_sync_apply_and_pull.sql`: a 501-operation batch is rejected
+before any operation inside it is processed (proven via a marker operation_id that's
+positively absent from `sync_operations` afterward, not just "the call failed"). Full
+12-assertion file re-run, zero regression.
+
+**Item E — expenses had no audit trail at all; closed the auditability gap only, not
+immutability/reversal.** Neither `apply_expense_create()` (the sync/RPC path) nor any of the
+live direct-write RLS policies (`expenses_insert`/`_update`/`_delete`) ever produced an
+`audit_log` row. Built a hand-written `AFTER INSERT OR UPDATE OR DELETE` trigger
+(`log_expense_mutation()`/`expenses_audit_trail`), matching the codebase's existing
+per-table guard-trigger convention rather than a generic reusable abstraction (rule of
+three — `expenses` is the first table getting this treatment; several others also lack a
+trail but are out of scope here). Deliberately did NOT build `expense.reverse` or make
+`expenses` immutable — `BLOCKER-028` already identifies the real, still-open product
+decision that would require, and narrowing the live direct-edit path without that decision
+would be exactly the business-rule guess CLAUDE.md's blocker rule prohibits. Migration
+`add_expenses_audit_trail`. **Verified live, two paths:** `tests/sql/financial_write_rls.sql`
+gained F25-F27 (direct INSERT/UPDATE/DELETE all produce correct `audit_log` rows with
+accurate before/after; F27 also confirmed, informationally, that `authenticated` holds no
+DELETE grant on `expenses` at all — same "policy present, grant absent" pattern as TD-016,
+not a new gap) — full 31-assertion file re-run, zero regression on the original 28.
+`tests/sql/p3_7_financial_sync.sql` gained `E1b`, proving the sync/RPC path also produces a
+correct `audit_log` row (had to correct one wrong assumption while writing this: the
+expense's real id is `result->>'expense_id'`, not the sync operation's own `entity_id` —
+`apply_expense_create()` lets the table generate its own PK, unlike ticket/customer create).
+One-line addendum added to the existing `BLOCKER-028` entry (not a new blocker) — the
+decision it's waiting on is unchanged.
+
+**Item F — CORS wildcard: deferred, not fixed, documented in `TECHNICAL_DEBT.md` (TD-018).**
+No live browser client exists today (mobile only, JWT never in a cookie), so there's no
+exploit path for the wildcard `Access-Control-Allow-Origin: '*'` on `send-invite-email`. Fix
+is cheap when needed (an env-var-driven allowlist) — trigger condition recorded as "before
+any AD-015 web-workspace work begins."
+
+**Item G — bcrypt cost factor: operational, not code.** Confirmed live (read a real
+`auth.users.encrypted_password` value) that GoTrue's bcrypt cost factor is 6, below the
+standard-recommended minimum of 10. Not fixable from this repo — a Supabase Dashboard
+setting. Logged as `BLOCKER-029` (per `NOTIFICATIONS.md`'s own rule that every notification
+entry has a matching blocker) and a new `NOTIFICATIONS.md` entry, in plain language, asking
+the human to raise it in the dashboard.
+
+**Item H — scoped, not executed:** a full body-by-body `SECURITY DEFINER` internal-logic
+review (only the grant *surface* has been swept so far). Recommended first batch if/when this
+follow-up is picked up: driver-trip and delivery lifecycle functions (`start_driver_trip`,
+`depart_driver_trip`, `verify_trip_loading`, `complete_driver_field_sale`,
+`reconcile_driver_trip`, and the two matching guard triggers) — carries real
+physical-custody/financial implications (AD-018) and had one grant-level issue caught once
+before, a reasonable signal of less scrutiny than the financial/sales paths.
+
+**Items I/J/K — left exactly as already deferred, not re-opened or re-designed:** dependency
+CVEs (still needs its own scoped task), `sync_changes`/`sync_operations` unbounded growth
+(`BLOCKER-023`, unchanged), the email-send idempotency gap (`AD-023`, unchanged).
+
+**Verified end to end:** every migration applied via `mcp__supabase__apply_migration`,
+confirmed live afterward (never trusted the apply call's own response), baseline file
+(`20260809_live_schema.sql`) patched in place for every schema-affecting item plus a header
+changelog paragraph, `.venv/Scripts/python.exe -m pytest -q` → 12/12 throughout.
+
+**Not yet committed** — no commit instruction given this pass.
+
+---
+
+## 2026-09-03 · Cost & logic audit — 23 RLS policies + duplicate index fixed, one new permanent regression test
 
 **Context:** the user asked directly for "audits and new tests... to catch errors, bugs,
 logical problems, or future cost problems" — distinct from the two prior audit reports in

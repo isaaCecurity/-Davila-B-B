@@ -1,6 +1,11 @@
--- BakeFlow — financial write-path security suite (F1..F23, 28 assertions) — P5 (AD-017 MVP scope)
+-- BakeFlow — financial write-path security suite (F1..F27, 31 assertions) — P5 (AD-017 MVP scope)
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/financial_write_rls.sql
+--
+-- F25-F27 added 2026-09-04 (weak-link remediation pass, Item E): expenses had no audit
+-- trail at all -- a new AFTER trigger (log_expense_mutation()/expenses_audit_trail) now
+-- covers direct client INSERT/UPDATE/DELETE. F25-F27 prove it; p3_7_financial_sync.sql's
+-- new E1b assertion proves the same trigger also covers the sync/RPC write path.
 --
 -- EXECUTED 2026-08-24 against project tvfyxpafbpnkneujcnvr: 28/28 passed, after finding
 -- and fixing FOUR real live defects during this suite's first-ever authoring/execution
@@ -280,6 +285,9 @@ DECLARE
   v_session    jsonb;
   v_session_id uuid;
   v_close      jsonb;
+  v_expense_id uuid;
+  v_before     jsonb;
+  v_after      jsonb;
 BEGIN
   v_session := public.open_cash_session('da000000-0000-4000-8000-0000000000a1', 1000.0000);
   v_session_id := (v_session->'session'->>'id')::uuid;
@@ -349,6 +357,63 @@ BEGIN
   INSERT INTO _results VALUES ('F16 close_cash_session() reconciles to opening_float + cash_in - cash_out exactly (only the cash expense counted)',
     (v_close->>'expected')::numeric = 1020.0000,
     'expected=' || coalesce(v_close->>'expected','<null>') || ' cash_in=' || coalesce(v_close->>'cash_in','<null>') || ' cash_out=' || coalesce(v_close->>'cash_out','<null>'));
+
+  -- ---- F25-F27: 2026-09-04 weak-link remediation (Item E) -- expenses_audit_trail ----
+  -- expenses had no audit trail at all before this pass. A hand-written AFTER trigger
+  -- (log_expense_mutation(), matching this codebase's existing per-table guard-trigger
+  -- convention, not a generic reusable abstraction -- see the migration's own header for
+  -- why) now covers both the sync/RPC path (p3_7_financial_sync.sql's E1b) and, more
+  -- importantly, the DIRECT PostgREST write path exercised here -- the gap the RPC-only
+  -- alternative would have missed. Uses its own standalone expense (not F14/F15's, and not
+  -- attached to any cash session) so mutating/deleting it cannot disturb F12/F13/F16's
+  -- already-closed till reconciliation above.
+  v_raised := 'no exception';
+  BEGIN
+    INSERT INTO public.expenses (tenant_id, branch_id, category, amount, paid_method, created_by)
+    VALUES ('d0000000-0000-4000-8000-0000000000a1','da000000-0000-4000-8000-0000000000a1','other',
+            10.0000, 'transfer', 'd1000000-0000-4000-8000-000000000001')
+    RETURNING id INTO v_expense_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+
+  -- F25 — the direct client INSERT just above left a matching audit_log row.
+  INSERT INTO _results
+  SELECT 'F25 a direct INSERT on expenses leaves an audit_log row (action=insert)',
+    v_raised = 'no exception' AND count(*) = 1, 'audit_log rows = ' || count(*)
+  FROM public.audit_log
+  WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'insert';
+
+  -- F26 — a direct client UPDATE (owner/admin/branch_manager/accountant, per
+  -- expenses_update) leaves an audit_log row with correct before/after amounts.
+  v_raised := 'no exception';
+  BEGIN
+    UPDATE public.expenses SET amount = 15.0000 WHERE id = v_expense_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  SELECT before, after INTO v_before, v_after FROM public.audit_log
+    WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'update';
+  INSERT INTO _results VALUES ('F26 a direct UPDATE on expenses leaves an audit_log row with correct before/after amounts',
+    v_raised = 'no exception' AND (v_before->>'amount')::numeric = 10.0000 AND (v_after->>'amount')::numeric = 15.0000,
+    'raised: ' || left(v_raised, 100) || ' before=' || coalesce(v_before->>'amount','?') || ' after=' || coalesce(v_after->>'amount','?'));
+
+  -- F27 — `authenticated` has no DELETE grant on expenses at all (verified live; same
+  -- "RLS policy present, grant absent" pattern already documented elsewhere in this
+  -- project, e.g. TD-016 for tickets) -- expenses_delete is dead code today, not a gap
+  -- this pass introduces or needs to close. The trigger itself is still proven correct
+  -- here at the owning (non-authenticated) role, since it must fire regardless of which
+  -- privilege level eventually performs a delete.
+  RESET ROLE;
+  DELETE FROM public.expenses WHERE id = v_expense_id;
+  SELECT before, after INTO v_before, v_after FROM public.audit_log
+    WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'delete';
+  INSERT INTO _results VALUES ('F27 a DELETE on expenses leaves an audit_log row with before populated and after NULL',
+    v_before IS NOT NULL AND (v_before->>'amount')::numeric = 15.0000 AND v_after IS NULL,
+    'before=' || coalesce(v_before->>'amount','<null>') || ' after=' || coalesce(v_after::text,'<null>'));
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','d1000000-0000-4000-8000-000000000001',
+                      'tenant_id','d0000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('owner'))::text, true);
 END
 $cash$;
 
