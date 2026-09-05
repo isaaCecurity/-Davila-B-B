@@ -1782,18 +1782,30 @@ waiting on is unchanged.
 
 ---
 
-## BLOCKER-029 · Supabase Auth bcrypt cost factor is 6, below the standard-recommended minimum of 10
-**Status:** OPEN · **Affects:** none currently — no work blocked · **Type:** missing external action (Supabase Dashboard config, not this repo)
+## BLOCKER-029 · ~~Supabase Auth bcrypt cost factor is 6~~ — RESOLVED (was a false alarm) 2026-09-05
+**Status:** CLOSED · **Affects:** nothing, was never a live issue · **Type:** was a measurement artifact, not a config problem
 
-Found during the 2026-09-04 weak-link remediation pass. Verified live by reading a real
-`encrypted_password` value from `auth.users`: `$2a$06$...` — the `06` is bcrypt's cost factor,
-below the commonly-recommended minimum of 10 for interactive password hashing (higher cost =
-more brute-force resistance, traded against login latency). This is a Supabase Auth project
-setting (GoTrue configuration), not a migration or anything controllable from this repo's SQL —
-confirmed no `supabase/migrations/*.sql` file or MCP tool can change it.
+Originally found during the 2026-09-04 weak-link remediation pass by reading
+`smoke.owner@bakeflow.test`'s `encrypted_password`: `$2a$06$...`. That one row was the only
+`auth.users` sample that existed at the time, and it had sat untouched since the account's
+creation on 2026-08-15 — its hash never reflected the project's *current* live GoTrue config,
+just whatever cost was in effect (or used to set it) back then.
 
-**Not urgent, not tied to any known exploit** — flagging because it's below the standard
-recommendation, not because of an active incident.
+**Re-verified live 2026-09-05**, at the user's request, before accepting a self-hosting/support-
+ticket workaround for a problem that hadn't been confirmed as real: signed in as
+`smoke.owner`, called `supabase.auth.updateUser({ password: ... })` twice in a row (once to a
+throwaway probe value, once back to the original) via `bakeflow-frontend/scripts/`, and read
+`encrypted_password` after the first change. Result: **`$2a$10$...`** — GoTrue's real
+configured cost is 10 (its own standard default), not 6. Password restored to the original
+value immediately after; `scripts/smoke-signed-in.mjs` confirmed sign-in still works. No stray
+fixture rows or scripts left behind.
+
+**Conclusion:** the cost-6 hash was specific to that one, older password value — most likely
+set before this project's Auth config reached its current state, or by some one-off path that
+predates the smoke script itself. It was never representative of what real users signing up
+today actually get. No Dashboard change needed, no self-hosting or support-ticket workaround
+required. Downgraded to CLOSED rather than deleted, so the false-alarm trail stays visible if
+the question ever comes up again.
 
 **Needed:** the human raises the cost factor to 10+ in the Supabase Dashboard's Auth
 configuration. Existing user password hashes are unaffected until their next password

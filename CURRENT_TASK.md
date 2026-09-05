@@ -1,5 +1,30 @@
 # BakeFlow — Current Task
 
+## ✅ SECURITY DEFINER body-review follow-up DELIVERED — found and fixed a real cross-tenant stock-corruption gap (2026-09-05)
+
+Picked up Item H from the 2026-09-04 plan (scoped, not executed): reviewed the driver-trip/
+delivery `SECURITY DEFINER` functions for internal authorization gaps. Found a real one —
+`complete_driver_field_sale`/`verify_trip_loading` trusted a caller-supplied warehouse-id
+override with zero tenant/branch validation, and because `ingredient_stock_levels`/
+`product_stock_levels` are keyed by `(warehouse_id, item_id)` only (not `tenant_id`), an
+unvalidated warehouse_id could silently mutate another tenant's actual stock levels. Widened
+the search past the original two functions and found the same shape in `complete_ticket` and
+both overloads of `complete_production_batch`/`fail_production_batch` — reported the expanded
+scope to the user before fixing, got approval, fixed all of it.
+
+**Fix, two layers:** (1) root-cause `BEFORE INSERT` trigger on `stock_movements`
+(`stock_movements_guard_warehouse_tenant`) rejecting any warehouse belonging to a different
+tenant — covers every caller, present and future. (2) explicit tenant+branch validation added
+to all 7 affected function bodies for a clean error message. New test file
+`tests/sql/stock_movement_warehouse_tenant_guard.sql`, 10/10 live. Zero regression on 5
+existing suites (66 total assertions, all passing). Note: the production-batch half of this
+was confirmed currently unreachable (AD-022 blocks the sync path it would come through) — real
+defense in depth, not a live exploit closed. Full detail in `IMPLEMENTATION_LOG.md` 2026-09-05.
+
+Not yet started: `BLOCKER-028` (expense reversal) — next up per the user's own stated order.
+
+---
+
 ## ✅ Weak-link remediation pass DELIVERED — 6 real fixes, plan-mode approved before any code changed (2026-09-04)
 
 Follow-up to an "attack surfaces / weak links" audit request: a Plan agent designed the fix

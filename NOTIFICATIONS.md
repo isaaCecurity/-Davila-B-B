@@ -4,7 +4,20 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION NEEDED: one password-hashing setting to raise in the Supabase Dashboard (2026-09-04)
+## RESOLVED (was a false alarm): the password-hashing setting flagged yesterday is fine (2026-09-05)
+
+Yesterday's note below said the bcrypt cost factor looked low (6, should be 10+) and asked you
+to raise it in the Dashboard. You asked how SaaS teams work around that on Supabase, and before
+answering that I double-checked whether it was actually true project-wide — it wasn't. The
+`06` reading came from one old test account's password that had sat unchanged since mid-August;
+a fresh password change today produced `$2a$10$...` — the real, current setting is already 10,
+the standard recommendation. **No action needed.** Nothing to change in the Dashboard.
+
+See `BLOCKERS.md` BLOCKER-029 (now closed) for how this was re-verified.
+
+---
+
+## ~~ACTION NEEDED: one password-hashing setting to raise in the Supabase Dashboard (2026-09-04)~~ — superseded above, no longer needed
 
 While going through weak links in the backend, checked how passwords are actually stored.
 They're hashed properly (bcrypt, automatically salted — nothing wrong with the mechanism
@@ -12,10 +25,9 @@ itself), but the "cost" setting — how many rounds of scrambling each password 
 is set lower than what's generally recommended today. Not tied to any actual break-in or
 incident, just below the standard bar.
 
-**What to do:** in the Supabase Dashboard, under Auth settings, raise the password hashing
-cost factor from 6 to 10 or higher. Takes a minute, no code change needed on our side, and
-nobody's existing password breaks or needs to be reset — it only affects passwords going
-forward (next time someone sets or resets theirs).
+**What to do:** ~~in the Supabase Dashboard, under Auth settings, raise the password hashing
+cost factor from 6 to 10 or higher.~~ Turned out to be a stale reading from one old test
+account, not the live setting — see the entry above.
 
 See `BLOCKERS.md` BLOCKER-029 for the technical detail.
 

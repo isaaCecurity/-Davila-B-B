@@ -5,7 +5,92 @@ Never record planned work here.
 
 ---
 
-## 2026-09-04 (latest) · Weak-link remediation pass — 6 real fixes, 3 documentation-only deferrals, 2 items left deliberately deferred
+## 2026-09-05 (latest) · SECURITY DEFINER body-review follow-up finds and fixes a real cross-tenant stock-corruption gap
+
+**Context:** continuing Item H from the 2026-09-04 weak-link remediation plan (scoped but not
+executed), a body-by-body review of the driver-trip/delivery lifecycle `SECURITY DEFINER`
+functions for internal tenant/branch authorization gaps, per the user's explicit request to do
+this item next, before touching `BLOCKER-028`.
+
+**The finding.** Read live bodies (`pg_get_functiondef`) of `start_driver_trip`,
+`depart_driver_trip`, `verify_trip_loading`, `complete_driver_field_sale`,
+`reconcile_driver_trip`, `return_driver_trip`, `guard_delivery_transition`,
+`guard_driver_trip_transition`. `complete_driver_field_sale` and `verify_trip_loading` both
+accept an optional caller-supplied warehouse-id override, validated only when the caller left
+it out (falling back to a properly tenant/branch-scoped default lookup) but trusted blindly
+whenever a caller actually supplied one. Traced the real severity: `ingredient_stock_levels`/
+`product_stock_levels` are uniquely keyed by `(warehouse_id, item_id)` only — **not**
+`tenant_id` — and `apply_stock_movement()` maintains them via
+`INSERT ... ON CONFLICT (warehouse_id, item_id) DO UPDATE`. So an unvalidated warehouse_id
+lets a caller silently mutate ANOTHER tenant's actual stock levels — the `stock_movements`
+audit row still shows the correct (calling) tenant, but the live quantity it updates does not
+care whose warehouse that is. Widened the search beyond the original driver-trip scope
+(`SELECT proname FROM pg_proc WHERE prosrc ILIKE '%insert into public.stock_movements%'`) and
+found the same unvalidated-parameter shape in three more functions outside the original scope:
+`complete_ticket` (sales) and `complete_production_batch`/`fail_production_batch` (production,
+both overloads each). `adjust_stock`, `apply_inventory_adjust`, `apply_inventory_waste`, and
+`return_driver_trip` already validated correctly and needed no change — confirmed by reading
+their bodies too, not assumed. Reported the expanded scope to the user before fixing; user
+approved fixing all of it.
+
+**The fix, two layers, applied live and confirmed via follow-up query for each:**
+1. **Root cause** — new `BEFORE INSERT` trigger `stock_movements_guard_warehouse_tenant` /
+   `guard_stock_movement_warehouse_tenant()` on `stock_movements` itself, rejecting any row
+   whose `warehouse_id` doesn't belong to its own `tenant_id`. Covers every current and future
+   caller in one place, matching how `apply_stock_movement()`'s own negative-stock check
+   already works as a backstop for this table. Confirmed live: fires `BEFORE` the existing
+   `AFTER INSERT` `apply_stock_movement` trigger, doesn't interfere with the `UPDATE`/`DELETE`-
+   only immutability guard.
+2. **UX** — each of the five RPCs (`complete_driver_field_sale`, `verify_trip_loading`,
+   `complete_ticket`, `complete_production_batch` ×2 overloads, `fail_production_batch` ×2
+   overloads) gained explicit tenant+branch validation on its warehouse parameter, matching the
+   pattern `adjust_stock`/`apply_inventory_adjust` already used — a bad request now fails with
+   a clear `warehouse not found at this branch` error instead of the trigger's generic one.
+
+**Important scoping note found mid-fix:** neither overload of `complete_production_batch`/
+`fail_production_batch` is `EXECUTE`-granted to `authenticated`/`anon` at all (confirmed live,
+matches `p3_7_production_output_waste_sync.sql` S3-S6) — the real caller is
+`apply_production_record_output`/`apply_production_record_waste`, which pull `warehouse_id`
+straight from a client-supplied sync payload with zero validation and pass it to the 5-arg
+overload. But per that same suite's O0a/O0b, `'production.record_output'`/
+`'production.record_waste'` are themselves currently rejected outright by
+`sync_operations_domain_operation_check` (AD-022 descopes ingredient tracking, and with it
+production-batch completion via sync, for MVP) — so this whole path is dead/unreachable today.
+The fix is forward-looking defense in depth, not a currently-live hole; documented as such
+rather than overstating severity.
+
+**Migrations** (all applied live via `mcp__supabase__apply_migration`, each confirmed by a
+follow-up `pg_get_functiondef`/`pg_trigger` read, not trusted from the apply call's own
+response): `guard_stock_movement_warehouse_tenant`,
+`fix_complete_driver_field_sale_warehouse_validation`,
+`fix_verify_trip_loading_warehouse_validation`, `fix_complete_ticket_warehouse_validation`,
+`fix_complete_production_batch_warehouse_validation` (+ `_5arg`),
+`fix_fail_production_batch_warehouse_validation` (+ `_5arg`) — 8 migrations total, each with a
+matching committed `.sql` file under `supabase/migrations/` (timestamps 20260905090000 through
+20260905090700) and an in-place patch to `20260809_live_schema.sql` (function bodies, the new
+function/trigger/grant, and a new changelog paragraph).
+
+**New test** `tests/sql/stock_movement_warehouse_tenant_guard.sql` (new file, cross-cutting
+concern gets its own file per the `rate_limit_enforcement.sql`/`table_privilege_audit.sql`
+precedent): T1/T2 test the trigger directly (rejects cross-tenant, allows same-tenant); T3-T7
+call each of the five fixed RPCs with an explicit cross-tenant warehouse id and confirm
+rejection with zero `stock_movements` side effects and the underlying resource left untouched;
+T7 deliberately reuses T6's batch as an implicit double-check that T6 left it truly unmodified.
+10/10 passed live. Zero regression confirmed on the five existing suites that exercise these
+functions: `driver_field_sale_rls.sql` (8/8), `driver_trips_rls.sql` (20/20),
+`sales_write_rls.sql` (26/26), `p3_7_production_sync.sql` (4/4),
+`p3_7_production_output_waste_sync.sql` (8/8, unaffected by design — grant/CHECK checks only).
+
+**Deliberately not done this pass:** the rest of Item H's originally-scoped batch
+(`start_driver_trip`, `depart_driver_trip`, `reconcile_driver_trip`, the two `guard_*`
+triggers) — all read and confirmed clean (no equivalent gap; `start_driver_trip` is in fact
+the existing exemplar the fix pattern was copied from), so no further action needed there. The
+remaining ~25 `SECURITY DEFINER` functions outside this batch (financial/sales domains
+already have dedicated, well-exercised suites) stay unreviewed — not claimed as covered.
+
+---
+
+## 2026-09-04 · Weak-link remediation pass — 6 real fixes, 3 documentation-only deferrals, 2 items left deliberately deferred
 
 **Context:** continuing directly from a "where are potential attack surfaces and weak links"
 audit request. Two live investigations (one direct, one via a targeted Explore agent reading

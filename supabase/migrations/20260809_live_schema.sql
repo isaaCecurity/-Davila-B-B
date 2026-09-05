@@ -77,6 +77,30 @@
 -- (migration cap_sync_batch_operation_count). All four are reflected in this file's GRANT
 -- section and the three named functions' bodies respectively.
 --
+-- FIXED SINCE FIRST GENERATED (2026-09-05, SECURITY DEFINER body-review follow-up):
+-- ingredient_stock_levels/product_stock_levels are uniquely keyed by (warehouse_id, item_id)
+-- only, not tenant_id, and apply_stock_movement() maintains them via
+-- `ON CONFLICT (warehouse_id, item_id) DO UPDATE` -- so any function inserting into
+-- stock_movements with an unvalidated warehouse_id could silently mutate ANOTHER tenant's
+-- actual stock levels. Two layers of fix: (1) new BEFORE INSERT trigger
+-- stock_movements_guard_warehouse_tenant/guard_stock_movement_warehouse_tenant() rejects any
+-- stock_movements row whose warehouse does not belong to its own tenant_id -- the real,
+-- root-cause backstop, covering every caller present and future (migration
+-- guard_stock_movement_warehouse_tenant). (2) five RPCs that accepted an optional
+-- warehouse-id override but validated it only when the caller left it out (trusting it
+-- blindly when supplied) gained their own explicit, friendly validation matching
+-- adjust_stock's existing pattern: complete_driver_field_sale, verify_trip_loading,
+-- complete_ticket, complete_production_batch (both overloads), fail_production_batch (both
+-- overloads) (migrations fix_complete_driver_field_sale_warehouse_validation,
+-- fix_verify_trip_loading_warehouse_validation, fix_complete_ticket_warehouse_validation,
+-- fix_complete_production_batch_warehouse_validation[_5arg],
+-- fix_fail_production_batch_warehouse_validation[_5arg]). adjust_stock, apply_inventory_adjust,
+-- apply_inventory_waste and return_driver_trip already validated correctly and needed no
+-- change. Regression-tested in tests/sql/stock_movement_warehouse_tenant_guard.sql (new, 10/10)
+-- plus zero regression confirmed on driver_field_sale_rls.sql (8/8), driver_trips_rls.sql
+-- (20/20), sales_write_rls.sql (26/26), p3_7_production_sync.sql (4/4), and
+-- p3_7_production_output_waste_sync.sql (8/8).
+--
 -- SCOPE: this file targets the `public` schema plus the minimal `storage`
 -- objects (bucket rows + storage.objects policies) BakeFlow depends on. It
 -- does not attempt to reproduce Supabase-managed schemas (auth, storage's own
@@ -3230,7 +3254,7 @@ DECLARE
   v_tenant  uuid := public.current_tenant_id();
   v_ticket  public.tickets;
   v_trip    public.driver_trips;
-  v_wh      uuid := p_warehouse_id;
+  v_wh      uuid;
   v_items   int;
   v_invoice public.invoices;
   v_item    record;
@@ -3332,7 +3356,24 @@ BEGIN
   -- verify_trip_loading(); deducting from the branch shelf instead would corrupt both
   -- warehouses' stock levels. apply_stock_movement() still refuses to go negative, so an
   -- oversold ticket rolls the whole completion back.
-  v_wh := COALESCE(p_warehouse_id, v_trip.warehouse_id);
+  --
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the ticket's own
+  -- branch -- otherwise a caller could redirect the sale movement onto another tenant's
+  -- warehouse, corrupting that tenant's actual stock levels (ingredient_stock_levels/
+  -- product_stock_levels are keyed by warehouse_id+item only, not tenant_id -- the
+  -- stock_movements_guard_warehouse_tenant trigger is the backstop, this is the specific,
+  -- friendly rejection before it).
+  IF p_warehouse_id IS NOT NULL THEN
+    SELECT id INTO v_wh FROM public.warehouses
+    WHERE id = p_warehouse_id AND tenant_id = v_tenant AND branch_id = v_ticket.branch_id;
+
+    IF v_wh IS NULL THEN
+      RAISE EXCEPTION 'warehouse not found at this branch'
+        USING ERRCODE = 'P0001', DETAIL = json_build_object('code', 'invalid_request')::text;
+    END IF;
+  ELSE
+    v_wh := v_trip.warehouse_id;
+  END IF;
 
   FOR v_item IN
     SELECT product_variant_id, SUM(quantity) AS qty
@@ -3451,7 +3492,21 @@ begin
   select r.product_variant_id into v_variant
   from public.recipes r where r.id = v_batch.recipe_id;
 
-  if v_wh is null then
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the batch's own
+  -- branch -- otherwise a caller could redirect the consume/output movements onto another
+  -- tenant's warehouse, corrupting that tenant's actual stock levels
+  -- (ingredient_stock_levels/product_stock_levels are keyed by warehouse_id+item only, not
+  -- tenant_id -- the stock_movements_guard_warehouse_tenant trigger is the backstop, this
+  -- is the specific, friendly rejection before it).
+  if v_wh is not null then
+    perform 1 from public.warehouses
+    where id = v_wh and tenant_id = v_tenant and branch_id = v_batch.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
+    end if;
+  else
     select id into v_wh from public.warehouses
     where tenant_id = v_tenant and branch_id = v_batch.branch_id and is_default limit 1;
   end if;
@@ -3552,7 +3607,19 @@ begin
       using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition','from', v_batch.status, 'to', 'completed')::text;
   end if;
   select r.product_variant_id into v_variant from public.recipes r where r.id = v_batch.recipe_id;
-  if v_wh is null then
+
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the batch's own
+  -- branch -- see complete_production_batch(p_batch_id,p_actual_quantity,p_ingredient_actuals,
+  -- p_warehouse_id) for the full explanation (this is the sync-dispatcher overload).
+  if v_wh is not null then
+    perform 1 from public.warehouses
+    where id = v_wh and tenant_id = v_tenant and branch_id = v_batch.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
+    end if;
+  else
     select id into v_wh from public.warehouses
     where tenant_id = v_tenant and branch_id = v_batch.branch_id and is_default limit 1;
   end if;
@@ -3622,7 +3689,21 @@ begin
             detail = json_build_object('code', 'invalid_transition', 'reason', 'already_completed')::text;
   end if;
 
-  if v_wh is null then
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the ticket's own
+  -- branch -- otherwise a caller could redirect the sale movement onto another tenant's
+  -- warehouse, corrupting that tenant's actual stock levels (ingredient_stock_levels/
+  -- product_stock_levels are keyed by warehouse_id+item only, not tenant_id -- the
+  -- stock_movements_guard_warehouse_tenant trigger is the backstop, this is the specific,
+  -- friendly rejection before it).
+  if v_wh is not null then
+    perform 1 from public.warehouses
+    where id = v_wh and tenant_id = v_tenant and branch_id = v_order.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
+    end if;
+  else
     select id into v_wh from public.warehouses
     where tenant_id = v_tenant and branch_id = v_order.branch_id and is_default
     limit 1;
@@ -4058,7 +4139,18 @@ begin
             detail = json_build_object('code', 'invalid_transition', 'to', 'failed')::text;
   end if;
 
-  if v_wh is null then
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the batch's own
+  -- branch -- see complete_production_batch for the full explanation (same class of gap,
+  -- the batch-failure sibling of that RPC).
+  if v_wh is not null then
+    perform 1 from public.warehouses
+    where id = v_wh and tenant_id = v_tenant and branch_id = v_batch.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
+    end if;
+  else
     select id into v_wh from public.warehouses
     where tenant_id = v_tenant and branch_id = v_batch.branch_id and is_default limit 1;
   end if;
@@ -4137,7 +4229,19 @@ begin
     raise exception 'invalid_transition: batch is %', coalesce(v_batch.status, 'missing')
       using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition', 'to', 'failed')::text;
   end if;
-  if v_wh is null then
+
+  -- p_warehouse_id, when supplied, must belong to this same tenant and to the batch's own
+  -- branch -- see complete_production_batch for the full explanation (this is the
+  -- sync-dispatcher overload of fail_production_batch).
+  if v_wh is not null then
+    perform 1 from public.warehouses
+    where id = v_wh and tenant_id = v_tenant and branch_id = v_batch.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_transition')::text;
+    end if;
+  else
     select id into v_wh from public.warehouses where tenant_id = v_tenant and branch_id = v_batch.branch_id and is_default limit 1;
   end if;
   if v_wh is null then
@@ -4778,6 +4882,25 @@ begin
 
   return new;
 end $function$;
+
+CREATE OR REPLACE FUNCTION public.guard_stock_movement_warehouse_tenant()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.warehouses w
+    WHERE w.id = NEW.warehouse_id AND w.tenant_id = NEW.tenant_id
+  ) THEN
+    RAISE EXCEPTION 'stock movement warehouse_id % does not belong to tenant %', NEW.warehouse_id, NEW.tenant_id
+      USING ERRCODE = 'P0001',
+            DETAIL = json_build_object('code', 'invalid_request', 'reason', 'warehouse_tenant_mismatch')::text;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.guard_ticket_driver_trip_assignment()
  RETURNS trigger
@@ -6736,7 +6859,21 @@ begin
             detail = json_build_object('code', 'invalid_transition', 'from', v_trip.status)::text;
   end if;
 
-  if v_source is null then
+  -- p_source_warehouse_id, when supplied, must belong to this same tenant and branch --
+  -- otherwise a caller could pull the transfer_out movement from another tenant's
+  -- warehouse, corrupting that tenant's actual stock levels (ingredient_stock_levels/
+  -- product_stock_levels are keyed by warehouse_id+item only, not tenant_id -- the
+  -- stock_movements_guard_warehouse_tenant trigger is the backstop, this is the specific,
+  -- friendly rejection before it).
+  if v_source is not null then
+    perform 1 from public.warehouses
+    where id = v_source and tenant_id = v_tenant and branch_id = v_trip.branch_id;
+
+    if not found then
+      raise exception 'warehouse not found at this branch'
+        using errcode = 'P0001', detail = json_build_object('code', 'invalid_request')::text;
+    end if;
+  else
     select id into v_source from public.warehouses
     where tenant_id = v_tenant and branch_id = v_trip.branch_id and is_default limit 1;
   end if;
@@ -6936,6 +7073,7 @@ CREATE TRIGGER recipes_set_updated_at BEFORE UPDATE ON recipes FOR EACH ROW EXEC
 CREATE TRIGGER refunds_guard_total BEFORE INSERT ON refunds FOR EACH ROW EXECUTE FUNCTION guard_refund_total();
 CREATE TRIGGER refunds_immutable BEFORE DELETE OR UPDATE ON refunds FOR EACH ROW EXECUTE FUNCTION prevent_financial_mutation();
 CREATE TRIGGER stock_movements_apply AFTER INSERT ON stock_movements FOR EACH ROW EXECUTE FUNCTION apply_stock_movement();
+CREATE TRIGGER stock_movements_guard_warehouse_tenant BEFORE INSERT ON stock_movements FOR EACH ROW EXECUTE FUNCTION guard_stock_movement_warehouse_tenant();
 CREATE TRIGGER stock_movements_immutable BEFORE DELETE OR UPDATE ON stock_movements FOR EACH ROW EXECUTE FUNCTION prevent_stock_movement_mutation();
 CREATE TRIGGER sync_devices_set_updated_at BEFORE UPDATE ON sync_devices FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER sync_operations_dispatch AFTER INSERT ON sync_operations FOR EACH ROW WHEN (new.status = ANY (ARRAY['PENDING'::text, 'CONFLICT'::text])) EXECUTE FUNCTION trg_dispatch_sync_operation();
@@ -7681,6 +7819,7 @@ GRANT EXECUTE ON FUNCTION public.guard_payment_relationships() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_production_batch_transition() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_profile_primary_branch() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_refund_total() TO service_role;
+GRANT EXECUTE ON FUNCTION public.guard_stock_movement_warehouse_tenant() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_driver_trip_assignment() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_item_mutation() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_ticket_status_transition() TO service_role;
