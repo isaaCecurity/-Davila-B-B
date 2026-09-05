@@ -1,8 +1,16 @@
 -- BakeFlow — P3.7 FINANCIAL vertical slice: payment.create / payment.reverse / expense.create
+-- / expense.reverse
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/p3_7_financial_sync.sql
 --
 -- EXECUTED 2026-08-30 against project tvfyxpafbpnkneujcnvr: 27/27 passed.
+--
+-- EV1-EV5 replace the old E6 (2026-09-05, BLOCKER-028 resolution): expense.reverse is now
+-- built -- a new expense_reversals table + record_expense_reversal()/apply_expense_reverse(),
+-- mirroring payments/refunds/record_refund()/apply_payment_reverse() exactly (see
+-- IMPLEMENTATION_LOG.md 2026-09-05 for the full design). E6 used to prove the operation was
+-- allowlisted-but-dispatcher-rejected; that is no longer true, so it was replaced rather than
+-- kept alongside a contradicting assertion. S4 added for the same reason S1-S3 exist.
 --
 -- Scope: apply_payment_create(), apply_payment_reverse(), apply_expense_create(), their dispatch
 -- wiring in apply_sync_operation(), and their EXECUTE grants. Does NOT re-test
@@ -49,12 +57,11 @@
 --     not resolved. expenses has no immutability trigger and its own expenses_update RLS policy
 --     permits direct edits, so 'CREATE' (new mutable entity) is the correct operation_type,
 --     unlike payments' 'EVENT'.
---   - expense.reverse is NOT built this pass. AD-021 calls for "append-only + explicit
---     reversal" for expenses at the sync layer, but no reversal RPC, no reversal/correction
---     table, and no correcting-entry trigger exist for expenses anywhere in the live schema --
---     and the live expenses_update RLS policy's direct-edit path actively contradicts the
---     append-only assumption AD-021 wants here. Opened non-blocking **BLOCKER-028** rather than
---     guessed at the semantics.
+--   - expense.reverse (2026-09-05, BLOCKER-028 resolved): built as expense_reversals +
+--     record_expense_reversal()/apply_expense_reverse(), mirroring payments/refunds exactly.
+--     The direct-edit path was narrowed alongside this (guard_expense_amount_immutable() on
+--     expenses -- see tests/sql/financial_write_rls.sql F26b) so the two mechanisms no longer
+--     contradict each other the way BLOCKER-028 originally flagged.
 --   - Revision tracking for a payment's lifecycle (create, then any reversals) lives entirely in
 --     sync_changes keyed by the ORIGINAL payment's entity_id -- payment.create writes revision
 --     1, each payment.reverse against that payment writes coalesce(max(revision),0)+1 -- mirroring
@@ -89,11 +96,16 @@
 --   E3  cash paid_method without cash_session_id -> REJECTED, 22023 invalid_request
 --   E4  cash paid_method with a valid cash_session_id at the operation branch -> APPLIED
 --   E5  baker (not owner/admin/branch_manager/cashier/accountant) cannot create -> REJECTED, 42501
---   E6  expense.reverse (allowlisted, deliberately unbuilt -- BLOCKER-028) -> REJECTED,
---       unsupported_operation_type, exactly like any other not-yet-built entity
+--   EV1 branch_manager expense.reverse (partial) -> APPLIED, revision 2 (same expense
+--       entity_id lifecycle ledger, mirrors R1)
+--   EV2 missing expense_id -> REJECTED, 22023 invalid_request
+--   EV3 reversal amount exceeds remaining expense balance -> REJECTED, P0001 invalid_transition
+--   EV4 cashier (not owner/admin/branch_manager) cannot reverse -> REJECTED, 42501
+--   EV5 nonexistent expense_id -> REJECTED, P0001 (not found)
 --   S1  apply_payment_create is not directly executable by anon or authenticated via PostgREST
 --   S2  apply_payment_reverse is not directly executable by anon or authenticated via PostgREST
 --   S3  apply_expense_create is not directly executable by anon or authenticated via PostgREST
+--   S4  apply_expense_reverse is not directly executable by anon or authenticated via PostgREST
 --
 -- F12 (a driver attempting a driver-trip payment for a trip that is not their own, and who is
 -- not owner/admin/branch_manager) was scoped out of this pass: it requires a second live
@@ -767,7 +779,44 @@ begin
     v_row.status='REJECTED' and v_row.error_code='42501', v_row.status||' '||coalesce(v_row.error_code,''));
 end $$;
 
--- =================== E6: expense.reverse (allowlisted, deliberately unbuilt) ===================
+-- =================== EV1: branch_manager reverses part of an expense ===================
+-- 2026-09-05 (BLOCKER-028 resolution): expense.reverse is now built (expense_reversals +
+-- record_expense_reversal()/apply_expense_reverse(), mirroring payment.reverse/refunds
+-- exactly). Replaces the old E6, which only proved the operation was allowlisted-but-
+-- dispatcher-rejected -- that is no longer true. Mirrors R1's shape one for one.
+do $$
+declare
+  v_opid1 uuid := gen_random_uuid(); v_opid2 uuid := gen_random_uuid();
+  v_row1 public.sync_operations; v_row2 public.sync_operations; v_expense_id uuid;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid1, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'CREATE', 'domain_operation', 'expense.create',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('category', 'ingredients', 'amount', 1000, 'paid_method', 'transfer')
+    )));
+  select * into v_row1 from public.sync_operations where operation_id = v_opid1;
+  v_expense_id := (v_row1.result->>'expense_id')::uuid;
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid2, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('expense_id', v_expense_id, 'amount', 400, 'reason', 'entered twice')
+    )));
+  select * into v_row2 from public.sync_operations where operation_id = v_opid2;
+  insert into _results values ('EV1 branch_manager expense.reverse -> APPLIED, revision 2',
+    v_row2.status='APPLIED' and (v_row2.result->>'revision')='2',
+    v_row2.status || ' ' || v_row2.result::text);
+end $$;
+
+-- =================== EV2: missing expense_id ===================
 do $$
 declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
 begin
@@ -778,14 +827,118 @@ begin
       'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
       'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
       'device_created_at', now()::text,
-      'payload', jsonb_build_object('expense_id', gen_random_uuid())
+      'payload', jsonb_build_object('amount', 100, 'reason', 'x')
     )));
   select * into v_row from public.sync_operations where operation_id = v_opid;
-  insert into _results values ('E6 expense.reverse (unbuilt) -> REJECTED unsupported_operation_type',
-    v_row.status='REJECTED' and v_row.error_code='unsupported_operation_type', v_row.status||' '||coalesce(v_row.error_code,''));
+  insert into _results values ('EV2 missing expense_id -> REJECTED 22023',
+    v_row.status='REJECTED' and v_row.error_code='22023', v_row.status||' '||coalesce(v_row.error_code,''));
 end $$;
 
--- =================== S1/S2/S3: internal handlers not directly executable ===================
+-- =================== EV3: reversal exceeds remaining balance ===================
+do $$
+declare
+  v_opid1 uuid := gen_random_uuid(); v_opid2 uuid := gen_random_uuid();
+  v_row1 public.sync_operations; v_row2 public.sync_operations; v_expense_id uuid;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid1, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'CREATE', 'domain_operation', 'expense.create',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('category', 'ingredients', 'amount', 200, 'paid_method', 'transfer')
+    )));
+  select * into v_row1 from public.sync_operations where operation_id = v_opid1;
+  v_expense_id := (v_row1.result->>'expense_id')::uuid;
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid2, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('expense_id', v_expense_id, 'amount', 300, 'reason', 'too much')
+    )));
+  select * into v_row2 from public.sync_operations where operation_id = v_opid2;
+  insert into _results values ('EV3 reversal exceeds balance -> REJECTED P0001',
+    v_row2.status='REJECTED' and v_row2.error_code='P0001', v_row2.status||' '||coalesce(v_row2.error_code,''));
+end $$;
+
+-- =================== EV4: cashier cannot reverse ===================
+do $$
+declare
+  v_opid1 uuid := gen_random_uuid(); v_opid2 uuid := gen_random_uuid();
+  v_row1 public.sync_operations; v_row2 public.sync_operations; v_expense_id uuid;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid1, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'CREATE', 'domain_operation', 'expense.create',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('category', 'ingredients', 'amount', 200, 'paid_method', 'transfer')
+    )));
+  select * into v_row1 from public.sync_operations where operation_id = v_opid1;
+  v_expense_id := (v_row1.result->>'expense_id')::uuid;
+
+  reset role;
+  delete from public.user_roles where tenant_id='ab000000-0000-4000-8000-00000000da01' and profile_id='aa000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id from public.roles where key='cashier';
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['cashier']
+  )::text, true);
+
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid2, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('expense_id', v_expense_id, 'amount', 50, 'reason', 'x')
+    )));
+  select * into v_row2 from public.sync_operations where operation_id = v_opid2;
+
+  reset role;
+  delete from public.user_roles where tenant_id='ab000000-0000-4000-8000-00000000da01' and profile_id='aa000000-0000-4000-8000-00000000da01';
+  insert into public.user_roles (tenant_id, profile_id, role_id)
+  select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
+  from public.roles where key in ('driver','branch_manager');
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object(
+    'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
+    'roles', array['driver','branch_manager']
+  )::text, true);
+
+  insert into _results values ('EV4 cashier expense.reverse -> REJECTED 42501',
+    v_row2.status='REJECTED' and v_row2.error_code='42501', v_row2.status||' '||coalesce(v_row2.error_code,''));
+end $$;
+
+-- =================== EV5: nonexistent expense ===================
+do $$
+declare v_opid uuid := gen_random_uuid(); v_row public.sync_operations;
+begin
+  perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'operation_id', v_opid, 'tenant_id', 'ab000000-0000-4000-8000-00000000da01',
+      'branch_id', 'ac000000-0000-4000-8000-00000000da01',
+      'entity_id', gen_random_uuid(), 'entity_type', 'expenses',
+      'operation_type', 'EVENT', 'domain_operation', 'expense.reverse',
+      'device_created_at', now()::text,
+      'payload', jsonb_build_object('expense_id', '00000000-0000-4000-8000-000000000000', 'amount', 100, 'reason', 'x')
+    )));
+  select * into v_row from public.sync_operations where operation_id = v_opid;
+  insert into _results values ('EV5 nonexistent expense -> REJECTED P0001',
+    v_row.status='REJECTED' and v_row.error_code='P0001', v_row.status||' '||coalesce(v_row.error_code,''));
+end $$;
+
+-- =================== S1/S2/S3/S4: internal handlers not directly executable ===================
 do $$
 begin
   insert into _results values ('S1 apply_payment_create not directly executable by anon/authenticated',
@@ -797,6 +950,9 @@ begin
   insert into _results values ('S3 apply_expense_create not directly executable by anon/authenticated',
     not has_function_privilege('authenticated', 'public.apply_expense_create(public.sync_operations)', 'EXECUTE')
     and not has_function_privilege('anon', 'public.apply_expense_create(public.sync_operations)', 'EXECUTE'), '');
+  insert into _results values ('S4 apply_expense_reverse not directly executable by anon/authenticated',
+    not has_function_privilege('authenticated', 'public.apply_expense_reverse(public.sync_operations)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.apply_expense_reverse(public.sync_operations)', 'EXECUTE'), '');
 end $$;
 
 reset role;

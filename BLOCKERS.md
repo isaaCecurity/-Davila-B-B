@@ -1723,8 +1723,31 @@ genuinely cross-org operation.
 
 ---
 
-## BLOCKER-028 · `expense.reverse` sync handler — no live reversal mechanism exists for expenses, not built
-**Status:** OPEN (reconsidered and explicitly re-deferred 2026-08-31 — not forgotten; see below) · **Affects:** P3.7 (remaining financial domain_operation coverage) · **Type:** business rule, not yet specified
+## BLOCKER-028 · ~~`expense.reverse` sync handler — no live reversal mechanism exists for expenses~~ — RESOLVED 2026-09-05
+**Status:** RESOLVED · **Affects:** P3.7 (financial `domain_operation` coverage is now complete) · **Type:** was a business rule, now decided and built
+
+**Resolution (2026-09-05):** the user made the decision this blocker was waiting on, walking
+through four questions: (1) design — a new `expense_reversals` table mirroring `refunds`, not
+a wrapper around a direct edit; (2) the existing direct-edit path — narrowed, `amount` can no
+longer be changed via direct `UPDATE`, everything else stays editable; (3) reversal scope —
+partial, capped at the original amount, mirroring `refunds`/`guard_refund_total()`; (4)
+cash-session interaction — no special rule, matching `record_refund()`'s own precedent (no
+cash-session check exists for refunds either).
+
+Built as an exact mirror of the existing `payment.reverse`/`refunds`/`record_refund()`/
+`apply_payment_reverse()` precedent: new table `expense_reversals`, new RPC
+`record_expense_reversal()` (direct/online path), new sync handler `apply_expense_reverse()`
+wired into `apply_sync_operation()`'s dispatch `CASE`, and a new
+`guard_expense_amount_immutable()` trigger closing the direct-edit contradiction this blocker
+originally flagged. `close_cash_session()`'s math is deliberately left unchanged (it doesn't
+net `refunds` against `payments` either, so the same non-netting treatment for
+`expense_reversals` is consistent). Full detail: `IMPLEMENTATION_LOG.md` 2026-09-05.
+Regression-tested live: `tests/sql/financial_write_rls.sql` (37/37, F26/F26b/F27
+revised + F28-F31 new), `tests/sql/p3_7_financial_sync.sql` (33/33, E6 replaced with
+EV1-EV5 + new S4), `table_privilege_audit.sql`/`function_privilege_audit.sql` both
+re-verified clean, `pytest` 12/12.
+
+**Original context (kept for history):**
 
 **2026-08-31 checkpoint:** revisited alongside BLOCKER-026/027 (both resolved that day — see
 above). Presented with the same two concrete design options this blocker already named — a new

@@ -1,4 +1,4 @@
--- BakeFlow — financial write-path security suite (F1..F27, 31 assertions) — P5 (AD-017 MVP scope)
+-- BakeFlow — financial write-path security suite (F1..F31, 37 assertions) — P5 (AD-017 MVP scope)
 --
 --   psql "$BAKEFLOW_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/sql/financial_write_rls.sql
 --
@@ -6,6 +6,15 @@
 -- trail at all -- a new AFTER trigger (log_expense_mutation()/expenses_audit_trail) now
 -- covers direct client INSERT/UPDATE/DELETE. F25-F27 prove it; p3_7_financial_sync.sql's
 -- new E1b assertion proves the same trigger also covers the sync/RPC write path.
+--
+-- F26/F26b/F27 revised and F28-F31 added 2026-09-05 (BLOCKER-028 resolution): expenses now
+-- have a real reversal mechanism (expense_reversals table + record_expense_reversal()),
+-- mirroring payments/refunds/record_refund() exactly, and the direct-edit path is narrowed
+-- so `amount` can no longer be changed in place (guard_expense_amount_immutable()). F26 now
+-- exercises a non-amount field; F26b proves the amount-change refusal; F27's expected
+-- before-amount changed from 15.0000 to 10.0000 since it's never mutated now; F28-F31 cover
+-- record_expense_reversal()'s role gate, success + audit log, cumulative cap, and
+-- cross-tenant rejection.
 --
 -- EXECUTED 2026-08-24 against project tvfyxpafbpnkneujcnvr: 28/28 passed, after finding
 -- and fixing FOUR real live defects during this suite's first-ever authoring/execution
@@ -288,6 +297,7 @@ DECLARE
   v_expense_id uuid;
   v_before     jsonb;
   v_after      jsonb;
+  v_result     jsonb;
 BEGIN
   v_session := public.open_cash_session('da000000-0000-4000-8000-0000000000a1', 1000.0000);
   v_session_id := (v_session->'session'->>'id')::uuid;
@@ -383,37 +393,133 @@ BEGIN
   FROM public.audit_log
   WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'insert';
 
-  -- F26 — a direct client UPDATE (owner/admin/branch_manager/accountant, per
-  -- expenses_update) leaves an audit_log row with correct before/after amounts.
+  -- F26 — a direct client UPDATE of a NON-amount field (owner/admin/branch_manager/
+  -- accountant, per expenses_update) still leaves an audit_log row with correct
+  -- before/after. Changed to `description`, not `amount`, on 2026-09-05 (BLOCKER-028
+  -- resolution): amount is no longer directly editable at all -- see F26b.
+  v_raised := 'no exception';
+  BEGIN
+    UPDATE public.expenses SET description = 'corrected note' WHERE id = v_expense_id;
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  SELECT before, after INTO v_before, v_after FROM public.audit_log
+    WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'update';
+  INSERT INTO _results VALUES ('F26 a direct UPDATE of a non-amount field on expenses leaves an audit_log row with correct before/after',
+    v_raised = 'no exception' AND (v_after->>'description') = 'corrected note' AND (v_after->>'amount')::numeric = 10.0000,
+    'raised: ' || left(v_raised, 100) || ' before=' || coalesce(v_before->>'description','?') || ' after=' || coalesce(v_after->>'description','?'));
+
+  -- F26b — 2026-09-05 (BLOCKER-028 resolution): guard_expense_amount_immutable() now
+  -- refuses any direct UPDATE that changes `amount`, closing the exact contradiction
+  -- with AD-021's append-only-plus-reversal model this blocker flagged. Amount
+  -- corrections must go through record_expense_reversal() instead (F28-F31 below).
   v_raised := 'no exception';
   BEGIN
     UPDATE public.expenses SET amount = 15.0000 WHERE id = v_expense_id;
   EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
   END;
-  SELECT before, after INTO v_before, v_after FROM public.audit_log
-    WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'update';
-  INSERT INTO _results VALUES ('F26 a direct UPDATE on expenses leaves an audit_log row with correct before/after amounts',
-    v_raised = 'no exception' AND (v_before->>'amount')::numeric = 10.0000 AND (v_after->>'amount')::numeric = 15.0000,
-    'raised: ' || left(v_raised, 100) || ' before=' || coalesce(v_before->>'amount','?') || ' after=' || coalesce(v_after->>'amount','?'));
+  INSERT INTO _results VALUES ('F26b a direct UPDATE changing expenses.amount is refused (use record_expense_reversal instead)',
+    v_raised <> 'no exception' AND v_raised LIKE '%amount cannot be changed directly%',
+    'raised: ' || left(v_raised, 150));
 
   -- F27 — `authenticated` has no DELETE grant on expenses at all (verified live; same
   -- "RLS policy present, grant absent" pattern already documented elsewhere in this
   -- project, e.g. TD-016 for tickets) -- expenses_delete is dead code today, not a gap
   -- this pass introduces or needs to close. The trigger itself is still proven correct
   -- here at the owning (non-authenticated) role, since it must fire regardless of which
-  -- privilege level eventually performs a delete.
+  -- privilege level eventually performs a delete. Amount is still 10.0000 -- F26b proved
+  -- it can no longer change.
   RESET ROLE;
   DELETE FROM public.expenses WHERE id = v_expense_id;
   SELECT before, after INTO v_before, v_after FROM public.audit_log
     WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'delete';
   INSERT INTO _results VALUES ('F27 a DELETE on expenses leaves an audit_log row with before populated and after NULL',
-    v_before IS NOT NULL AND (v_before->>'amount')::numeric = 15.0000 AND v_after IS NULL,
+    v_before IS NOT NULL AND (v_before->>'amount')::numeric = 10.0000 AND v_after IS NULL,
     'before=' || coalesce(v_before->>'amount','<null>') || ' after=' || coalesce(v_after::text,'<null>'));
   SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub','d1000000-0000-4000-8000-000000000001',
                       'tenant_id','d0000000-0000-4000-8000-0000000000a1',
                       'roles', json_build_array('owner'))::text, true);
+
+  -- ---- F28-F31: 2026-09-05 (BLOCKER-028 resolution) -- record_expense_reversal() ----
+  -- New standalone expense, org A, amount 20.0000 -- independent of F25-27's (already
+  -- deleted) and F14/F15's session-linked one, so nothing here can disturb F12/13/16's
+  -- already-closed till reconciliation.
+  INSERT INTO public.expenses (id, tenant_id, branch_id, category, amount, paid_method, created_by)
+  VALUES ('d7000000-0000-4000-8000-0000000000a1','d0000000-0000-4000-8000-0000000000a1',
+          'da000000-0000-4000-8000-0000000000a1','other',20.0000,'transfer',
+          'd1000000-0000-4000-8000-000000000001');
+
+  -- F28 — role gate: a cashier may not reverse an expense (mirrors record_refund()'s
+  -- own actor list, which likewise excludes cashier/accountant).
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','d1000000-0000-4000-8000-000000000001',
+                      'tenant_id','d0000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('cashier'))::text, true);
+  v_raised := 'no exception';
+  BEGIN
+    PERFORM public.record_expense_reversal('d7000000-0000-4000-8000-0000000000a1'::uuid, 5.0000, 'wrong category');
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('F28 record_expense_reversal() refuses a cashier',
+    v_raised <> 'no exception', 'raised: ' || left(v_raised, 100));
+
+  -- F29 — owner reverses part of the expense: succeeds, row created, audit-logged.
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','d1000000-0000-4000-8000-000000000001',
+                      'tenant_id','d0000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('owner'))::text, true);
+  v_raised := 'no exception';
+  v_result := NULL;
+  BEGIN
+    v_result := public.record_expense_reversal('d7000000-0000-4000-8000-0000000000a1'::uuid, 14.0000, 'wrong category, corrected');
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('F29 owner reverses part of an expense (14 of 20)',
+    v_raised = 'no exception' AND (v_result->'reversal'->>'amount')::numeric = 14.0000,
+    'raised: ' || left(v_raised, 100) || ' result=' || coalesce(v_result::text,'<null>'));
+
+  INSERT INTO _results
+  SELECT 'F29b the reversal leaves an audit_log row (entity_type=expense_reversal, action=insert)',
+    count(*) = 1, 'audit_log rows = ' || count(*)
+  FROM public.audit_log
+  WHERE entity_type = 'expense_reversal' AND action = 'insert'
+    AND (after->>'expense_id') = 'd7000000-0000-4000-8000-0000000000a1';
+
+  -- F30 — cumulative cap: 14 already reversed, 20 total -- 7 more would exceed the
+  -- remaining 6. Mirrors guard_refund_total()'s own cap check for payments.
+  v_raised := 'no exception';
+  BEGIN
+    PERFORM public.record_expense_reversal('d7000000-0000-4000-8000-0000000000a1'::uuid, 7.0000, 'over-reversal attempt');
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('F30 a reversal exceeding the remaining balance is refused (14 + 7 > 20)',
+    v_raised <> 'no exception' AND v_raised LIKE '%reversible expense balance%',
+    'raised: ' || left(v_raised, 150));
+
+  -- F31 — a real expense belonging to a DIFFERENT tenant (org B) resolves to "not
+  -- found" when org A's owner tries to reverse it -- the tenant_id filter in the fetch,
+  -- same shape as record_refund()'s own payment lookup. Inserted at the owning role
+  -- (RESET ROLE) since expenses_insert's own WITH CHECK requires tenant_id =
+  -- current_tenant_id(), which is org A for the rest of this block.
+  RESET ROLE;
+  INSERT INTO public.expenses (id, tenant_id, branch_id, category, amount, paid_method, created_by)
+  VALUES ('d7000000-0000-4000-8000-0000000000b1','d0000000-0000-4000-8000-0000000000b1',
+          'db000000-0000-4000-8000-0000000000b1','other',20.0000,'transfer',
+          'd1000000-0000-4000-8000-000000000001');
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub','d1000000-0000-4000-8000-000000000001',
+                      'tenant_id','d0000000-0000-4000-8000-0000000000a1',
+                      'roles', json_build_array('owner'))::text, true);
+  v_raised := 'no exception';
+  BEGIN
+    PERFORM public.record_expense_reversal('d7000000-0000-4000-8000-0000000000b1'::uuid, 1.0000, 'cross-tenant attempt');
+  EXCEPTION WHEN OTHERS THEN v_raised := SQLERRM;
+  END;
+  INSERT INTO _results VALUES ('F31 record_expense_reversal() refuses a real expense belonging to a different tenant (not found)',
+    v_raised <> 'no exception' AND v_raised LIKE '%expense not found%',
+    'raised: ' || left(v_raised, 100));
 END
 $cash$;
 

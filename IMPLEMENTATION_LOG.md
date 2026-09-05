@@ -5,7 +5,96 @@ Never record planned work here.
 
 ---
 
-## 2026-09-05 (latest) · SECURITY DEFINER body-review follow-up finds and fixes a real cross-tenant stock-corruption gap
+## 2026-09-05 (latest) · BLOCKER-028 resolved — expense reversal mechanism built, mirroring payments/refunds exactly
+
+**Context:** the user asked to resolve `BLOCKER-028` (open since 2026-08-30, re-deferred
+2026-08-31) right after the SECURITY DEFINER body-review follow-up below, and asked to be
+walked through a series of clarifying questions first rather than guessing the design.
+
+**Decisions the user made, via four questions:**
+1. **Design:** a new `expense_reversals` table mirroring `refunds`, not a sync-facing wrapper
+   around a direct edit.
+2. **Existing direct-edit path:** narrow it — `amount` can no longer change via direct
+   `UPDATE`; every other field (description, category, receipt_url, etc.) stays editable.
+3. **Reversal scope:** partial, capped at the original amount — mirrors `refunds`/
+   `guard_refund_total()` exactly.
+4. **Cash-session interaction:** no special rule. Explained the tradeoff concretely first
+   (`close_cash_session()` computes `expected_cash` once at close time and never
+   recalculates), then pointed out `record_refund()` already has zero cash-session check
+   either — the user chose to match that existing precedent rather than invent a new rule
+   expenses alone would have.
+
+**Design found to be an exact, already-live precedent** — `payment.reverse`/`refunds`/
+`record_refund()`/`apply_payment_reverse()` — mirrored one-to-one rather than designed from
+scratch, after reading each of those live via `pg_get_functiondef`/`pg_policies` first (role
+gate, cap-check shape, grant pattern, sync-handler shape, dispatcher wiring).
+
+**Built, applied live, each confirmed via a follow-up read (never trusted the apply call's
+own response):**
+- New table `expense_reversals` — same shape as `refunds` (`expense_id`, `amount`, `reason`,
+  `reversed_at`, soft-delete pair). RLS `SELECT`+`INSERT` policies. **Found and fixed a real
+  grant-drift bug immediately via `table_privilege_audit.sql`**: Supabase's default
+  privileges auto-granted `authenticated` `UPDATE`/`DELETE` with no matching policy (revoked)
+  — the exact class of bug that test exists to catch, caught on the very next new table.
+  **Second fix, found by comparing against the live `refunds` grants directly** (not just the
+  audit test, which wouldn't have flagged this): `authenticated` was granted direct `INSERT`
+  too, but the real live `refunds` table grants `authenticated` `SELECT` only — all refund
+  creation goes through `record_refund()`'s `SECURITY DEFINER` escalation, never a direct
+  client insert. Revoked the `INSERT` grant on `expense_reversals` to match exactly, since the
+  original plan explicitly said "mirrors refunds exactly" and this is the truer mirror (fewer
+  live write paths for the same data, and the RPC path enforces `created_by = auth.uid()`
+  implicitly while a hypothetical direct insert would not have).
+- `record_expense_reversal(p_expense_id, p_amount, p_reason)` — direct/online RPC, mirrors
+  `record_refund()` line for line: role gate `{owner,admin,branch_manager}` (deliberately
+  excludes `accountant`, matching `record_refund()`'s own list, even though the broader
+  `expenses_update` policy still names it for non-amount edits — Accountant is also disabled
+  for MVP 1 per CLAUDE.md), amount/reason validation, cumulative cap at the original expense
+  amount, branch check, `log_audit_event`.
+- `apply_expense_reverse(p_operation)` — sync-dispatcher handler, mirrors
+  `apply_payment_reverse()` line for line (independent implementation, not delegating to
+  `record_expense_reversal()` — same relationship `apply_payment_reverse()`/`record_refund()`
+  already have). Wired into `apply_sync_operation()`'s dispatch `CASE` for `'expense.reverse'`
+  — no `domain_operation` CHECK change needed, it's been allowlisted since AD-021.
+- `guard_expense_amount_immutable()` — new `BEFORE UPDATE ON expenses` trigger, raises if
+  `NEW.amount IS DISTINCT FROM OLD.amount`. Closes the exact contradiction `BLOCKER-028`
+  flagged (unrestricted direct amount edits alongside an append-only-plus-reversal model).
+- Deliberately unchanged: `close_cash_session()`'s `expected_cash` formula — it already
+  doesn't net `refunds` against `payments`, so not netting `expense_reversals` against
+  `expenses` the same way is consistent with existing behavior, not an oversight.
+
+**Migrations** (6, each with a matching committed `.sql` file, timestamps 20260905100000
+through 20260905100400, plus an in-place patch to `20260809_live_schema.sql`):
+`create_expense_reversals_table`, `revoke_dead_authenticated_grants_expense_reversals`,
+`revoke_direct_insert_expense_reversals`, `create_record_expense_reversal`,
+`create_apply_expense_reverse_and_wire_dispatcher`, `create_guard_expense_amount_immutable`.
+
+**Tests, run live end to end:**
+- `tests/sql/financial_write_rls.sql`: F26 changed to exercise a non-amount field (`amount`
+  can no longer be tested via direct edit — the very case it used to test), new **F26b**
+  proves the amount-change refusal, F27's expected before-amount corrected from 15.0000 to
+  10.0000 (never mutated now), new **F28-F31** cover `record_expense_reversal()`'s role gate,
+  success + audit log, cumulative cap, and cross-tenant rejection (a real cross-tenant
+  `expenses` row in org B, not a nonexistent id — a stronger boundary test). **37/37 passed
+  live**, confirming both the new coverage and zero regression on F1-F25's original math
+  (including F12/F13/F16's till reconciliation, untouched by any of the new fixtures).
+- `tests/sql/p3_7_financial_sync.sql`: old **E6** ("`expense.reverse` unbuilt → REJECTED") was
+  no longer true, so replaced (not kept alongside a contradicting assertion) with **EV1-EV5**
+  mirroring `R1-R5`'s shape exactly, plus new **S4** (`apply_expense_reverse` not directly
+  executable). **33/33 passed live.**
+- Re-ran `table_privilege_audit.sql` and `function_privilege_audit.sql` in full after every
+  grant change — both clean.
+- A background agent independently re-ran both financial suites in full a second time after
+  the `INSERT` grant revoke specifically, to confirm that revoke caused zero regression (no
+  assertion in either suite depends on a direct client insert into `expense_reversals`) —
+  confirmed 37/37 and 33/33 again.
+- `.venv/Scripts/python.exe -m pytest -q`: 12/12.
+
+**`BLOCKERS.md`**: `BLOCKER-028` marked RESOLVED, original context kept for history per this
+project's convention.
+
+---
+
+## 2026-09-05 · SECURITY DEFINER body-review follow-up finds and fixes a real cross-tenant stock-corruption gap
 
 **Context:** continuing Item H from the 2026-09-04 weak-link remediation plan (scoped but not
 executed), a body-by-body review of the driver-trip/delivery lifecycle `SECURITY DEFINER`

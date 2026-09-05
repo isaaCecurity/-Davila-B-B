@@ -1,5 +1,24 @@
 # BakeFlow — Current Task
 
+## ✅ BLOCKER-028 RESOLVED — expense reversal mechanism built (2026-09-05)
+
+User made the design decision this blocker was waiting on (asked a series of clarifying
+questions first): new `expense_reversals` table + `record_expense_reversal()`/
+`apply_expense_reverse()`, mirroring the existing `payments`/`refunds`/`record_refund()`/
+`apply_payment_reverse()` precedent one-to-one — partial reversals capped at the original
+amount, direct `amount` edits on `expenses` now blocked (`guard_expense_amount_immutable()`),
+everything else stays editable, no cash-session interaction (matches `record_refund()`'s own
+behavior). Caught and fixed two real grant-drift bugs along the way (Supabase's default
+privileges over-granting the new table, then a closer read of `refunds`' actual live grants
+showing even the `INSERT` grant I gave `authenticated` was more than the real precedent has).
+`financial_write_rls.sql` 37/37, `p3_7_financial_sync.sql` 33/33, both privilege audits clean,
+`pytest` 12/12. Full detail in `IMPLEMENTATION_LOG.md` 2026-09-05.
+
+No open blockers remain (`BLOCKER-023` — `sync_changes` retention — is the only other one
+still OPEN, deferred with its own trigger condition, not touched today).
+
+---
+
 ## ✅ SECURITY DEFINER body-review follow-up DELIVERED — found and fixed a real cross-tenant stock-corruption gap (2026-09-05)
 
 Picked up Item H from the 2026-09-04 plan (scoped, not executed): reviewed the driver-trip/

@@ -101,6 +101,29 @@
 -- (20/20), sales_write_rls.sql (26/26), p3_7_production_sync.sql (4/4), and
 -- p3_7_production_output_waste_sync.sql (8/8).
 --
+-- FIXED SINCE FIRST GENERATED (2026-09-05, BLOCKER-028 resolution): expenses now have a real
+-- reversal mechanism, mirroring payments/refunds/record_refund()/apply_payment_reverse()
+-- exactly. New table expense_reversals (same shape as refunds: expense_id, amount, reason,
+-- reversed_at, soft-delete pair; RLS SELECT + INSERT policies, authenticated granted SELECT
+-- only -- all writes go through the SECURITY DEFINER RPCs below, matching refunds' own live
+-- grant pattern exactly, confirmed live before finalizing). New function
+-- record_expense_reversal(p_expense_id, p_amount, p_reason) (the direct/online RPC, mirrors
+-- record_refund(): role gate owner/admin/branch_manager, amount/reason validation,
+-- cumulative cap at the original expense amount, branch check, audit log) and
+-- apply_expense_reverse(p_operation) (the sync-dispatcher handler, mirrors
+-- apply_payment_reverse(), wired into apply_sync_operation()'s dispatch CASE for
+-- 'expense.reverse', allowlisted since AD-021 but previously REJECTED
+-- unsupported_operation_type). New trigger guard_expense_amount_immutable() (BEFORE UPDATE
+-- ON expenses) narrows the existing direct-edit path: amount can no longer be changed in
+-- place; every other field (description, category, receipt_url, etc.) stays editable exactly
+-- as before. close_cash_session()'s expected-cash math is deliberately unchanged -- it
+-- already doesn't net refunds against payments, so not netting expense_reversals against
+-- expenses the same way is consistent, not an oversight. Regression-tested:
+-- tests/sql/financial_write_rls.sql F26/F26b/F27 revised, F28-F31 added (37/37 total);
+-- tests/sql/p3_7_financial_sync.sql's old E6 replaced with EV1-EV5 plus a new S4 (33/33
+-- total); tests/sql/table_privilege_audit.sql and tests/sql/function_privilege_audit.sql both
+-- re-verified clean.
+--
 -- SCOPE: this file targets the `public` schema plus the minimal `storage`
 -- objects (bucket rows + storage.objects policies) BakeFlow depends on. It
 -- does not attempt to reproduce Supabase-managed schemas (auth, storage's own
@@ -389,6 +412,24 @@ CREATE TABLE public.driver_trips (
 ,  CONSTRAINT driver_trips_status_check CHECK ((status = ANY (ARRAY['created'::text, 'loading'::text, 'ready_to_depart'::text, 'in_transit'::text, 'returning'::text, 'reconciled'::text, 'completed'::text])))
 ,  CONSTRAINT driver_trips_variance_needs_note CHECK (((cash_variance IS NULL) OR (cash_variance = (0)::numeric) OR (COALESCE(btrim(cash_variance_note), ''::text) <> ''::text)))
 ,  CONSTRAINT driver_trips_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.expense_reversals (
+  id uuid DEFAULT gen_random_uuid() NOT NULL
+,  tenant_id uuid NOT NULL
+,  branch_id uuid NOT NULL
+,  expense_id uuid NOT NULL
+,  amount numeric(19,4) NOT NULL
+,  reason text NOT NULL
+,  reversed_at timestamp with time zone DEFAULT now() NOT NULL
+,  created_at timestamp with time zone DEFAULT now() NOT NULL
+,  updated_at timestamp with time zone DEFAULT now() NOT NULL
+,  created_by uuid
+,  deleted_at timestamp with time zone
+,  deleted_by uuid
+,  CONSTRAINT expense_reversals_amount_check CHECK ((amount > (0)::numeric))
+,  CONSTRAINT expense_reversals_reason_check CHECK ((length(btrim(reason)) > 0))
+,  CONSTRAINT expense_reversals_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE public.expenses (
@@ -1952,6 +1993,80 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION public.apply_expense_reverse(p_operation sync_operations)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_payload   jsonb := p_operation.payload;
+  v_expense_id uuid := nullif(v_payload ->> 'expense_id', '')::uuid;
+  v_amount    numeric := nullif(v_payload ->> 'amount', '')::numeric;
+  v_reason    text := nullif(btrim(v_payload ->> 'reason'), '');
+  v_expense   public.expenses;
+  v_reversed  numeric;
+  v_reversal  public.expense_reversals;
+  v_new_rev   bigint;
+BEGIN
+  IF v_expense_id IS NULL THEN
+    RAISE EXCEPTION 'expense.reverse payload requires expense_id'
+      USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  IF v_amount IS NULL OR v_amount <= 0 THEN
+    RAISE EXCEPTION 'expense.reverse payload requires amount greater than zero'
+      USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  IF v_reason IS NULL OR length(v_reason) > 1000 THEN
+    RAISE EXCEPTION 'expense.reverse payload requires reason (1-1000 characters)'
+      USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  -- Role eligibility mirrors record_expense_reversal()'s own actor list verbatim
+  -- (owner/admin/branch_manager); tenant-scoped per AD-006.
+  IF NOT public.has_role_in(p_operation.actor_id, p_operation.tenant_id,
+       ARRAY['owner','admin','branch_manager']) THEN
+    RAISE EXCEPTION 'insufficient_role: actor may not reverse expenses in this organization'
+      USING errcode = '42501', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  SELECT * INTO v_expense FROM public.expenses
+   WHERE id = v_expense_id AND tenant_id = p_operation.tenant_id
+   FOR UPDATE;
+  IF v_expense.id IS NULL THEN
+    RAISE EXCEPTION 'expense not found in this organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  IF v_expense.branch_id IS DISTINCT FROM p_operation.branch_id THEN
+    RAISE EXCEPTION 'expense does not belong to the operation branch'
+      USING errcode = '22023', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  SELECT coalesce(sum(amount),0) INTO v_reversed FROM public.expense_reversals
+   WHERE expense_id = v_expense_id AND tenant_id = p_operation.tenant_id;
+  IF v_reversed + v_amount > v_expense.amount THEN
+    RAISE EXCEPTION 'invalid_transition: reversal of % exceeds the % remaining on this expense',
+      v_amount, v_expense.amount - v_reversed
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_transition',
+        'expense_amount', v_expense.amount, 'already_reversed', v_reversed)::text;
+  END IF;
+
+  INSERT INTO public.expense_reversals (tenant_id, branch_id, expense_id, amount, reason, created_by)
+  VALUES (p_operation.tenant_id, v_expense.branch_id, v_expense.id, v_amount, v_reason, p_operation.actor_id)
+  RETURNING * INTO v_reversal;
+
+  SELECT coalesce(max(revision),0)+1 INTO v_new_rev FROM public.sync_changes WHERE entity_id = v_expense.id;
+
+  INSERT INTO public.sync_changes (tenant_id, branch_id, entity_type, entity_id,
+    operation_type, domain_operation, revision, changed_by, payload)
+  VALUES (v_expense.tenant_id, v_expense.branch_id, 'expenses', v_expense.id,
+    'EVENT', 'expense.reverse', v_new_rev, p_operation.actor_id, to_jsonb(v_reversal));
+
+  RETURN jsonb_build_object('reversal_id', v_reversal.id, 'expense_id', v_expense.id,
+    'amount', v_reversal.amount, 'revision', v_new_rev);
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.apply_inventory_adjust(p_operation sync_operations)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -2783,6 +2898,8 @@ BEGIN
       v_result := public.apply_payment_reverse(v_op);
     ELSIF v_op.domain_operation = 'expense.create' THEN
       v_result := public.apply_expense_create(v_op);
+    ELSIF v_op.domain_operation = 'expense.reverse' THEN
+      v_result := public.apply_expense_reverse(v_op);
     ELSE
       UPDATE public.sync_operations
          SET status = 'REJECTED', error_code = 'unsupported_operation_type',
@@ -4539,6 +4656,22 @@ begin
 end
 $function$;
 
+CREATE OR REPLACE FUNCTION public.guard_expense_amount_immutable()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF NEW.amount IS DISTINCT FROM OLD.amount THEN
+    RAISE EXCEPTION 'expense amount cannot be changed directly once recorded -- use record_expense_reversal() instead'
+      USING ERRCODE = 'P0001',
+            DETAIL = json_build_object('code', 'invalid_request', 'reason', 'amount_immutable')::text;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.guard_expense_cash_session()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -5877,6 +6010,70 @@ begin
 end
 $function$;
 
+CREATE OR REPLACE FUNCTION public.record_expense_reversal(p_expense_id uuid, p_amount numeric, p_reason text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant uuid := public.current_tenant_id();
+  v_expense public.expenses;
+  v_reversal public.expense_reversals;
+  v_reversed numeric;
+BEGIN
+  IF NOT public.has_role(ARRAY['owner','admin','branch_manager']) THEN
+    RAISE EXCEPTION 'insufficient_role'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'reversal amount must be greater than zero'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  IF NULLIF(btrim(p_reason), '') IS NULL OR length(p_reason) > 1000 THEN
+    RAISE EXCEPTION 'reversal reason is required and must be <= 1000 characters'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  SELECT * INTO v_expense
+  FROM public.expenses
+  WHERE id = p_expense_id AND tenant_id = v_tenant
+  FOR UPDATE;
+
+  IF v_expense.id IS NULL THEN
+    RAISE EXCEPTION 'expense not found'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  IF NOT public.has_branch_access(v_expense.branch_id) THEN
+    RAISE EXCEPTION 'insufficient_role: expense is outside your branch scope'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  SELECT COALESCE(sum(amount),0) INTO v_reversed
+  FROM public.expense_reversals
+  WHERE expense_id = p_expense_id AND tenant_id = v_tenant;
+
+  IF v_reversed + p_amount > v_expense.amount THEN
+    RAISE EXCEPTION 'reversal exceeds reversible expense balance'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_transition',
+        'expense_amount', v_expense.amount, 'already_reversed', v_reversed)::text;
+  END IF;
+
+  INSERT INTO public.expense_reversals
+    (tenant_id, branch_id, expense_id, amount, reason, created_by)
+  VALUES
+    (v_tenant, v_expense.branch_id, v_expense.id, p_amount, btrim(p_reason), auth.uid())
+  RETURNING * INTO v_reversal;
+
+  PERFORM public.log_audit_event(
+    v_tenant, 'expense_reversal', v_reversal.id, 'insert', NULL, to_jsonb(v_reversal)
+  );
+
+  RETURN jsonb_build_object('reversal', to_jsonb(v_reversal));
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.record_payment(p_order_id uuid, p_amount numeric, p_method text, p_reference text DEFAULT NULL::text, p_cash_session_id uuid DEFAULT NULL::uuid, p_driver_trip_id uuid DEFAULT NULL::uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -7049,6 +7246,7 @@ CREATE TRIGGER driver_trips_set_updated_at BEFORE UPDATE ON driver_trips FOR EAC
 -- 2026-09-04 (add_expenses_audit_trail): AFTER, not BEFORE like the guard trigger below --
 -- this one only observes, never validates or blocks.
 CREATE TRIGGER expenses_audit_trail AFTER INSERT OR UPDATE OR DELETE ON expenses FOR EACH ROW EXECUTE FUNCTION log_expense_mutation();
+CREATE TRIGGER expenses_guard_amount_immutable BEFORE UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION guard_expense_amount_immutable();
 CREATE TRIGGER expenses_guard_cash_session BEFORE INSERT OR UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION guard_expense_cash_session();
 CREATE TRIGGER expenses_set_updated_at BEFORE UPDATE ON expenses FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER ingredients_set_updated_at BEFORE UPDATE ON ingredients FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -7118,6 +7316,8 @@ ALTER TABLE public.document_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.document_sequences FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.driver_trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.driver_trips FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.expense_reversals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expense_reversals FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.ingredient_stock_levels ENABLE ROW LEVEL SECURITY;
@@ -7268,6 +7468,12 @@ CREATE POLICY document_sequences_select ON public.document_sequences AS PERMISSI
 
 CREATE POLICY driver_trips_select ON public.driver_trips AS PERMISSIVE FOR SELECT TO public
   USING (((tenant_id = current_tenant_id()) AND ((driver_id = ( SELECT auth.uid() AS uid)) OR has_branch_access(branch_id)) AND (deleted_at IS NULL)));
+
+CREATE POLICY expense_reversals_insert ON public.expense_reversals AS PERMISSIVE FOR INSERT TO authenticated
+  WITH CHECK (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND has_role(ARRAY['owner'::text, 'admin'::text, 'branch_manager'::text])));
+
+CREATE POLICY expense_reversals_select ON public.expense_reversals AS PERMISSIVE FOR SELECT TO authenticated
+  USING (((tenant_id = current_tenant_id()) AND has_branch_access(branch_id) AND (deleted_at IS NULL)));
 
 CREATE POLICY expenses_delete ON public.expenses AS PERMISSIVE FOR DELETE TO authenticated
   USING (((tenant_id = current_tenant_id()) AND has_role(ARRAY['owner'::text, 'admin'::text])));
@@ -7645,6 +7851,8 @@ GRANT SELECT ON TABLE public.document_sequences TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.document_sequences TO service_role;
 GRANT SELECT ON TABLE public.driver_trips TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.driver_trips TO service_role;
+GRANT SELECT ON TABLE public.expense_reversals TO authenticated;
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.expense_reversals TO service_role;
 GRANT INSERT, SELECT, UPDATE ON TABLE public.expenses TO authenticated;
 GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.expenses TO service_role;
 -- AD-022 (2026-09-01): ingredient/raw-material tracking deactivated for MVP -- the
@@ -7752,6 +7960,7 @@ GRANT EXECUTE ON FUNCTION public.adjust_stock(p_warehouse_id uuid, p_item_type t
 GRANT EXECUTE ON FUNCTION public.apply_customer_create(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_customer_update(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_expense_create(p_operation sync_operations) TO service_role;
+GRANT EXECUTE ON FUNCTION public.apply_expense_reverse(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_inventory_adjust(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_inventory_waste(p_operation sync_operations) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_payment_create(p_operation sync_operations) TO service_role;
@@ -7812,6 +8021,7 @@ GRANT EXECUTE ON FUNCTION public.guard_daily_financial_audit_mutation() TO servi
 GRANT EXECUTE ON FUNCTION public.guard_delivery_transition() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_driver_created_order_assignment() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_driver_trip_transition() TO service_role;
+GRANT EXECUTE ON FUNCTION public.guard_expense_amount_immutable() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_expense_cash_session() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_order_actor_and_assignment() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_order_item_price() TO service_role;
@@ -7851,6 +8061,8 @@ GRANT EXECUTE ON FUNCTION public.process_sync_batch_context_validated(p_device_i
 GRANT EXECUTE ON FUNCTION public.recalculate_ticket_totals() TO service_role;
 GRANT EXECUTE ON FUNCTION public.reconcile_driver_trip(p_trip_id uuid, p_physical_cash numeric, p_variance_note text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.reconcile_driver_trip(p_trip_id uuid, p_physical_cash numeric, p_variance_note text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_expense_reversal(p_expense_id uuid, p_amount numeric, p_reason text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.record_expense_reversal(p_expense_id uuid, p_amount numeric, p_reason text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_payment(p_order_id uuid, p_amount numeric, p_method text, p_reference text, p_cash_session_id uuid, p_driver_trip_id uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.record_payment(p_order_id uuid, p_amount numeric, p_method text, p_reference text, p_cash_session_id uuid, p_driver_trip_id uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_refund(p_payment_id uuid, p_amount numeric, p_reason text) TO authenticated;
