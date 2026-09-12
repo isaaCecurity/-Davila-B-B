@@ -600,7 +600,7 @@ HOME.baker = () => {
     <div class="flush-pad">
       <div class="stat" style="background:var(--cocoa);color:#fff;box-shadow:none">
         <div class="s-top"><span class="k" style="color:rgba(255,255,255,.6)">Today's production</span></div>
-        <div class="v num" style="color:#fff;font-size:var(--t-title-1)">${total.toLocaleString()}</div>
+        <div class="v num" style="color:#fff;font-size:var(--t-title-1)">${total.toLocaleString('en-NG')}</div>
         <div class="sub" style="color:rgba(255,255,255,.55)">units recorded · ${recordedCount} batch${recordedCount === 1 ? '' : 'es'}</div>
       </div>
 
@@ -1256,7 +1256,7 @@ function renderDriverActivity() {
     const batches = DB.productionBatches;
     const records = DB.myProduction;
     const total = records.reduce((s, r) => s + r.qty, 0);
-    return `${appbar({ title:'Production', back: !ROLE_TABS[APP.role].includes('production'), sub:`${total.toLocaleString()} units today` })}
+    return `${appbar({ title:'Production', back: !ROLE_TABS[APP.role].includes('production'), sub:`${total.toLocaleString('en-NG')} units today` })}
     <div class="body -with-tabbar">
       <button class="btn -primary -block -lg" data-nav="record-production">${icon('plus', 18)} Record production</button>
 

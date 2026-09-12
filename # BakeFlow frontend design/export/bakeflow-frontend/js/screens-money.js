@@ -157,7 +157,7 @@ SCREENS.finance = {
             <div style="flex:1">
               <div class="hp-label">Net profit · ${PERIOD_LABEL[per].toLowerCase()}</div>
               <div class="hero-figure num" data-figure="${f.profit}" data-short="1" data-from="${f.profit * .75}">${moneyShort(f.profit)}</div>
-              <div class="hp-sub">${f.margin}% margin on ${f.orders.toLocaleString()} orders</div>
+              <div class="hp-sub">${f.margin}% margin on ${f.orders.toLocaleString('en-NG')} orders</div>
             </div>
             ${deltaChip(f.dProf, true)}
           </div>
@@ -588,7 +588,7 @@ SCREENS['add-expense'] = {
     setTimeout(() => amt.focus(), 300);
     amt.oninput = () => {
       const n = +amt.value.replace(/[^\d]/g, '') || 0;
-      amt.value = n ? n.toLocaleString() : '';
+      amt.value = n ? n.toLocaleString('en-NG') : '';
       echo.textContent = money(n);
       save.disabled = n <= 0;
     };
@@ -802,7 +802,7 @@ SCREENS.cash = {
       body: `<p class="label" style="margin-bottom:var(--s-4);line-height:1.5">
           Count what is physically in the drawer. BakeFlow compares it with ${money(DB.cash.expected)} expected.</p>
         <div class="amount-input"><span class="cur">₦</span>
-          <input id="cc-amt" type="text" inputmode="numeric" value="${(APP.cashCounted ?? DB.cash.actual).toLocaleString()}"></div>
+          <input id="cc-amt" type="text" inputmode="numeric" value="${(APP.cashCounted ?? DB.cash.actual).toLocaleString('en-NG')}"></div>
         <div class="recap" style="margin-top:var(--s-4)">
           <div class="r-line"><span>Expected</span><span class="spacer"></span><b>${money(DB.cash.expected)}</b></div>
           <div class="r-rule"></div>
@@ -816,7 +816,7 @@ SCREENS.cash = {
         const a = $('#cc-amt', s), d = $('#cc-diff', s);
         a.oninput = () => {
           const n = +a.value.replace(/[^\d]/g, '') || 0;
-          a.value = n ? n.toLocaleString() : '';
+          a.value = n ? n.toLocaleString('en-NG') : '';
           const diff = n - DB.cash.expected;
           d.textContent = diff === 0 ? 'Balanced' : money(diff);
           d.style.color = diff === 0 ? 'var(--success)' : diff < 0 ? 'var(--error)' : 'var(--warning)';
@@ -947,7 +947,7 @@ function openCountDrawerSheet() {
     title:'Count the drawer',
     body: `<p class="label" style="margin-bottom:var(--s-4);line-height:1.5">Count what is physically in the drawer. Expected: ${money(expected)}.</p>
       <div class="amount-input"><span class="cur">₦</span>
-        <input id="mc-amt" type="text" inputmode="numeric" value="${expected.toLocaleString()}"></div>
+        <input id="mc-amt" type="text" inputmode="numeric" value="${expected.toLocaleString('en-NG')}"></div>
       <div class="recap" id="mc-recap" style="margin-top:var(--s-4)"></div>
       <label class="field" id="mc-note-wrap" style="text-align:left;margin-top:var(--s-4);display:none">
         <span class="f-label">Variance note</span>
@@ -964,7 +964,7 @@ function openCountDrawerSheet() {
         btn.disabled = diff !== 0 && !$('#mc-variance-note', s).value.trim();
         btn.dataset.counted = counted; btn.dataset.diff = diff;
       };
-      a.oninput = () => { const n = +a.value.replace(/[^\d]/g, '') || 0; a.value = n ? n.toLocaleString() : ''; update(); };
+      a.oninput = () => { const n = +a.value.replace(/[^\d]/g, '') || 0; a.value = n ? n.toLocaleString('en-NG') : ''; update(); };
       $('#mc-variance-note', s).addEventListener('input', update);
       update();
       btn.onclick = () => {
@@ -1008,7 +1008,7 @@ SCREENS['add-my-expense'] = {
     const amt = $('#me-amt', el), save = $('#me-save', el), echo = $('#me-echo', el);
     amt.addEventListener('input', () => {
       const n = +amt.value.replace(/[^\d]/g, '') || 0;
-      amt.value = n ? n.toLocaleString() : '';
+      amt.value = n ? n.toLocaleString('en-NG') : '';
       echo.textContent = money(n);
       save.disabled = n <= 0;
     });

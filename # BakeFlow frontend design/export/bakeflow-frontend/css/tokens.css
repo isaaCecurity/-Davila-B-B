@@ -4,6 +4,8 @@
    ========================================================================== */
 
 :root {
+  color-scheme: light;
+
   /* ---------- Brand & surface ---------- */
   --cocoa:            #2A211C;   /* primary brand / text / strong actions */
   --cocoa-soft:       #43362E;   /* pressed / hover on cocoa */
@@ -92,6 +94,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --cocoa:            #EFE7DC;
   --cocoa-soft:       #D8CCBC;
   --cream:            #17130F;

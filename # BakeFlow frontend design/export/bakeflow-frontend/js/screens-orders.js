@@ -450,7 +450,7 @@ function paymentSheet(o) {
     title: 'Record payment',
     body: `
       <div class="amount-input" style="margin-bottom:var(--s-5)">
-        <span class="cur">₦</span><input id="pay-amt" type="text" inputmode="numeric" value="${outstanding.toLocaleString()}">
+        <span class="cur">₦</span><input id="pay-amt" type="text" inputmode="numeric" value="${outstanding.toLocaleString('en-NG')}">
       </div>
       <div class="group-label"><span class="eyebrow">Method</span><i></i></div>
       <div class="grid-3" style="margin-bottom:var(--s-5)">
@@ -469,7 +469,7 @@ function paymentSheet(o) {
       const amt = $('#pay-amt', s), echo = $('#pay-echo', s);
       amt.oninput = () => {
         const n = +amt.value.replace(/[^\d]/g, '') || 0;
-        amt.value = n ? n.toLocaleString() : '';
+        amt.value = n ? n.toLocaleString('en-NG') : '';
         echo.textContent = money(n);
       };
       $$('[data-method]', s).forEach(b => b.onclick = () => {
@@ -586,7 +586,7 @@ SCREENS['new-ticket'] = {
       const receivedInput = $('#draft-received', el);
       receivedInput?.addEventListener('input', () => {
         const n = +receivedInput.value.replace(/[^\d]/g, '') || 0;
-        receivedInput.value = n.toLocaleString();
+        receivedInput.value = n.toLocaleString('en-NG');
         d.received = n;
         const total = draftTotal(d), credit = Math.max(total - n, 0);
         $('#draft-received-echo').textContent = money(n);
@@ -762,7 +762,7 @@ function draftStepReview(d) {
       return `<div class="section">
       <div class="section-head"><h3>Amount received</h3></div>
       <div class="amount-input"><span class="cur">₦</span>
-        <input id="draft-received" type="text" inputmode="numeric" value="${received.toLocaleString()}"></div>
+        <input id="draft-received" type="text" inputmode="numeric" value="${received.toLocaleString('en-NG')}"></div>
       <div class="card" style="margin-top:var(--s-3)"><div class="recap">
         <div class="r-line"><span>Total sale</span><span class="spacer"></span><b>${money(total)}</b></div>
         <div class="r-line"><span>Received now</span><span class="spacer"></span><b id="draft-received-echo">${money(received)}</b></div>
@@ -2178,7 +2178,7 @@ function deliverSheet(r) {
           const ri = $('#dlv-received', s);
           ri.oninput = () => {
             const n = +ri.value.replace(/[^\d]/g, '') || 0;
-            ri.value = n ? n.toLocaleString() : '';
+            ri.value = n ? n.toLocaleString('en-NG') : '';
             received = n;
             $('#dlv-change', s).textContent = n >= due ? `Change: ${money(n - due)}` : `Still short by ${money(due - n)}`;
             checkValid();

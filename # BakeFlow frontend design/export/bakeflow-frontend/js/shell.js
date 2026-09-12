@@ -381,7 +381,7 @@ function animateAll(root) {
     const to = +el.dataset.figure;
     const short = el.dataset.short === '1';
     el.dataset.v = el.dataset.from || 0;
-    animateFigure(el, to, short ? moneyShort : (el.dataset.plain === '1' ? (n => Math.round(n).toLocaleString()) : money));
+    animateFigure(el, to, short ? moneyShort : (el.dataset.plain === '1' ? (n => Math.round(n).toLocaleString('en-NG')) : money));
   });
 }
 

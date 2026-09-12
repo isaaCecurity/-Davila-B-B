@@ -178,8 +178,8 @@ set('btn-row-2', `
   <button class="btn -primary -sm">Small</button>
   <button class="btn -secondary -sm">Small</button>
   <span class="fab" style="position:relative;inset:auto">${icon('plus', 22)}</span>
-  <button class="iconbtn -tinted">${icon('filter', 19)}</button>
-  <button class="iconbtn">${icon('search', 19)}</button>`);
+  <button class="iconbtn -tinted" aria-label="Filter">${icon('filter', 19)}</button>
+  <button class="iconbtn" aria-label="Search">${icon('search', 19)}</button>`);
 
 set('btn-row-3', `
   <button class="btn -primary -block -lg">Create order \u00b7 ${money(37000)}</button>
