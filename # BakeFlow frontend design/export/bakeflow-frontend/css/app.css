@@ -373,5 +373,15 @@ h1, h2, h3, h4 { text-wrap: balance; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    /* Without this, an infinite animation still loops — at .01ms per cycle,
+       which reads as a strobe. Collapsing the count is the part that matters. */
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  html { scroll-behavior: auto !important; }
 }

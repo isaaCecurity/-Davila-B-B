@@ -8,7 +8,6 @@
 (function () {
   'use strict';
 
-  var reduced = window.SC.reduced;
 
   /* =================================================== 1. SPLASH HAND-OFF */
   var WORD = 'BakeFlow';
@@ -26,7 +25,7 @@
   var brandMark = document.getElementById('brand-mark');
   var onboarding = document.getElementById('onboarding');
 
-  var SPLASH_MS = reduced ? 200 : 2600;
+  var SPLASH_MS = window.SC.reduced ? 200 : 2600;
 
   function handOff() {
     // Measure both logos and fly the big one onto the small one. Because the
@@ -45,7 +44,7 @@
     // both at once made it look like the animation started twice
     onboarding.classList.add('is-ready');
 
-    if (reduced) {
+    if (window.SC.reduced) {
       start(0);
       splash.remove();
       brand.classList.add('is-landed');
@@ -135,7 +134,7 @@
 
   function settleTo(target, fromOffset) {
     if (settleCancel) settleCancel();
-    if (reduced) {
+    if (window.SC.reduced) {
       track.style.transform = 'translate3d(' + (-target * 100) + '%,0,0)';
       clearParallax();
       return;
@@ -228,7 +227,7 @@
 
   function schedule() {
     stop();
-    if (reduced) return;
+    if (window.SC.reduced) return;
     timer = setTimeout(function () { if (!paused) goTo(index + 1); }, SLIDE_MS);
   }
   function stop() { if (timer) { clearTimeout(timer); timer = null; } }
@@ -331,7 +330,7 @@
 
     // dough bloom: a warm circle grows out of the button, covers the phone,
     // then melts away to reveal the sign-in screen
-    if (!reduced) {
+    if (!window.SC.reduced) {
       var phR = phone.getBoundingClientRect();
       var cx = ctaR.left + ctaR.width / 2 - phR.left;
       var cy = ctaR.top + ctaR.height / 2 - phR.top;
@@ -357,7 +356,7 @@
     // start the sign-in screen's staged entrance just as the dough clears
     setTimeout(function () {
       window.dispatchEvent(new CustomEvent('sc:signin-show'));
-    }, reduced ? 0 : 480);
+    }, window.SC.reduced ? 0 : 480);
     // move focus so keyboard/screen-reader users follow the push
     setTimeout(function () { backBtn.focus({ preventScroll: true }); }, 900);
   }
@@ -396,7 +395,7 @@
   var backDrag = false, bStartX = 0, bStartY = 0, bLocked = null, bW = 1, bDx = 0;
 
   nextScreen.addEventListener('pointerdown', function (e) {
-    if (!pushed || reduced) return;
+    if (!pushed || window.SC.reduced) return;
     // only from the left ~40px, like iOS
     var r = nextScreen.getBoundingClientRect();
     if (e.clientX - r.left > 40) return;

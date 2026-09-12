@@ -215,5 +215,16 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* design-system.html loads tokens + components + ds, but NOT app.css —
+     so it needs its own global collapse rather than inheriting app.css's. */
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  html { scroll-behavior: auto !important; }
   .ds-motion-bar.-run i { animation: none; }
 }

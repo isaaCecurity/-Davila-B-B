@@ -7,6 +7,15 @@
 let _cid = 0;
 const uid = p => `${p}${++_cid}`;
 
+/**
+ * SMIL <animate> is not governed by the prefers-reduced-motion CSS media
+ * query, so every chart animation has to be gated in markup. Each animated
+ * shape already carries its FINAL value as a static attribute and animates
+ * from zero with fill="freeze" — so dropping the <animate> child renders the
+ * finished chart immediately, with no motion and no missing data.
+ */
+const smil = markup => (window.MOTION && window.MOTION.reduced) ? '' : markup;
+
 /** Catmull-Rom → cubic bezier: the "flow" curve used throughout BakeFlow. */
 function flowPath(pts, tension = 0.42) {
   if (pts.length < 2) return '';
@@ -107,10 +116,10 @@ function barChart(o) {
     return `<g class="ch-hit" data-i="${i}" data-v="${s.v}" data-l="${s.d}" data-x="${x + bw / 2}" style="cursor:pointer">
       <rect x="${x}" y="${padT}" width="${bw}" height="${h - padT - padB}" fill="transparent"/>
       <rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="${Math.min(6, bw / 2.6)}" fill="${fill}">
-        <animate attributeName="height" from="0" to="${bh}" dur="520ms" fill="freeze"
+        ${smil(`<animate attributeName="height" from="0" to="${bh}" dur="520ms" fill="freeze"
           calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
         <animate attributeName="y" from="${h - padB}" to="${y}" dur="520ms" fill="freeze"
-          calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+          calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>`)}
       </rect>
     </g>`;
   }).join('');
@@ -133,12 +142,12 @@ function pairedBars(o) {
     return `<g class="ch-hit" data-i="${i}" data-l="${s.d}" data-v="${s.rev}" data-v2="${s.exp}" data-x="${cx}" style="cursor:pointer">
       <rect x="${cx - group / 2}" y="0" width="${group}" height="${h}" fill="transparent"/>
       <rect x="${cx - bw - inner / 2}" y="${h - padB - rh}" width="${bw}" height="${rh}" rx="5" fill="var(--cocoa)">
-        <animate attributeName="height" from="0" to="${rh}" dur="560ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
-        <animate attributeName="y" from="${h - padB}" to="${h - padB - rh}" dur="560ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+        ${smil(`<animate attributeName="height" from="0" to="${rh}" dur="560ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+        <animate attributeName="y" from="${h - padB}" to="${h - padB - rh}" dur="560ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>`)}
       </rect>
       <rect x="${cx + inner / 2}" y="${h - padB - eh}" width="${bw}" height="${eh}" rx="5" fill="var(--apricot)" opacity=".85">
-        <animate attributeName="height" from="0" to="${eh}" dur="560ms" begin="60ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
-        <animate attributeName="y" from="${h - padB}" to="${h - padB - eh}" dur="560ms" begin="60ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+        ${smil(`<animate attributeName="height" from="0" to="${eh}" dur="560ms" begin="60ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+        <animate attributeName="y" from="${h - padB}" to="${h - padB - eh}" dur="560ms" begin="60ms" fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>`)}
       </rect>
     </g>`;
   }).join('');
@@ -181,8 +190,8 @@ function donut(parts, o = {}) {
     return `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${p.c}" stroke-width="${sw}"
       stroke-dasharray="${dash}" stroke-dashoffset="${off}" stroke-linecap="round"
       transform="rotate(-90 ${c} ${c})">
-      <animate attributeName="stroke-dasharray" from="0 ${circ}" to="${dash}" dur="${620 + i * 60}ms"
-        fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>
+      ${smil(`<animate attributeName="stroke-dasharray" from="0 ${circ}" to="${dash}" dur="${620 + i * 60}ms"
+        fill="freeze" calcMode="spline" keySplines=".22 1 .36 1" keyTimes="0;1"/>`)}
     </circle>`;
   }).join('');
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img"

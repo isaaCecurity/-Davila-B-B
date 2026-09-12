@@ -4,13 +4,16 @@
 (function () {
   'use strict';
 
-  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /* Read per call, never cached — an OS-level Reduce Motion toggle mid-session
+     must take effect without a reload. */
+  var motionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function isReduced() { return motionMQ.matches; }
 
   /* ---------------------------------------------------------------- ripple */
   function attachRipples(root) {
     (root || document).addEventListener('pointerdown', function (e) {
       var btn = e.target.closest ? e.target.closest('.btn') : null;
-      if (!btn || btn.disabled || reduced) return;
+      if (!btn || btn.disabled || isReduced()) return;
       var r = btn.getBoundingClientRect();
       var size = Math.max(r.width, r.height) * 2.2;
       var span = document.createElement('span');
@@ -53,7 +56,7 @@
     var dur = duration || 1100;
     var start = null;
 
-    if (reduced) { el.textContent = prefix + to + suffix; return; }
+    if (isReduced()) { el.textContent = prefix + to + suffix; return; }
 
     function frame(ts) {
       if (start === null) start = ts;
@@ -105,7 +108,7 @@
     document.addEventListener(evt, function () { tapped = true; }, { once: true, capture: true });
   });
   function buzz(ms) {
-    if (!tapped || reduced || !navigator.vibrate) return;
+    if (!tapped || isReduced() || !navigator.vibrate) return;
     try { navigator.vibrate(ms || 8); } catch (e) {}
   }
 
@@ -114,7 +117,7 @@
      each with its own arc, spin and size. Pure delight, no layout cost. */
   var CRUMB_COLORS = ['#e0762e', '#f0a35f', '#c9a27a', '#3b302a'];
   function crumbBurst(x, y, count, container) {
-    if (reduced) return;
+    if (isReduced()) return;
     var host = container || document.body;
     var hostRect = host.getBoundingClientRect();
     for (var i = 0; i < (count || 12); i++) {
@@ -137,7 +140,19 @@
   }
 
   window.SC = {
-    reduced: reduced,
+    /* Live getter, not a snapshot — consumers reading SC.reduced later in the
+       session see the current OS setting, not the one at load time. */
+    get reduced() { return motionMQ.matches; },
+    /** Subscribe to OS-level changes; returns an unsubscribe function. */
+    onMotionChange: function (fn) {
+      var h = function (e) { fn(e.matches); };
+      if (motionMQ.addEventListener) motionMQ.addEventListener('change', h);
+      else if (motionMQ.addListener) motionMQ.addListener(h);
+      return function () {
+        if (motionMQ.removeEventListener) motionMQ.removeEventListener('change', h);
+        else if (motionMQ.removeListener) motionMQ.removeListener(h);
+      };
+    },
     attachRipples: attachRipples,
     runCounters: runCounters,
     restart: restart,

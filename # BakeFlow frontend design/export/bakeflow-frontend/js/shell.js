@@ -37,9 +37,13 @@ function user() { return DB.users[APP.role]; }
 function orderStatus(o) { return APP.orderStates[o.id] || o.status; }
 
 /* ------------------------------------------------------------- THEME --- */
-const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)');
-APP.reducedMotion = prefersReduced.matches;
-prefersReduced.addEventListener('change', e => { APP.reducedMotion = e.matches; });
+/* Reduced motion — the single source of truth is motion-prefs.js, loaded
+   first. Exposed here as a live getter so an OS-level toggle mid-session is
+   honoured without a reload, and so callers keep the familiar APP.* shape. */
+Object.defineProperty(APP, 'reducedMotion', {
+  get() { return MOTION.reduced; },
+  configurable: true
+});
 
 function resolvedTheme(pref) { return pref === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : pref; }
 function applyTheme(pref) {
