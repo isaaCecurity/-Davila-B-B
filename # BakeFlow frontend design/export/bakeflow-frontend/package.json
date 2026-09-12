@@ -1,0 +1,17 @@
+{
+  "name": "bakeflow-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BakeFlow — mobile-first bakery operations frontend. Zero-build static app.",
+  "scripts": {
+    "start": "npx --yes serve . -l 5173",
+    "dev": "npx --yes serve . -l 5173"
+  },
+  "keywords": [
+    "bakery",
+    "pos",
+    "operations",
+    "frontend"
+  ],
+  "license": "UNLICENSED"
+}

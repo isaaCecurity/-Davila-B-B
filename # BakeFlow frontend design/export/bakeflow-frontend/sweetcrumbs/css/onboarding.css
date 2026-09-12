@@ -1,0 +1,632 @@
+/* ==========================================================================
+   Splash (shared-element hand-off) + parallax get-started pager
+   + native "push" screen transition
+   ========================================================================== */
+
+/* --------------------------------------------------------------- screens */
+.stack {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.screen {
+  position: absolute;
+  inset: 0;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* the outgoing screen is carried back in depth, not just swapped out */
+.screen--onboarding {
+  transition: transform 0.66s var(--spring-soft), opacity 0.5s var(--ease-out),
+    filter 0.5s var(--ease-out);
+}
+.stack.is-pushed .screen--onboarding {
+  transform: translate3d(-24%, 0, 0) scale(0.93);
+  opacity: 0.42;
+  filter: saturate(0.75);
+  pointer-events: none;
+}
+
+/* the incoming screen slides in over it, with a cast shadow like a real push */
+.screen--next {
+  transform: translate3d(100%, 0, 0);
+  visibility: hidden;
+  background: var(--cream);
+  box-shadow: -26px 0 70px -18px rgba(44, 35, 32, 0.45);
+  transition: transform 0.66s var(--spring-soft), visibility 0.66s linear;
+}
+.stack.is-pushed .screen--next {
+  transform: translate3d(0, 0, 0);
+  visibility: visible;
+}
+/* while a finger is dragging the push, kill the transition so it tracks 1:1 */
+.stack.is-tracking .screen--onboarding,
+.stack.is-tracking .screen--next {
+  transition: none;
+}
+
+/* ------------------------------------------- dough bloom push (Get started) */
+/* a warm "dough" circle blooms out of the button, covers the phone, then
+   melts away to reveal the sign-in screen — no hard slide */
+.dough-bloom {
+  position: absolute;
+  z-index: 60;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 42%,
+    var(--orange-2) 0%, var(--orange) 52%, #b85516 100%);
+  box-shadow: inset 0 0 60px rgba(255, 244, 228, 0.35);
+  transform: translate(-50%, -50%) scale(0);
+  animation: dough-bloom 1s var(--ease-out) forwards;
+}
+@keyframes dough-bloom {
+  0%   { transform: translate(-50%, -50%) scale(0);    opacity: 1; }
+  52%  { transform: translate(-50%, -50%) scale(1);    opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1.05); opacity: 0; }
+}
+/* in bloom mode the incoming screen fades in under the dough, not sliding */
+.stack--bloom .screen--next {
+  transform: none;
+  box-shadow: none;
+  opacity: 0;
+  transition: opacity 0.34s var(--ease-out) 0.46s, visibility 0.9s linear;
+}
+.stack--bloom.is-pushed .screen--next {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+}
+.stack--bloom.is-pushed .screen--onboarding {
+  transform: scale(1.05);
+  opacity: 0;
+  filter: none;
+  transition-duration: 0.4s, 0.4s, 0.4s;
+}
+
+/* ---------------------------------------------------------------- SPLASH */
+#splash {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+}
+/* the splash backdrop fades on its own so the logo can fly over the app */
+.splash-bg {
+  position: absolute;
+  inset: 0;
+  background: var(--cream);
+  transition: opacity 0.55s var(--ease-in-out);
+}
+#splash.is-handing-off {
+  pointer-events: none;
+}
+#splash.is-handing-off .splash-bg { opacity: 0; }
+#splash.is-handing-off .splash-fade {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.28s linear, transform 0.4s var(--ease-out);
+}
+
+.splash-inner {
+  position: relative;
+  display: grid;
+  justify-items: center;
+}
+
+/* orbit ring + travelling crumb */
+.orbit {
+  position: relative;
+  width: 188px;
+  height: 188px;
+  display: grid;
+  place-items: center;
+}
+.orbit-ring {
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(224, 118, 46, 0.34);
+  opacity: 0;
+  transform: scale(0.7) rotate(-30deg);
+  animation: ring-in 0.9s 0.3s var(--spring) forwards,
+             ring-spin 14s 1.15s linear infinite;
+}
+@keyframes ring-in { to { opacity: 1; transform: scale(1) rotate(0deg); } }
+@keyframes ring-spin { from { rotate: 0deg; } to { rotate: 360deg; } }
+
+.orbit-arm {
+  position: absolute;
+  inset: 0;
+  animation: orbit-run 3.4s 0.7s linear infinite;
+}
+@keyframes orbit-run { from { rotate: 0deg; } to { rotate: 360deg; } }
+.orbit-dot {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 15px;
+  height: 15px;
+  margin-left: -7.5px;
+  border-radius: 50%;
+  background: var(--orange);
+  box-shadow: 0 0 0 5px rgba(224, 118, 46, 0.15), 0 4px 10px rgba(224, 118, 46, 0.5);
+  animation: dot-pop 0.5s 0.7s var(--spring) both;
+}
+@keyframes dot-pop { from { transform: scale(0); } to { transform: scale(1); } }
+
+/* the mark that flies into the header — JS drives its transform */
+.splash-mark {
+  width: 112px;
+  height: auto;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.splash-mark.is-idle {
+  animation: mark-breathe 2.6s 1s var(--ease-in-out) infinite;
+}
+@keyframes mark-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-5px) scale(1.035); }
+}
+
+.wordmark {
+  display: flex;
+  gap: 1px;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 14px 0 0;
+}
+.wordmark span {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(18px) rotate(6deg);
+  animation: letter-up 0.6s var(--spring) forwards;
+}
+@keyframes letter-up { to { opacity: 1; transform: none; } }
+
+.splash-tag {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fade-up 0.7s 1.2s var(--ease-out) forwards;
+}
+@keyframes fade-up { to { opacity: 1; transform: none; } }
+
+.splash-bar {
+  position: relative;
+  width: 84px;
+  height: 3px;
+  margin-top: 22px;
+  border-radius: 3px;
+  background: rgba(44, 35, 32, 0.1);
+  overflow: hidden;
+}
+.splash-bar i {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  border-radius: 3px;
+  background: var(--orange);
+  animation: bar-fill 1.7s 0.7s var(--ease-in-out) forwards;
+}
+@keyframes bar-fill { to { transform: scaleX(1); } }
+
+/* ------------------------------------------------------------ ONBOARDING */
+.onboarding {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: max(18px, env(safe-area-inset-top)) 0 max(16px, env(safe-area-inset-bottom));
+}
+
+.ob-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 22px 0;
+}
+.ob-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 800;
+  font-size: 15.5px;
+}
+.ob-brand .mark { width: 30px; height: 30px; }
+/* hidden until the splash mark has flown into place */
+.ob-brand .mark { opacity: 0; }
+.ob-brand.is-landed .mark {
+  opacity: 1;
+}
+.ob-brand span {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+.ob-brand.is-landed span {
+  animation: fade-in-x 0.5s 0.06s var(--ease-out) forwards;
+}
+@keyframes fade-in-x { to { opacity: 1; transform: none; } }
+
+.ob-skip {
+  background: none;
+  border: 0;
+  flex: 0 0 auto;
+  width: auto;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  padding: 8px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.34s var(--spring), opacity 0.34s var(--ease-out);
+}
+.ob-skip.is-pressed { transform: scale(0.9); opacity: 0.6; }
+
+/* chrome entrance stagger */
+.ob-reveal { opacity: 0; transform: translateY(16px); }
+.onboarding.is-ready .ob-reveal { animation: fade-up 0.72s var(--spring) forwards; }
+.onboarding.is-ready .ob-top { animation-delay: 0.02s; }
+.onboarding.is-ready .ob-foot .dots { animation-delay: 0.3s; }
+.onboarding.is-ready .ob-foot .cta-wrap { animation-delay: 0.4s; }
+.onboarding.is-ready .ob-foot .ob-alt { animation-delay: 0.5s; }
+
+/* ------------------------------------------------------------------ pager */
+.pager {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+.track {
+  display: flex;
+  height: 100%;
+  will-change: transform;
+}
+.slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  padding: 4px 26px 0;
+}
+
+/* the two parallax layers — JS moves them at different rates */
+.art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  will-change: transform, opacity;
+}
+.art svg { width: min(300px, 84%); height: auto; overflow: visible; }
+
+.copy {
+  padding: 6px 2px 12px;
+  will-change: transform, opacity;
+}
+.copy h2 { max-width: 15ch; }
+.copy .lede { max-width: 30ch; }
+
+/* headline / paragraph entrance, replayed per slide visit */
+.slide .copy h2,
+.slide .copy .lede { opacity: 0; transform: translateY(20px); }
+.slide.is-active .copy h2 {
+  animation: fade-up 0.64s calc(0.06s * var(--k)) var(--spring) forwards;
+}
+.slide.is-active .copy .lede {
+  animation: fade-up 0.64s calc(0.16s * var(--k)) var(--spring) forwards;
+}
+
+/* --k scales every entrance delay on a slide. A slide that is dragged into
+   view gets a compressed stagger (--k small) so it has already drawn itself
+   by the time it lands, instead of arriving as an empty panel. */
+.slide { --k: 1; }
+.slide.is-swift { --k: 0.3; }
+
+/* ----------------------------------------------------------------- footer */
+.ob-foot { padding: 4px 26px 0; }
+
+.dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.dot {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: rgba(44, 35, 32, 0.16);
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transition: width 0.52s var(--spring), background-color 0.4s linear;
+}
+.dot.is-active { width: 42px; background: rgba(224, 118, 46, 0.24); }
+.dot i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--orange);
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.dot.is-active i { animation: dot-fill var(--slide-dur, 5500ms) linear forwards; }
+.dot.is-active.is-paused i { animation-play-state: paused; }
+@keyframes dot-fill { to { transform: scaleX(1); } }
+
+/* CTA — squashes on press, releases on lift */
+.cta-wrap { position: relative; }
+.btn.is-pressed {
+  transform: scale(0.955);
+  box-shadow: 0 4px 12px -8px rgba(44, 35, 32, 0.9);
+}
+.cta-arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  transition: transform 0.4s var(--spring);
+}
+.btn.is-pressed .cta-arrow { transform: translateX(4px); }
+.cta-arrow svg { width: 18px; height: 18px; }
+
+.ob-alt {
+  margin: 14px 0 2px;
+  text-align: center;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Slide 1 — orders arriving
+   ========================================================================== */
+.s1-card { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s1-card {
+  animation: card-fly 0.82s var(--spring) forwards, card-float 4.6s ease-in-out infinite;
+}
+.slide.is-active .s1-card-1 { animation-delay: calc(0.2s * var(--k)), calc(1.1s * var(--k)); }
+.slide.is-active .s1-card-2 { animation-delay: calc(0.36s * var(--k)), calc(1.4s * var(--k)); }
+.slide.is-active .s1-card-3 { animation-delay: calc(0.52s * var(--k)), calc(1.7s * var(--k)); }
+@keyframes card-fly {
+  from { opacity: 0; transform: translate(58px, 26px) rotate(9deg) scale(0.86); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes card-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4.5px); }
+}
+
+.s1-tick { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s1-tick {
+  animation: stamp 0.66s calc(1.05s * var(--k)) var(--spring) forwards;
+}
+@keyframes stamp {
+  0% { opacity: 0; transform: scale(2.1) rotate(-16deg); }
+  60% { opacity: 1; transform: scale(0.92) rotate(3deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.s1-tick-path { stroke-dasharray: 1; stroke-dashoffset: 1; }
+.slide.is-active .s1-tick-path {
+  animation: draw 0.4s calc(1.4s * var(--k)) var(--ease-out) forwards;
+}
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+.s1-badge { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s1-badge {
+  animation: badge-pop 0.7s calc(0.85s * var(--k)) var(--spring) forwards,
+             badge-pulse 2.4s calc(1.8s * var(--k)) ease-in-out infinite;
+}
+@keyframes badge-pop {
+  from { opacity: 0; transform: scale(0.3) translateY(-10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes badge-pulse {
+  0%, 100% { transform: scale(1); }
+  22% { transform: scale(1.09); }
+  44% { transform: scale(1); }
+}
+.s1-ping { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s1-ping {
+  animation: ping 2.4s calc(1.8s * var(--k)) ease-out infinite;
+}
+@keyframes ping {
+  0% { opacity: 0.5; transform: scale(0.6); }
+  70%, 100% { opacity: 0; transform: scale(2.2); }
+}
+
+/* ==========================================================================
+   Slide 2 — sales chart growing
+   ========================================================================== */
+.s2-bar { transform-box: fill-box; transform-origin: 50% 100%; transform: scaleY(0); }
+.slide.is-active .s2-bar { animation: bar-grow 0.92s var(--spring) forwards; }
+.slide.is-active .s2-bar-1 { animation-delay: calc(0.22s * var(--k)); }
+.slide.is-active .s2-bar-2 { animation-delay: calc(0.31s * var(--k)); }
+.slide.is-active .s2-bar-3 { animation-delay: calc(0.40s * var(--k)); }
+.slide.is-active .s2-bar-4 { animation-delay: calc(0.49s * var(--k)); }
+.slide.is-active .s2-bar-5 { animation-delay: calc(0.58s * var(--k)); }
+@keyframes bar-grow { to { transform: scaleY(1); } }
+.slide.is-active .s2-bar-6 {
+  animation: bar-grow 0.92s calc(0.67s * var(--k)) var(--spring) forwards,
+             bar-breathe 2.8s calc(1.7s * var(--k)) ease-in-out infinite;
+}
+@keyframes bar-breathe {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.07); }
+}
+
+.s2-line { stroke-dasharray: 1; stroke-dashoffset: 1; }
+.slide.is-active .s2-line {
+  animation: draw 1.1s calc(0.78s * var(--k)) var(--ease-out) forwards;
+}
+.s2-node { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s2-node { animation: node-pop 0.5s var(--spring) forwards; }
+.slide.is-active .s2-node-1 { animation-delay: calc(1.05s * var(--k)); }
+.slide.is-active .s2-node-2 { animation-delay: calc(1.22s * var(--k)); }
+.slide.is-active .s2-node-3 { animation-delay: calc(1.4s * var(--k)); }
+@keyframes node-pop {
+  from { opacity: 0; transform: scale(0); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.s2-chip { transform-box: fill-box; transform-origin: 50% 100%; opacity: 0; }
+.slide.is-active .s2-chip {
+  animation: badge-pop 0.72s calc(1.35s * var(--k)) var(--spring) forwards,
+             chip-hover 3.4s calc(2.1s * var(--k)) ease-in-out infinite;
+}
+@keyframes chip-hover {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.s2-spark { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s2-spark {
+  animation: spark 1.7s calc(1.6s * var(--k)) ease-in-out infinite;
+}
+.slide.is-active .s2-spark-2 { animation-delay: calc(2.1s * var(--k)); }
+.slide.is-active .s2-spark-3 { animation-delay: calc(2.6s * var(--k)); }
+@keyframes spark {
+  0% { opacity: 0; transform: scale(0.2) rotate(0deg); }
+  40% { opacity: 1; transform: scale(1) rotate(90deg); }
+  100% { opacity: 0; transform: scale(0.3) rotate(180deg); }
+}
+
+/* ==========================================================================
+   Slide 3 — coins dropping / profit ring
+   ========================================================================== */
+.s3-ring-track { stroke: rgba(44, 35, 32, 0.1); }
+.s3-ring-fill { stroke-dasharray: 1; stroke-dashoffset: 1; }
+.slide.is-active .s3-ring-fill {
+  animation: ring-fill 1.3s calc(0.24s * var(--k)) var(--ease-out) forwards;
+}
+@keyframes ring-fill { to { stroke-dashoffset: 0.28; } }
+
+.s3-coin { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
+.slide.is-active .s3-coin { animation: coin-drop 1.05s var(--spring) forwards; }
+.slide.is-active .s3-coin-1 { animation-delay: calc(0.46s * var(--k)); }
+.slide.is-active .s3-coin-2 { animation-delay: calc(0.69s * var(--k)); }
+.slide.is-active .s3-coin-3 { animation-delay: calc(0.92s * var(--k)); }
+.slide.is-active .s3-coin-4 { animation-delay: calc(1.15s * var(--k)); }
+@keyframes coin-drop {
+  0% { opacity: 0; transform: translateY(-92px) scale(0.7) rotate(-30deg); }
+  55% { opacity: 1; transform: translateY(6px) scale(1.06) rotate(6deg); }
+  75% { transform: translateY(-4px) scale(0.99) rotate(-2deg); }
+  100% { opacity: 1; transform: none; }
+}
+
+.s3-jar { transform-box: fill-box; transform-origin: 50% 100%; }
+.slide.is-active .s3-jar {
+  animation: jar-squash 0.5s calc(0.93s * var(--k)) var(--ease-out);
+}
+@keyframes jar-squash {
+  0%, 100% { transform: scale(1, 1); }
+  40% { transform: scale(1.045, 0.955); }
+}
+
+.s3-arrow { transform-box: fill-box; transform-origin: 50% 100%; opacity: 0; }
+.slide.is-active .s3-arrow {
+  animation: arrow-up 2.6s calc(1.5s * var(--k)) ease-in-out infinite;
+}
+@keyframes arrow-up {
+  0% { opacity: 0; transform: translateY(10px); }
+  30% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; transform: translateY(-8px); }
+  100% { opacity: 0; transform: translateY(-16px); }
+}
+
+.count { font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Destination screen chrome — the sign-in panel itself lives in auth.css
+   ========================================================================== */
+.edge-hint {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 82px;
+  border-radius: 0 4px 4px 0;
+  background: rgba(44, 35, 32, 0.14);
+}
+
+/* ==========================================================================
+   Animation upgrades
+   ========================================================================== */
+
+/* 1. Living steam — after the splash logo draws itself on, the steam wisps
+      keep swaying like real heat rising off the bowl. */
+.mark--draw .mark-steam-1,
+.mark--draw .mark-steam-2 {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.mark--draw .mark-steam-1 {
+  animation: draw 0.9s 0.5s var(--ease-out) both,
+             steam-sway 3.1s 1.5s ease-in-out infinite;
+}
+.mark--draw .mark-steam-2 {
+  animation: draw 0.9s 0.64s var(--ease-out) both,
+             steam-sway 3.1s 1.9s ease-in-out infinite reverse;
+}
+@keyframes steam-sway {
+  0%, 100% { transform: translateX(0) rotate(0deg) scaleY(1); opacity: 1; }
+  30%      { transform: translateX(1.6px) rotate(2.4deg) scaleY(1.06); opacity: 0.75; }
+  65%      { transform: translateX(-1.6px) rotate(-2.4deg) scaleY(0.97); opacity: 1; }
+}
+
+/* the header + next-screen marks get a quieter version, always on */
+#brand-mark .mark-steam, .next-body .mark .mark-steam {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: steam-sway 3.4s ease-in-out infinite;
+}
+
+/* 2. Letters sharpen out of a blur as they rise */
+.wordmark span {
+  filter: blur(6px);
+  animation: letter-up 0.6s var(--spring) forwards,
+             letter-focus 0.55s var(--ease-out) forwards;
+}
+@keyframes letter-focus { to { filter: blur(0); } }
+
+/* 3. Crumb burst — JS spawns .crumb particles with --dx/--dy/--rot */
+.crumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 42% 58% 55% 45%;
+  pointer-events: none;
+  z-index: 70;
+  will-change: transform, opacity;
+  animation: crumb-fly 0.9s var(--ease-out) forwards;
+}
+@keyframes crumb-fly {
+  0%   { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0deg); }
+  60%  { opacity: 1; transform: translate(calc(var(--dx) * 0.82 - 50%), calc(var(--dy) * 0.82 - 50% - 14px)) scale(0.9) rotate(calc(var(--rot) * 0.6)); }
+  100% { opacity: 0; transform: translate(calc(var(--dx) - 50%), calc(var(--dy) - 50% + 26px)) scale(0.5) rotate(var(--rot)); }
+}
+
+/* 4. CTA arrow nudges forward on hover, hinting it's tappable */
+.btn--primary:hover .cta-arrow { transform: translateX(3px); }
+
+/* 5. Dots get a playful squash when the active one stretches open */
+.dot.is-active { animation: dot-stretch 0.5s var(--spring); }
+@keyframes dot-stretch {
+  0% { transform: scaleX(0.6) scaleY(1.25); }
+  100% { transform: none; }
+}

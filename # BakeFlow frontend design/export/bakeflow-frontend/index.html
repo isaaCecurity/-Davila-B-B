@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#F7F3EC">
+<script>(function(){try{var t=localStorage.getItem('bakeflow-theme')||'system';var dark=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);if(dark)document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
+<title>BakeFlow — Run your bakery with clarity</title>
+<meta name="description" content="BakeFlow turns the daily chaos of running a bakery into a clear picture of the business. Orders, sales, cash and profit in one place.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+
+<div class="stage">
+
+  <!-- Companion panel: visible on tablet/desktop, hidden on phones -->
+  <aside class="studio-note">
+    <div class="wordmark" id="studio-wordmark"></div>
+    <h1>The operating&nbsp;system for running the bakery.</h1>
+    <p>BakeFlow turns the daily chaos of a bakery — orders, tickets, cash, expenses — into one clear picture of the business. This is an interactive prototype: everything below responds.</p>
+
+    <div class="role-switch">
+      <small>Open as</small>
+      <div class="role-list" id="studio-roles">
+        <button data-studio-role="owner"   aria-pressed="true">Owner</button>
+        <button data-studio-role="manager" aria-pressed="false">Manager</button>
+        <button data-studio-role="staff"   aria-pressed="false">Salesperson</button>
+        <button data-studio-role="supervisor" aria-pressed="false">Supervisor</button>
+        <button data-studio-role="baker" aria-pressed="false">Baker</button>
+        <button data-studio-role="driver"  aria-pressed="false">Driver</button>
+      </div>
+    </div>
+
+    <a class="ds-link" href="design-system.html">View the design system <span aria-hidden="true">→</span></a>
+  </aside>
+
+  <!-- The application -->
+  <div class="phone" role="application" aria-label="BakeFlow mobile application prototype">
+    <div class="notch" aria-hidden="true"></div>
+    <div class="viewport">
+      <div class="statusbar" aria-hidden="true">
+        <span>9:41</span>
+        <span class="sb-right" id="sb-right"></span>
+      </div>
+      <main class="screens" id="screens"></main>
+      <nav class="tabbar" id="tabbar" role="tablist" aria-label="Primary" hidden></nav>
+      <div id="overlays"></div>
+      <div class="toast-host" id="toasts" aria-live="polite"></div>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/icons.js"></script>
+<script src="js/data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/shell.js"></script>
+<script src="js/screens-core.js"></script>
+<script src="js/screens-orders.js"></script>
+<script src="js/screens-money.js"></script>
+<script src="js/screens-manage.js"></script>
+<script src="js/studio.js"></script>
+</body>
+</html>

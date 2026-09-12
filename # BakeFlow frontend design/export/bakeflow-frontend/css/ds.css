@@ -1,0 +1,219 @@
+/* ==========================================================================
+   BAKEFLOW — Design system reference page (documentation chrome only)
+   This stylesheet dresses the spec document. It never overrides the component
+   language it is documenting — those styles come from components.css.
+   ========================================================================== */
+
+.ds-body {
+  margin: 0;
+  font-family: var(--font);
+  color: var(--cocoa);
+  background: var(--cream);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -.011em;
+}
+
+/* ------------------------------------------------------------- masthead --- */
+.ds-masthead {
+  padding: 64px var(--gutter) 52px;
+  background:
+    radial-gradient(900px 500px at 18% -10%, #FFFDF9 0%, rgba(255,253,249,0) 62%),
+    var(--cream);
+  border-bottom: 1px solid var(--border);
+}
+.ds-shell { max-width: 1080px; margin: 0 auto; }
+.ds-masthead .logo-plate { margin-bottom: var(--s-6); }
+.ds-masthead h1 {
+  font-size: clamp(32px, 5vw, 46px); font-weight: 680;
+  letter-spacing: -.034em; line-height: 1.08; margin: 0 0 var(--s-4);
+  max-width: 20ch;
+}
+.ds-masthead .ds-lede {
+  margin: 0; max-width: 62ch; color: var(--warm-gray);
+  font-size: var(--t-body); line-height: 1.62;
+}
+.ds-back {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: var(--s-6);
+  font-size: var(--t-foot); font-weight: 560; color: var(--cocoa);
+  text-decoration: none; padding: 9px 15px; border-radius: var(--r-pill);
+  background: var(--white); box-shadow: var(--e-2);
+  transition: transform var(--d-fast) var(--ease-out);
+}
+.ds-back:active { transform: scale(.97); }
+
+/* -------------------------------------------------------------- sections --- */
+.ds-main { max-width: 1080px; margin: 0 auto; padding: 0 var(--gutter) 96px; }
+
+.ds-sec { padding: 56px 0; border-bottom: 1px solid var(--border); }
+.ds-sec:last-child { border-bottom: 0; }
+.ds-sec > h2 {
+  font-size: var(--t-title-1); font-weight: 660; letter-spacing: -.03em;
+  margin: 0 0 var(--s-3);
+}
+.ds-sec > .ds-note {
+  margin: 0 0 var(--s-6); max-width: 66ch; color: var(--warm-gray);
+  font-size: var(--t-callout); line-height: 1.62;
+}
+.ds-eyebrow {
+  display: block; font-size: var(--t-caption); font-weight: 620;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--warm-gray-soft);
+  margin-bottom: var(--s-3);
+}
+.ds-sub {
+  font-size: var(--t-title-3); font-weight: 620; letter-spacing: -.022em;
+  margin: var(--s-8) 0 var(--s-4);
+}
+
+/* ---------------------------------------------------------------- grids --- */
+.ds-grid { display: grid; gap: var(--s-3); }
+.ds-grid.-c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ds-grid.-c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ds-grid.-c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ds-grid.-c5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+/* --------------------------------------------------------------- swatch --- */
+.ds-swatch {
+  background: var(--white); border-radius: var(--r-md);
+  box-shadow: var(--e-2); overflow: hidden;
+}
+.ds-swatch .sw-chip { height: 92px; }
+.ds-swatch .sw-meta { padding: var(--s-3) var(--s-4) var(--s-4); }
+.ds-swatch .sw-name { font-size: var(--t-callout); font-weight: 600; }
+.ds-swatch .sw-hex {
+  font-size: var(--t-caption); color: var(--warm-gray);
+  font-variant-numeric: tabular-nums; margin-top: 3px;
+  font-feature-settings: "tnum" 1;
+}
+.ds-swatch .sw-use {
+  font-size: var(--t-caption); color: var(--warm-gray-soft);
+  margin-top: 7px; line-height: 1.5;
+}
+.ds-swatch .sw-chip.-bordered { box-shadow: inset 0 0 0 1px var(--border); }
+
+/* ----------------------------------------------------------- spec panel --- */
+.ds-panel {
+  background: var(--white); border-radius: var(--r-md);
+  box-shadow: var(--e-2); padding: var(--s-5);
+}
+.ds-panel.-cream { background: var(--cream-deep); box-shadow: none; }
+.ds-panel.-ink { background: var(--ink); color: #fff; }
+
+/* on-cream demo bed, so components sit on the surface they were drawn for */
+.ds-bed {
+  background: var(--cream-deep); border-radius: var(--r-md);
+  padding: var(--s-5); box-shadow: inset 0 0 0 1px var(--border);
+}
+.ds-bed.-white { background: var(--white); box-shadow: var(--e-2); }
+.ds-bed.-ink { background: var(--ink); box-shadow: none; }
+.ds-row { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; }
+.ds-stack { display: grid; gap: var(--s-3); }
+
+/* ----------------------------------------------------------- type scale --- */
+.ds-type-row {
+  display: flex; align-items: baseline; gap: var(--s-5);
+  padding: var(--s-4) 0; border-bottom: 1px solid var(--border);
+}
+.ds-type-row:last-child { border-bottom: 0; }
+.ds-type-row .tr-spec {
+  flex: 0 0 148px; font-size: var(--t-caption); color: var(--warm-gray);
+  font-feature-settings: "tnum" 1;
+}
+.ds-type-row .tr-demo { min-width: 0; letter-spacing: -.028em; }
+
+/* --------------------------------------------------------------- tables --- */
+.ds-table { width: 100%; border-collapse: collapse; font-size: var(--t-foot); }
+.ds-table th {
+  text-align: left; font-weight: 600; color: var(--warm-gray);
+  font-size: var(--t-caption); letter-spacing: .06em; text-transform: uppercase;
+  padding: 0 var(--s-3) var(--s-3) 0;
+}
+.ds-table td {
+  padding: var(--s-3) var(--s-3) var(--s-3) 0;
+  border-top: 1px solid var(--border); vertical-align: top; line-height: 1.5;
+}
+.ds-table td:first-child { font-weight: 560; white-space: nowrap; }
+.ds-table code, .ds-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; background: var(--cocoa-05);
+  padding: 2px 6px; border-radius: var(--r-xs); color: var(--cocoa);
+}
+
+/* --------------------------------------------------------------- space --- */
+.ds-space-row { display: flex; align-items: center; gap: var(--s-4); padding: 7px 0; }
+.ds-space-row .sp-bar { height: 14px; background: var(--apricot); border-radius: 3px; }
+.ds-space-row .sp-lab {
+  font-size: var(--t-caption); color: var(--warm-gray);
+  font-feature-settings: "tnum" 1; flex: 0 0 96px;
+}
+
+/* -------------------------------------------------------------- radius --- */
+.ds-radius { text-align: center; }
+.ds-radius .rd-box {
+  height: 84px; background: var(--white); box-shadow: inset 0 0 0 1.5px var(--apricot);
+  margin-bottom: 9px;
+}
+.ds-radius .rd-lab { font-size: var(--t-caption); color: var(--warm-gray); }
+
+/* ----------------------------------------------------------- elevation --- */
+.ds-elev {
+  height: 92px; background: var(--white); border-radius: var(--r-md);
+  display: grid; place-items: center; font-size: var(--t-caption);
+  color: var(--warm-gray);
+}
+
+/* ---------------------------------------------------------- icon table --- */
+.ds-icon-cell {
+  display: grid; gap: 8px; justify-items: center; padding: var(--s-3) 6px;
+  background: var(--white); border-radius: var(--r-sm); box-shadow: var(--e-1);
+  color: var(--cocoa);
+}
+.ds-icon-cell span {
+  font-size: 10.5px; color: var(--warm-gray-soft); text-align: center;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%; white-space: nowrap;
+}
+
+/* ---------------------------------------------------------- motion demo --- */
+.ds-motion-bar {
+  height: 34px; border-radius: var(--r-sm); background: var(--cream-deep);
+  position: relative; overflow: hidden;
+}
+.ds-motion-bar i {
+  position: absolute; inset: 3px auto 3px 3px; width: 34px;
+  border-radius: 9px; background: var(--apricot);
+}
+.ds-motion-bar.-run i { animation: ds-slide 1.5s var(--ease-out) infinite alternate; }
+@keyframes ds-slide { from { transform: translateX(0) } to { transform: translateX(calc(100% + 220px)) } }
+
+/* ------------------------------------------------------------ do / dont --- */
+.ds-dd { display: grid; gap: var(--s-3); }
+.ds-dd .dd {
+  display: flex; gap: 11px; align-items: flex-start;
+  font-size: var(--t-callout); line-height: 1.55;
+  background: var(--white); border-radius: var(--r-sm);
+  padding: var(--s-3) var(--s-4); box-shadow: var(--e-1);
+}
+.ds-dd .dd i {
+  flex: 0 0 auto; width: 19px; height: 19px; border-radius: 50%;
+  display: grid; place-items: center; margin-top: 1px;
+  font-size: 12px; font-style: normal; font-weight: 700; color: #fff;
+}
+.ds-dd .dd.-do i { background: var(--success); }
+.ds-dd .dd.-no i { background: var(--error); }
+
+/* ------------------------------------------------------------ responsive --- */
+@media (max-width: 900px) {
+  .ds-grid.-c5, .ds-grid.-c4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .ds-masthead { padding: 44px var(--gutter) 36px; }
+  .ds-sec { padding: 40px 0; }
+  .ds-grid.-c5, .ds-grid.-c4, .ds-grid.-c3, .ds-grid.-c2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ds-type-row { flex-direction: column; gap: 6px; }
+  .ds-type-row .tr-spec { flex: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-motion-bar.-run i { animation: none; }
+}

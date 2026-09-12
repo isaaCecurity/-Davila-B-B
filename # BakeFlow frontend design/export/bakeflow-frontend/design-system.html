@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#F7F3EC">
+<title>BakeFlow — Design System</title>
+<meta name="description" content="The BakeFlow design system: colour, typography, spacing, radius, elevation, motion, components and the principles behind them.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/ds.css">
+</head>
+<body class="ds-body">
+
+<header class="ds-masthead">
+  <div class="ds-shell">
+    <div class="logo-plate" id="ds-logo"></div>
+    <h1>The design language behind BakeFlow.</h1>
+    <p class="ds-lede">
+      BakeFlow is the bakery's command center, so its interface has one job:
+      make a business legible at a glance. Everything here follows from that —
+      money is the loudest thing on screen, structure is carried by surface and
+      space rather than lines and boxes, and motion only ever explains where
+      something came from. Warm, calm, confident. Never clinical, never cute.
+    </p>
+    <a class="ds-back" href="index.html"><span aria-hidden="true">←</span> Back to the prototype</a>
+  </div>
+</header>
+
+<main class="ds-main">
+
+  <!-- ============================================================ COLOUR -->
+  <section class="ds-sec" id="colour">
+    <span class="ds-eyebrow">01 — Foundation</span>
+    <h2>Colour</h2>
+    <p class="ds-note">
+      A warm, low-noise palette. Deep Cocoa carries all primary weight;
+      Warm Cream is the ground the whole product sits on. Baked Apricot is the
+      single accent and is rationed deliberately — when everything is
+      highlighted, nothing is. Semantic colours appear only to state a fact
+      about the business, never for decoration.
+    </p>
+
+    <h3 class="ds-sub">Brand &amp; surface</h3>
+    <div class="ds-grid -c4" id="pal-brand"></div>
+
+    <h3 class="ds-sub">Accent &amp; semantic</h3>
+    <div class="ds-grid -c5" id="pal-semantic"></div>
+
+    <h3 class="ds-sub">Rules</h3>
+    <div class="ds-dd" id="colour-rules"></div>
+  </section>
+
+  <!-- ======================================================== TYPOGRAPHY -->
+  <section class="ds-sec" id="type">
+    <span class="ds-eyebrow">02 — Foundation</span>
+    <h2>Typography</h2>
+    <p class="ds-note">
+      Inter throughout, tracked tight at display sizes. The scale is
+      deliberately short — eight steps, no in-between sizes — so hierarchy comes
+      from decisive jumps rather than fifteen shades of nearly-the-same. Nothing
+      that carries meaning is ever smaller than 11.5px.
+    </p>
+    <div class="ds-panel" id="type-scale"></div>
+
+    <h3 class="ds-sub">Numbers are the interface</h3>
+    <p class="ds-note">
+      Financial figures are set in tabular numerals so digits never shift as
+      values change or animate. A figure always states what it is directly
+      beneath it, at a fraction of the size — the number leads, the label
+      follows.
+    </p>
+    <div class="ds-bed -white ds-row" style="gap:var(--s-8)" id="type-figures"></div>
+  </section>
+
+  <!-- =========================================================== SPACING -->
+  <section class="ds-sec" id="space">
+    <span class="ds-eyebrow">03 — Foundation</span>
+    <h2>Spacing</h2>
+    <p class="ds-note">
+      A strict 8pt system. Every gap, pad and inset is one of these values, which
+      is what makes screens feel settled without anyone being able to say why.
+      Screen gutter is 20px; related things sit 12px apart, separate ideas 24px
+      or more.
+    </p>
+    <div class="ds-panel" id="space-scale"></div>
+  </section>
+
+  <!-- ============================================================ RADIUS -->
+  <section class="ds-sec" id="radius">
+    <span class="ds-eyebrow">04 — Foundation</span>
+    <h2>Radius</h2>
+    <p class="ds-note">
+      Corner softness scales with the size of the surface: small controls stay
+      tight, cards relax, sheets are generously round. Consistency here is what
+      makes the product feel tactile rather than drawn.
+    </p>
+    <div class="ds-grid -c5" id="radius-scale"></div>
+  </section>
+
+  <!-- ========================================================= ELEVATION -->
+  <section class="ds-sec" id="elevation">
+    <span class="ds-eyebrow">05 — Foundation</span>
+    <h2>Elevation</h2>
+    <p class="ds-note">
+      Shadows are whisper-quiet — they exist to lift a surface off the cream,
+      not to announce themselves. Depth is used sparingly: a card is barely
+      raised, a bottom sheet is clearly floating, and nothing in between needs
+      to compete.
+    </p>
+    <div class="ds-grid -c5" id="elev-scale"></div>
+  </section>
+
+  <!-- ============================================================ MOTION -->
+  <section class="ds-sec" id="motion">
+    <span class="ds-eyebrow">06 — Foundation</span>
+    <h2>Motion</h2>
+    <p class="ds-note">
+      Motion is how the product explains itself. Every transition answers
+      "where did this come from?" — pushes come from the right, sheets rise from
+      the bottom, numbers count to their new value so a change is felt rather
+      than just displayed. Nothing bounces, nothing spins for decoration, and
+      everything respects <code class="ds-code">prefers-reduced-motion</code>.
+    </p>
+    <div class="ds-panel">
+      <table class="ds-table" id="motion-table"></table>
+    </div>
+    <h3 class="ds-sub">Easing, felt</h3>
+    <div class="ds-grid -c3" id="motion-demos"></div>
+  </section>
+
+  <!-- ============================================================= BRAND -->
+  <section class="ds-sec" id="brand">
+    <span class="ds-eyebrow">07 — Identity</span>
+    <h2>Brand &amp; the flow motif</h2>
+    <p class="ds-note">
+      The BakeFlow mark — a hand-drawn loaf with rising steam — is the warm,
+      human anchor of the identity. Alongside it the product carries one
+      abstract signature: a soft <em>flow</em> curve, standing for dough,
+      movement and the flow of the business. It appears as the curve of every
+      revenue chart, as the composition bar that shows where money went, and as
+      the quiet gesture in empty states. It is never decoration for its own sake.
+    </p>
+    <div class="ds-grid -c2">
+      <div class="ds-bed" style="display:grid;place-items:center;min-height:170px">
+        <div class="logo-plate" style="background:var(--cream-deep)" id="brand-lock"></div>
+      </div>
+      <div class="ds-bed -ink" style="display:grid;place-items:center;min-height:170px">
+        <div id="brand-tile"></div>
+      </div>
+    </div>
+    <h3 class="ds-sub">The flow signature</h3>
+    <div class="ds-grid -c2">
+      <div class="ds-bed -white" style="display:grid;place-items:center;min-height:150px" id="brand-motif"></div>
+      <div class="ds-bed -white" id="brand-flowbar" style="display:grid;align-content:center;min-height:150px"></div>
+    </div>
+  </section>
+
+  <!-- =========================================================== BUTTONS -->
+  <section class="ds-sec" id="buttons">
+    <span class="ds-eyebrow">08 — Components</span>
+    <h2>Buttons</h2>
+    <p class="ds-note">
+      One primary action per screen, stated in Deep Cocoa. Apricot is reserved
+      for the moment an action is genuinely the point of the screen. Every
+      button responds to touch with a subtle press — the interface should feel
+      like it has physical substance.
+    </p>
+    <div class="ds-stack">
+      <div class="ds-bed ds-row" id="btn-row-1"></div>
+      <div class="ds-bed ds-row" id="btn-row-2"></div>
+      <div class="ds-bed" id="btn-row-3" style="display:grid;gap:var(--s-3)"></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ INPUTS -->
+  <section class="ds-sec" id="inputs">
+    <span class="ds-eyebrow">09 — Components</span>
+    <h2>Inputs &amp; controls</h2>
+    <p class="ds-note">
+      Fields are surfaces, not outlined boxes — a filled input on cream reads as
+      something you can type into without needing a border to prove it. Money
+      entry gets its own oversized treatment, because in this product entering
+      an amount is the most common thing anyone does.
+    </p>
+    <div class="ds-grid -c2">
+      <div class="ds-bed ds-stack" id="input-col-1"></div>
+      <div class="ds-bed ds-stack" id="input-col-2"></div>
+    </div>
+  </section>
+
+  <!-- ============================================================= CARDS -->
+  <section class="ds-sec" id="cards">
+    <span class="ds-eyebrow">10 — Components</span>
+    <h2>Cards &amp; data display</h2>
+    <p class="ds-note">
+      Cards group meaning; they are not containers for their own sake. The dark
+      hero panel is used exactly once per screen, for the single number that
+      screen exists to communicate. Everything else recedes.
+    </p>
+    <div class="ds-stack" id="card-demos"></div>
+  </section>
+
+  <!-- ============================================================ STATUS -->
+  <section class="ds-sec" id="status">
+    <span class="ds-eyebrow">11 — Components</span>
+    <h2>Status &amp; feedback</h2>
+    <p class="ds-note">
+      Every status badge pairs a glyph with a word — colour alone never carries
+      meaning, so the interface still works for colour-blind users and in harsh
+      Lagos sunlight. Sync and error states stay calm and plain-spoken: they say
+      what happened and what to do, never what failed internally.
+    </p>
+    <div class="ds-bed ds-row" id="status-badges"></div>
+
+    <h3 class="ds-sub">Connection &amp; recovery</h3>
+    <div class="ds-grid -c2">
+      <div class="ds-bed ds-stack" id="status-sync"></div>
+      <div class="ds-bed ds-stack" id="status-recover"></div>
+    </div>
+
+    <h3 class="ds-sub">Language</h3>
+    <div class="ds-dd" id="status-language"></div>
+  </section>
+
+  <!-- ============================================================ CHARTS -->
+  <section class="ds-sec" id="charts">
+    <span class="ds-eyebrow">12 — Components</span>
+    <h2>Charts</h2>
+    <p class="ds-note">
+      Charts are drawn, not plotted. No gridlines, no axis furniture, no legends
+      explaining what colour means — just the shape of the business, with the
+      value revealed on touch. The revenue curve uses the BakeFlow flow curve;
+      comparison periods appear as a quiet dashed ghost behind it.
+    </p>
+    <div class="ds-grid -c2" id="chart-demos"></div>
+  </section>
+
+  <!-- ============================================================= ICONS -->
+  <section class="ds-sec" id="icons">
+    <span class="ds-eyebrow">13 — Components</span>
+    <h2>Icons</h2>
+    <p class="ds-note">
+      One family, drawn on a 24px grid at 1.65px stroke with round caps and
+      joins. Geometric and calm, never illustrative. Icons label actions and
+      objects; they never replace a word that matters.
+    </p>
+    <div class="ds-grid -c5" id="icon-grid" style="gap:8px"></div>
+  </section>
+
+  <!-- ======================================================== NAVIGATION -->
+  <section class="ds-sec" id="nav">
+    <span class="ds-eyebrow">14 — Patterns</span>
+    <h2>Navigation &amp; role-adaptive IA</h2>
+    <p class="ds-note">
+      BakeFlow does not ship one dashboard with buttons hidden per role — the
+      information hierarchy itself changes. An owner opens into profit; a manager
+      into today's operations and the cash drawer; counter staff into the next
+      task; a driver into their run. The tab bar is rebuilt per role, so nobody
+      navigates around features that were never theirs.
+    </p>
+    <div class="ds-panel">
+      <table class="ds-table" id="nav-table"></table>
+    </div>
+  </section>
+
+  <!-- ======================================================= COMPONENT API -->
+  <section class="ds-sec" id="architecture">
+    <span class="ds-eyebrow">15 — Architecture</span>
+    <h2>Component inventory</h2>
+    <p class="ds-note">
+      The prototype is built from a fixed set of reusable pieces, each mapping
+      cleanly onto a React Native component so this translates to Expo +
+      NativeWind without redesign.
+    </p>
+    <div class="ds-panel">
+      <table class="ds-table" id="arch-table"></table>
+    </div>
+  </section>
+
+  <!-- ============================================================== DONT -->
+  <section class="ds-sec" id="principles">
+    <span class="ds-eyebrow">16 — Principles</span>
+    <h2>What BakeFlow is not</h2>
+    <p class="ds-note">
+      Constraints define the product as much as the palette does. These are
+      standing rules, not preferences.
+    </p>
+    <div class="ds-dd" id="principle-list"></div>
+  </section>
+
+</main>
+
+<script src="js/icons.js"></script>
+<script src="js/data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/ds-page.js"></script>
+</body>
+</html>

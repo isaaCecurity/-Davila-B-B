@@ -1,0 +1,109 @@
+/* ==========================================================================
+   BAKEFLOW — Design Tokens
+   The single source of truth for colour, type, space, radius, elevation, motion.
+   ========================================================================== */
+
+:root {
+  /* ---------- Brand & surface ---------- */
+  --cocoa:            #2A211C;   /* primary brand / text / strong actions */
+  --cocoa-soft:       #43362E;   /* pressed / hover on cocoa */
+  --cocoa-12:         rgba(42, 33, 28, .12);
+  --cocoa-08:         rgba(42, 33, 28, .08);
+  --cocoa-05:         rgba(42, 33, 28, .05);
+
+  --ink:              #2A211C;   /* always-dark surface, fixed regardless of theme */
+  --ink-soft:         #43362E;
+
+  --cream:            #F7F3EC;   /* app background */
+  --cream-deep:       #F1EBE1;   /* recessed areas, chip rests */
+  --white:            #FFFFFF;   /* cards, sheets, inputs */
+
+  /* Both pass WCAG AA (4.5:1) on --cream and on --white.
+     warm-gray 6.3:1 · warm-gray-soft 4.7:1 — hierarchy preserved, both legible
+     at a sunlit bakery counter. */
+  --warm-gray:        #5F5850;   /* secondary text, metadata */
+  --warm-gray-soft:   #736B62;   /* tertiary text, placeholders */
+  --border:           #E7E1D8;   /* soft border — use sparingly */
+
+  /* ---------- Semantic ---------- */
+  --apricot:          #E58A5B;   /* accent: highlight, selection, charts */
+  --apricot-tint:     #FBEDE4;
+  --apricot-deep:     #C8703F;
+
+  --success:          #3E8F68;
+  --success-tint:     #E6F0EA;
+  --warning:          #D49A3A;
+  --warning-tint:     #FAF0DC;
+  --error:            #C95C54;
+  --error-tint:       #F8E7E4;
+
+  --info:             #5B7FA6;
+  --info-tint:        #E8EEF4;
+
+  /* ---------- Type ---------- */
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+
+  --t-display:  34px;  /* hero financial figure */
+  --t-title-1:  27px;
+  --t-title-2:  21px;
+  --t-title-3:  17px;
+  --t-body:     15px;
+  --t-callout:  14px;
+  --t-foot:     13px;
+  --t-caption:  12.5px;
+
+  --lh-tight: 1.06;
+  --lh-snug:  1.25;
+  --lh-body:  1.45;
+
+  /* ---------- Space (8pt system) ---------- */
+  --s-1: 4px;   --s-2: 8px;   --s-3: 12px;  --s-4: 16px;
+  --s-5: 20px;  --s-6: 24px;  --s-8: 32px;  --s-10: 40px;  --s-12: 48px;
+
+  /* ---------- Radius ---------- */
+  --r-xs: 8px;    /* pills on tiny controls */
+  --r-sm: 11px;   /* small controls, inputs, buttons */
+  --r-md: 18px;   /* cards */
+  --r-lg: 22px;   /* floating surfaces */
+  --r-xl: 26px;   /* bottom sheets */
+  --r-pill: 999px;
+
+  /* ---------- Elevation (whisper-quiet) ---------- */
+  --e-0: none;
+  --e-1: 0 1px 2px rgba(42, 33, 28, .04);
+  --e-2: 0 2px 6px rgba(42, 33, 28, .05), 0 1px 1px rgba(42, 33, 28, .03);
+  --e-3: 0 8px 24px rgba(42, 33, 28, .08), 0 2px 6px rgba(42, 33, 28, .04);
+  --e-4: 0 -10px 40px rgba(42, 33, 28, .14);
+
+  /* ---------- Motion ---------- */
+  --ease-out:   cubic-bezier(.22, 1, .36, 1);
+  --ease-inout: cubic-bezier(.5, 0, .2, 1);
+  --ease-nav:   cubic-bezier(.32, .72, 0, 1);
+  --d-fast: 130ms;
+  --d-base: 215ms;
+  --d-slow: 360ms;
+
+  /* ---------- Layout ---------- */
+  --tabbar-h: 62px;
+  --appbar-h: 52px;
+  --gutter: 20px;
+  --tap-min: 44px;   /* minimum comfortable touch target */
+}
+
+[data-theme="dark"] {
+  --cocoa:            #EFE7DC;
+  --cocoa-soft:       #D8CCBC;
+  --cream:            #17130F;
+  --cream-deep:       #1E1811;
+  --white:            #26201A;
+  --warm-gray:        #A79D91;
+  --warm-gray-soft:   #8C8377;
+  --border:           #3A3026;
+
+  --apricot-tint:     #3A2A1E;
+  --success-tint:     #1D3226;
+  --warning-tint:     #3A2E14;
+  --error-tint:       #3A2119;
+  --info-tint:        #1C2A38;
+}

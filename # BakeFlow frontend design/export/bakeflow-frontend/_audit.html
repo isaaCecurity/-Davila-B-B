@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>data audit</title>
+<style>body{font:15px ui-monospace,monospace;padding:20px;background:#fff}
+#v{font-size:44px;font-weight:700;margin-bottom:14px}
+.ok{color:#2b7a4b}.bad{color:#b3241c;font-weight:700}
+div{margin:3px 0}</style>
+</head><body>
+<div id="v">…</div><div id="out"></div>
+<script src="js/data.js"></script>
+<script>
+var fails = [];
+function assert(label, a, b) {
+  if (Math.round(a) !== Math.round(b)) {
+    fails.push(label + ': got ' + Math.round(a) + ' expected ' + Math.round(b));
+  }
+}
+// 1. every order / ticket total equals the sum of its item lines
+DB.orders.concat(DB.tickets).forEach(function (o) {
+  var sum = o.items.reduce(function (s, i) {
+    var p = P(i.p);
+    if (!p) { fails.push(o.ref + ' references missing product ' + i.p); return s; }
+    return s + p.price * i.q;
+  }, 0);
+  assert(o.ref + ' items vs total', sum, o.total);
+});
+// 2. P&L identities
+var p = DB.finance.pnl;
+assert('revenue lines', p.revenue.lines.reduce(function(s,l){return s+l.v;},0), p.revenue.total);
+assert('cogs lines',    p.cogs.lines.reduce(function(s,l){return s+l.v;},0),    p.cogs.total);
+assert('opex lines',    p.opex.lines.reduce(function(s,l){return s+l.v;},0),    p.opex.total);
+assert('gross profit',  p.revenue.total - p.cogs.total, p.grossProfit);
+assert('net profit',    p.grossProfit - p.opex.total,   p.netProfit);
+// 3. today
+assert('today net', DB.today.revenue - DB.today.expenses, DB.today.net);
+// 4. cash session
+var c = DB.cash;
+var ins = 0, outs = 0;
+c.movements.forEach(function (m) { if (m.v > 0) { ins += m.v; } else { outs += -m.v; } });
+assert('cash in (open+sales)', ins, c.open + c.sales);
+assert('cash out vs expenses', outs, c.expenses);
+assert('cash expected', c.open + c.sales - c.expenses, c.expected);
+assert('cash diff', c.actual - c.expected, c.diff);
+// 5. week / branches
+assert('friday is today', DB.week[4].v, DB.today.revenue);
+assert('branch revenue sum', DB.branches.reduce(function(s,b){return s+b.rev;},0), DB.today.revenue);
+assert('branch pct sum', DB.branches.reduce(function(s,b){return s+b.pct;},0), 100);
+// 6. sales feed
+assert('sales today total',
+  DB.sales.groups[0].rows.reduce(function(s,r){return s+r.amount;},0),
+  DB.sales.groups[0].total);
+assert('sales method pct', DB.sales.methods.reduce(function(s,m){return s+m.pct;},0), 100);
+assert('sales methods sum', DB.sales.methods.reduce(function(s,m){return s+m.v;},0), DB.sales.todayTotal);
+
+document.getElementById('v').innerHTML = fails.length
+  ? '<span class="bad">' + fails.length + ' FAIL</span>'
+  : '<span class="ok">ALL PASS</span>';
+document.getElementById('out').innerHTML = fails.length
+  ? fails.map(function (f) { return '<div class="bad">' + f + '</div>'; }).join('')
+  : '<div class="ok">every documented figure reconciles</div>';
+</script>
+</body></html>

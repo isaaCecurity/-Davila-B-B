@@ -1,0 +1,406 @@
+/* ==========================================================================
+   BakeFlow — sign-in screen (the panel the push reveals)
+   Entrance: logo draws itself on, steam sways, fields rise in a stagger.
+   ========================================================================== */
+
+.signin {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr;
+  padding: max(18px, env(safe-area-inset-top)) 26px
+           calc(18px + env(safe-area-inset-bottom));
+}
+
+.si-top {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  width: auto;
+  max-width: max-content;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 1px 2px rgba(0,0,0,.05);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.34s var(--spring), background-color 0.2s linear;
+}
+.back-btn.is-pressed { transform: scale(0.94); }
+.back-btn svg { width: 16px; height: 16px; }
+
+/* ------------------------------------------------------------ scroll body */
+.si-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.si-scroll::-webkit-scrollbar { display: none; }
+
+/* ------------------------------------------------------------------- hero */
+.si-hero {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  padding-top: clamp(12px, 4.5vh, 44px);
+}
+
+.si-mark {
+  width: clamp(58px, 17vw, 74px);
+  height: auto;
+  margin-bottom: clamp(16px, 3.4vh, 30px);
+}
+
+/* draw-on entrance, only while the screen has .is-entering */
+.signin:not(.is-entering) .si-mark path { stroke-dasharray: none; }
+.signin.is-entering .si-mark path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 0.85s var(--ease-out) forwards;
+}
+.signin.is-entering .si-mark .mark-dough { animation-delay: 0.22s; }
+.signin.is-entering .si-mark .mark-steam-1 { animation-delay: 0.44s; }
+.signin.is-entering .si-mark .mark-steam-2 { animation-delay: 0.56s; }
+
+/* steam keeps breathing after it has drawn on */
+.si-mark .mark-steam-1, .si-mark .mark-steam-2 {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.signin:not(.is-entering) .si-mark .mark-steam-1,
+.signin.is-entering .si-mark .mark-steam-1 {
+  animation: draw 0.85s 0.44s var(--ease-out) both,
+             steam-sway 3.2s 1.4s ease-in-out infinite;
+}
+.signin:not(.is-entering) .si-mark .mark-steam-2,
+.signin.is-entering .si-mark .mark-steam-2 {
+  animation: draw 0.85s 0.56s var(--ease-out) both,
+             steam-sway 3.2s 1.8s ease-in-out infinite reverse;
+}
+.signin:not(.is-entering) .si-mark .mark-steam-1,
+.signin:not(.is-entering) .si-mark .mark-steam-2 {
+  animation: steam-sway 3.2s ease-in-out infinite;
+}
+.signin:not(.is-entering) .si-mark .mark-steam-2 { animation-direction: reverse; }
+
+/* a soft glow blooms behind the logo as it lands */
+.si-hero { position: relative; }
+.si-hero::before {
+  content: "";
+  position: absolute;
+  top: -4%;
+  left: 50%;
+  width: 200px;
+  height: 200px;
+  transform: translateX(-50%) scale(0.6);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--orange-wash), transparent 68%);
+  opacity: 0;
+  pointer-events: none;
+}
+.signin.is-entering .si-hero::before {
+  animation: hero-glow 1.2s 0.3s var(--ease-out) forwards;
+}
+@keyframes hero-glow {
+  0% { opacity: 0; transform: translateX(-50%) scale(0.6); }
+  45% { opacity: 1; }
+  100% { opacity: 0.7; transform: translateX(-50%) scale(1); }
+}
+
+.si-title { max-width: 14ch; }
+.si-lede { max-width: 28ch; text-align: center; }
+
+/* ------------------------------------------------------- staggered reveal
+   Each .si-reveal carries --d so the whole screen choreographs itself. */
+.si-reveal { opacity: 0; transform: translateY(22px); }
+.signin.is-entering .si-reveal {
+  animation: si-rise 0.7s var(--d, 0s) var(--spring) forwards;
+}
+@keyframes si-rise { to { opacity: 1; transform: none; } }
+
+/* ------------------------------------------------------------------- form */
+.si-form {
+  display: grid;
+  gap: 18px;
+  padding-top: clamp(22px, 4.5vh, 40px);
+}
+
+.field { display: grid; gap: 8px; }
+.field-label {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.field-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 56px;
+  padding: 0 16px;
+  background: var(--white);
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.24s var(--ease-out), box-shadow 0.24s var(--ease-out),
+    transform 0.24s var(--spring);
+}
+.field-box:focus-within {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 4px rgba(44, 35, 32, 0.07);
+}
+.field-icon {
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: color 0.24s linear;
+}
+.field-box:focus-within .field-icon { color: var(--ink); }
+
+.field-box input {
+  flex: 1;
+  min-width: 0;
+  height: 54px;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.field-box input::placeholder { color: var(--muted); font-weight: 500; }
+
+/* invalid shake */
+.field.is-invalid .field-box {
+  border-color: #c2482f;
+  animation: shake 0.42s var(--ease-out);
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  22% { transform: translateX(-7px); }
+  48% { transform: translateX(6px); }
+  72% { transform: translateX(-3px); }
+}
+
+/* password visibility toggle */
+.eye-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-right: -8px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.3s var(--spring), color 0.2s linear;
+}
+.eye-btn.is-pressed { transform: scale(0.86); }
+.eye-btn svg { width: 21px; height: 21px; grid-area: 1 / 1; }
+.eye-btn .eye-closed { opacity: 0; transform: scale(0.6) rotate(-14deg); }
+.eye-btn .eye-open,
+.eye-btn .eye-closed { transition: opacity 0.22s linear, transform 0.32s var(--spring); }
+.eye-btn[aria-pressed="true"] .eye-open { opacity: 0; transform: scale(0.6) rotate(14deg); }
+.eye-btn[aria-pressed="true"] .eye-closed { opacity: 1; transform: none; }
+
+/* ---------------------------------------------------------------- actions */
+.si-actions { display: grid; gap: 14px; justify-items: center; }
+.si-forgot { font-size: 15px; }
+.si-submit-content { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
+.si-spinner {
+  width: 17px;
+  height: 17px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.2s linear, transform 0.3s var(--spring);
+  animation: si-spin 0.7s linear infinite;
+}
+.si-submit.is-loading .si-spinner { opacity: 1; transform: scale(1); }
+@keyframes si-spin { to { transform: rotate(360deg); } }
+.si-status {
+  min-height: 19px;
+  margin: -3px 8px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+/* success pulse on the submit button */
+#si-submit.is-success {
+  background: #2e7d46;
+  transition: background-color 0.25s linear, transform 0.32s var(--spring);
+}
+
+/* ----------------------------------------------------------- confirmation */
+.si-confirmation {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-height: 58vh;
+  padding: 32px 12px 48px;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(18px) scale(0.98);
+  transition: opacity 0.45s var(--ease-out), transform 0.65s var(--spring);
+}
+.si-confirmation.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.si-confirmation .h-title { margin-top: 22px; }
+.si-confirmation .lede { max-width: 27ch; }
+.confirmation-mark {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--orange-wash);
+  color: var(--orange);
+  animation: confirmation-pop 0.7s var(--spring) both;
+}
+.confirmation-mark svg { width: 43px; height: 43px; overflow: visible; }
+.confirmation-mark circle { stroke: currentColor; stroke-width: 2.2; }
+.confirmation-mark path {
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 28;
+  stroke-dashoffset: 28;
+  animation: check-draw 0.45s 0.35s var(--ease-out) forwards;
+}
+.confirmation-continue { max-width: 300px; margin-top: 30px; }
+@keyframes confirmation-pop {
+  0% { opacity: 0; transform: scale(0.55) rotate(-8deg); }
+  70% { transform: scale(1.08) rotate(2deg); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes check-draw { to { stroke-dashoffset: 0; } }
+.si-form.is-complete {
+  display: none;
+}
+
+/* --------------------------------------------------------------- divider */
+.si-or {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0;
+}
+.si-or-line { flex: 1; height: 1px; background: var(--line-strong); }
+.si-or-text { font-size: 14px; font-weight: 600; color: var(--muted); }
+
+/* ----------------------------------------------------------------- google */
+.si-google { min-height: 56px; font-weight: 700; }
+
+/* ===================== RESET PASSWORD SCREEN ===================== */
+.reset {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  padding: max(18px, env(safe-area-inset-top)) 26px
+           calc(18px + env(safe-area-inset-bottom));
+  background: var(--cream);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(28px);
+  transition: opacity 0.45s var(--ease-out), transform 0.6s var(--spring-soft);
+}
+.reset.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.reset .si-scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.reset-inner {
+  width: 100%;
+  padding: 8px 0 28px;
+}
+.reset-card {
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  text-align: center;
+}
+.reset.is-visible .reset-card {
+  animation: reset-bloom 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes reset-bloom {
+  0% { opacity: 0; transform: scale(0.92) translateY(20px); filter: blur(8px); }
+  100% { opacity: 1; transform: none; filter: blur(0); }
+}
+.reset-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: var(--white);
+  color: var(--orange);
+  box-shadow: var(--shadow-sm);
+}
+.reset-icon svg { width: 34px; height: 34px; }
+.reset-title { margin-top: 24px; }
+.reset-lede { max-width: 28ch; margin: 10px auto 0; }
+.reset-form {
+  display: grid;
+  gap: 18px;
+  margin-top: 28px;
+  text-align: left;
+}
+.reset-back-link { margin-top: 22px; }
+.reset-form.is-complete,
+.reset-back-link.is-complete { display: none; }
+.reset-confirmation {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  padding: 8px 4px 24px;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(18px) scale(0.98);
+  transition: opacity 0.45s var(--ease-out), transform 0.65s var(--spring);
+}
+.reset-confirmation.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.reset-confirmation .h-title { margin-top: 22px; }
+.reset-confirmation .lede { max-width: 26ch; }
+.reset-confirmation .confirmation-continue { margin-top: 30px; }

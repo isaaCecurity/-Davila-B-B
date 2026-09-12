@@ -1,0 +1,294 @@
+/* ==========================================================================
+   BakeFlow — base design system
+   Palette + typography taken from the app's sign-in screen
+   ========================================================================== */
+
+:root {
+  /* Surfaces */
+  --cream: #f7f1ea;
+  --cream-2: #fbf8f4;
+  --white: #ffffff;
+
+  /* Ink */
+  --ink: #2c2320;
+  --ink-2: #3b302a;
+  --ink-soft: #6d605a;
+  --muted: #6b6159;   /* 5.4:1 on --cream (was #a2968d, ~2.6:1) */
+
+  /* Accent */
+  --orange: #e0762e;
+  --orange-2: #f0a35f;
+  --orange-wash: rgba(224, 118, 46, 0.12);
+
+  /* Lines & shadow */
+  --line: #e6dbcf;
+  --line-strong: #d6c8b9;
+  --shadow-sm: 0 1px 2px rgba(44, 35, 32, 0.06);
+  --shadow-md: 0 10px 24px -12px rgba(44, 35, 32, 0.22);
+  --shadow-lg: 0 26px 60px -28px rgba(44, 35, 32, 0.38);
+
+  /* Radii */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 26px;
+  --r-pill: 999px;
+
+  /* Motion */
+  --spring: cubic-bezier(0.22, 1.16, 0.32, 1);
+  --spring-soft: cubic-bezier(0.3, 1.08, 0.4, 1);
+  --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
+  --ease-in-out: cubic-bezier(0.65, 0.05, 0.36, 1);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: #e7ded4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* --------------------------------------------------------------------------
+   Phone shell: fills the screen on a real phone, becomes a device mock on
+   wide screens so the layout can be previewed in a desktop browser.
+   -------------------------------------------------------------------------- */
+.stage {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+
+.phone {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--cream);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+@media (min-width: 560px) and (min-height: 720px) {
+  .stage { padding: 28px 0; }
+  .phone {
+    max-width: 412px;
+    height: min(880px, calc(100dvh - 56px));
+    border-radius: 46px;
+    border: 11px solid #14100e;
+    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  }
+  .phone::after {
+    /* notch */
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 108px;
+    height: 26px;
+    border-radius: 14px;
+    background: #14100e;
+    z-index: 60;
+    pointer-events: none;
+  }
+}
+
+/* Ambient background blobs (slow, always-on drift) */
+.ambient {
+  position: absolute;
+  inset: -12%;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(42px);
+  opacity: 0.55;
+  will-change: transform;
+}
+.blob--a {
+  width: 62%; aspect-ratio: 1;
+  left: -14%; top: 4%;
+  background: radial-gradient(circle at 35% 35%, rgba(240, 163, 95, 0.55), rgba(240, 163, 95, 0) 70%);
+  animation: drift-a 19s ease-in-out infinite;
+}
+.blob--b {
+  width: 70%; aspect-ratio: 1;
+  right: -22%; top: 28%;
+  background: radial-gradient(circle at 60% 40%, rgba(198, 166, 132, 0.5), rgba(198, 166, 132, 0) 70%);
+  animation: drift-b 24s ease-in-out infinite;
+}
+.blob--c {
+  width: 58%; aspect-ratio: 1;
+  left: 6%; bottom: -12%;
+  background: radial-gradient(circle at 50% 50%, rgba(224, 118, 46, 0.28), rgba(224, 118, 46, 0) 72%);
+  animation: drift-a 27s ease-in-out infinite reverse;
+}
+
+@keyframes drift-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(9%, 7%, 0) scale(1.12); }
+  66% { transform: translate3d(-6%, 12%, 0) scale(0.95); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.05); }
+  40% { transform: translate3d(-12%, -8%, 0) scale(0.92); }
+  75% { transform: translate3d(5%, 9%, 0) scale(1.14); }
+}
+
+/* --------------------------------------------------------------------------
+   Typography
+   -------------------------------------------------------------------------- */
+h1, h2, h3 { margin: 0; letter-spacing: -0.03em; }
+.h-display {
+  font-size: clamp(26px, 7.6vw, 32px);
+  font-weight: 800;
+  line-height: 1.14;
+}
+.h-title {
+  font-size: clamp(23px, 6.6vw, 28px);
+  font-weight: 800;
+  line-height: 1.18;
+}
+.lede {
+  margin: 10px 0 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--r-md);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.32s var(--spring), box-shadow 0.32s var(--ease-out),
+    background-color 0.2s linear, opacity 0.2s linear;
+}
+.btn:active { transform: scale(0.972); }
+.btn--primary {
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 12px 26px -14px rgba(44, 35, 32, 0.85);
+}
+.btn--primary:hover { background: var(--ink-2); }
+.btn--ghost {
+  background: var(--white);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.btn--quiet {
+  background: transparent;
+  color: var(--ink-soft);
+  min-height: 46px;
+  font-weight: 600;
+}
+.btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+/* Press ripple */
+.btn .ripple {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  background: currentColor;
+  opacity: 0.18;
+  pointer-events: none;
+  animation: ripple 0.62s var(--ease-out) forwards;
+}
+@keyframes ripple {
+  to { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+
+.link {
+  color: var(--orange);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1.5px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   Brand mark (drawn-on SVG)
+   -------------------------------------------------------------------------- */
+.mark path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.mark .mark-bowl { stroke: var(--ink); stroke-width: 7; }
+.mark .mark-dough { stroke: var(--ink); stroke-width: 6; }
+.mark .mark-steam { stroke: var(--orange); stroke-width: 6.5; }
+
+/* Tap targets: keep every control's drawn size exactly as designed, but give
+   the small ones an invisible 44px hit area so they're reachable one-handed. */
+.back-btn, .ob-skip, .dot, .si-peek, .link {
+  position: relative;
+}
+.back-btn::before, .ob-skip::before, .dot::before,
+.si-peek::before, .link::before {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 100%; height: 100%;
+  min-width: 44px; min-height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* draw-on: paths carry pathLength="1" */
+.mark--draw path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 0.9s var(--ease-out) forwards;
+}
+.mark--draw .mark-steam-1 { animation-delay: 0.5s; }
+.mark--draw .mark-steam-2 { animation-delay: 0.64s; }
+.mark--draw .mark-dough { animation-delay: 0.34s; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* --------------------------------------------------------------------------
+   Utility
+   -------------------------------------------------------------------------- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
