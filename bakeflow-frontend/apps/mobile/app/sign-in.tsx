@@ -1,15 +1,7 @@
 import { signInWithPassword } from '@bakeflow/auth';
+import { Button, Callout, Field, Screen, Text } from '@bakeflow/ui';
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView, Platform, View } from 'react-native';
 
 /**
  * Email/password sign-in.
@@ -45,68 +37,51 @@ export default function SignInScreen(): React.JSX.Element {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <Screen>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View className="flex-1 justify-center gap-5 p-6">
+        <View className="flex-1 justify-center gap-5 p-gutter">
           <View className="gap-1">
-            <Text className="text-3xl font-bold text-neutral-900">BakeFlow</Text>
-            <Text className="text-base text-neutral-500">Sign in to your bakery.</Text>
+            <Text variant="display">BakeFlow</Text>
+            <Text variant="meta">Sign in to your bakery.</Text>
           </View>
 
-          <View className="gap-2">
-            <Text className="text-sm font-medium text-neutral-700">Email</Text>
-            <TextInput
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              inputMode="email"
-              editable={!submitting}
-              placeholder="you@bakery.ng"
-              className="rounded-lg border border-neutral-300 px-4 py-3 text-base text-neutral-900"
-            />
-          </View>
+          <Field
+            label="Email"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            autoComplete="email"
+            keyboardType="email-address"
+            inputMode="email"
+            editable={!submitting}
+            placeholder="you@bakery.ng"
+          />
 
-          <View className="gap-2">
-            <Text className="text-sm font-medium text-neutral-700">Password</Text>
-            <TextInput
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              autoComplete="current-password"
-              editable={!submitting}
-              onSubmitEditing={() => void onSubmit()}
-              returnKeyType="go"
-              className="rounded-lg border border-neutral-300 px-4 py-3 text-base text-neutral-900"
-            />
-          </View>
+          <Field
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="current-password"
+            editable={!submitting}
+            onSubmitEditing={() => void onSubmit()}
+            returnKeyType="go"
+          />
 
-          {error !== null && (
-            <Text accessibilityRole="alert" className="text-base text-red-600">
-              {error}
-            </Text>
-          )}
+          {error !== null && <Callout tone="error" title="Could not sign in" detail={error} />}
 
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            label={submitting ? 'Signing in…' : 'Sign in'}
+            busy={submitting}
             disabled={!canSubmit}
             onPress={() => void onSubmit()}
-            className={`flex-row items-center justify-center gap-2 rounded-lg px-5 py-4 ${
-              canSubmit ? 'bg-neutral-900 active:opacity-80' : 'bg-neutral-300'
-            }`}
-          >
-            {submitting && <ActivityIndicator color="white" />}
-            <Text className="text-base font-semibold text-white">
-              {submitting ? 'Signing in…' : 'Sign in'}
-            </Text>
-          </Pressable>
+          />
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }

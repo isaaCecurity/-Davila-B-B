@@ -67,14 +67,14 @@ export default function ProductionScreen(): React.JSX.Element {
 
   if (activeTenantId === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <NoOrganizationState onChoose={() => router.push('/select-organization')} />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="gap-4 border-b border-neutral-200 p-6 pb-4">
         <View className="flex-row items-center justify-between gap-3">
           <View className="flex-1 gap-1">

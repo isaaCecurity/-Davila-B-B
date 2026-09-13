@@ -44,7 +44,7 @@ export default function ProductDetailScreen(): React.JSX.Element {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="flex-row items-center gap-3 border-b border-neutral-200 p-6 pb-4">
         <Pressable
           accessibilityRole="button"

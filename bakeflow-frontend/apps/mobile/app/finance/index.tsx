@@ -61,7 +61,7 @@ export default function FinanceScreen(): React.JSX.Element {
 
   if (tenantId === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <NoOrganizationState onChoose={() => router.push('/select-organization')} />
       </SafeAreaView>
     );
@@ -75,7 +75,7 @@ export default function FinanceScreen(): React.JSX.Element {
   const openTill = openSessions.find((session) => session.status === 'open');
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="flex-row items-center justify-between border-b border-neutral-200 p-6 pb-4">
         <View className="flex-1 gap-1 pr-3">
           <Text className="text-2xl font-bold text-neutral-900">Finance</Text>

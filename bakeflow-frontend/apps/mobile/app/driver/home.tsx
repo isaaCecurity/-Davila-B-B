@@ -56,7 +56,7 @@ export default function DriverHomeScreen(): React.JSX.Element {
 
   if (activeTenantId === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <NoOrganizationState onChoose={() => router.push('/select-organization')} />
       </SafeAreaView>
     );
@@ -65,7 +65,7 @@ export default function DriverHomeScreen(): React.JSX.Element {
   const roles = rolesFromSession(session);
   if (!roles.includes('driver')) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <EmptyState
           title="Not a driver"
           detail="This screen is for the driver role. Ask a manager if you should have it."
@@ -75,7 +75,7 @@ export default function DriverHomeScreen(): React.JSX.Element {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="gap-1 border-b border-neutral-200 p-6 pb-4">
         <Text className="text-2xl font-bold text-neutral-900">Today</Text>
         <Text className="text-sm text-neutral-500">Your route, one step at a time</Text>

@@ -65,21 +65,21 @@ export default function SellScreen(): React.JSX.Element {
 
   if (activeTenantId === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <NoOrganizationState onChoose={() => router.push('/select-organization')} />
       </SafeAreaView>
     );
   }
   if (!rolesFromSession(session).includes('driver')) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <EmptyState title="Not a driver" detail="This screen is for the driver role." />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="flex-row items-center gap-3 border-b border-neutral-200 p-6 pb-4">
         <Pressable
           accessibilityRole="button"

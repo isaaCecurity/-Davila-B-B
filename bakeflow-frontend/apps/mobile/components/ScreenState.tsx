@@ -1,9 +1,8 @@
 /**
  * The four states every data screen has to render, in one place.
  *
- * Not a design system — P8.1 is deliberately small. This exists because loading, empty,
- * error-with-retry and "no organization" were about to be written three times each, and
- * the *wording* of two of them is a correctness matter rather than a styling one:
+ * Presentation comes from `@bakeflow/ui`; what lives here is the *wording*, and for two of
+ * these that is a correctness matter rather than a styling one:
  *
  * - An empty catalog and a denied catalog look identical over the wire. RLS filters rather
  *   than raising, so a user whose membership was revoked receives `[]`, exactly like a
@@ -13,13 +12,17 @@
  *   dead end with no button is a reinstall.
  */
 
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { Button, Text } from '@bakeflow/ui';
+import { ActivityIndicator, View } from 'react-native';
+
+/** Cocoa — ActivityIndicator takes a colour prop, not a class. */
+const SPINNER = '#2A211C';
 
 export function LoadingState({ label = 'Loading…' }: { label?: string }): React.JSX.Element {
   return (
-    <View className="flex-1 items-center justify-center gap-3 p-6">
-      <ActivityIndicator size="large" />
-      <Text className="text-base text-neutral-500">{label}</Text>
+    <View className="flex-1 items-center justify-center gap-3 p-gutter">
+      <ActivityIndicator size="large" color={SPINNER} />
+      <Text variant="meta">{label}</Text>
     </View>
   );
 }
@@ -32,10 +35,12 @@ export function EmptyState({
   detail?: string;
 }): React.JSX.Element {
   return (
-    <View className="flex-1 items-center justify-center gap-2 p-6">
-      <Text className="text-lg font-semibold text-neutral-800">{title}</Text>
+    <View className="flex-1 items-center justify-center gap-2 p-gutter">
+      <Text variant="subtitle">{title}</Text>
       {detail !== undefined && (
-        <Text className="text-center text-base text-neutral-500">{detail}</Text>
+        <Text variant="meta" className="text-center">
+          {detail}
+        </Text>
       )}
     </View>
   );
@@ -57,16 +62,12 @@ export function ErrorState({
   onRetry: () => void;
 }): React.JSX.Element {
   return (
-    <View className="flex-1 items-center justify-center gap-4 p-6">
-      <Text className="text-lg font-semibold text-neutral-800">Something went wrong</Text>
-      <Text className="text-center text-base text-neutral-500">{error.message}</Text>
-      <Pressable
-        accessibilityRole="button"
-        onPress={onRetry}
-        className="rounded-lg bg-neutral-900 px-5 py-3 active:opacity-80"
-      >
-        <Text className="text-base font-medium text-white">Try again</Text>
-      </Pressable>
+    <View className="flex-1 items-center justify-center gap-4 p-gutter">
+      <Text variant="subtitle">Something went wrong</Text>
+      <Text variant="meta" className="text-center">
+        {error.message}
+      </Text>
+      <Button label="Try again" onPress={onRetry} />
     </View>
   );
 }
@@ -84,18 +85,12 @@ export function NoOrganizationState({
   onChoose: () => void;
 }): React.JSX.Element {
   return (
-    <View className="flex-1 items-center justify-center gap-4 p-6">
-      <Text className="text-lg font-semibold text-neutral-800">No bakery selected</Text>
-      <Text className="text-center text-base text-neutral-500">
+    <View className="flex-1 items-center justify-center gap-4 p-gutter">
+      <Text variant="subtitle">No bakery selected</Text>
+      <Text variant="meta" className="text-center">
         Choose a bakery to see its catalog.
       </Text>
-      <Pressable
-        accessibilityRole="button"
-        onPress={onChoose}
-        className="rounded-lg bg-neutral-900 px-5 py-3 active:opacity-80"
-      >
-        <Text className="text-base font-medium text-white">Choose a bakery</Text>
-      </Pressable>
+      <Button label="Choose a bakery" onPress={onChoose} />
     </View>
   );
 }

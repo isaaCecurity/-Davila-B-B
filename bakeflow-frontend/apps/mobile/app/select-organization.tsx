@@ -72,7 +72,7 @@ export default function SelectOrganizationScreen(): React.JSX.Element {
 
   if (organizations.isError) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <ErrorState error={organizations.error} onRetry={() => void organizations.refetch()} />
         <SignOutRow onPress={() => void onSignOut()} />
       </SafeAreaView>
@@ -83,7 +83,7 @@ export default function SelectOrganizationScreen(): React.JSX.Element {
 
   if (rows.length === 0) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <EmptyState
           title="No bakeries yet"
           detail="Your account is not a member of any bakery. Ask an owner or admin to invite you."
@@ -97,7 +97,7 @@ export default function SelectOrganizationScreen(): React.JSX.Element {
     roles.data?.find((r) => r.tenant_id === tenantId)?.role_name ?? null;
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <View className="gap-1 p-6 pb-3">
         <Text className="text-2xl font-bold text-neutral-900">Choose a bakery</Text>
         <Text className="text-base text-neutral-500">

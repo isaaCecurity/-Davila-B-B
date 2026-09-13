@@ -64,7 +64,7 @@ export default function ProductionBatchScreen(): React.JSX.Element {
 
   if (activeTenantId === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <NoOrganizationState onChoose={() => router.push('/select-organization')} />
       </SafeAreaView>
     );
@@ -72,7 +72,7 @@ export default function ProductionBatchScreen(): React.JSX.Element {
 
   if (batch.isPending) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <LoadingState label="Loading batch…" />
       </SafeAreaView>
     );
@@ -80,7 +80,7 @@ export default function ProductionBatchScreen(): React.JSX.Element {
 
   if (batch.isError) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <ErrorState error={batch.error} onRetry={() => void batch.refetch()} />
       </SafeAreaView>
     );
@@ -88,7 +88,7 @@ export default function ProductionBatchScreen(): React.JSX.Element {
 
   if (batch.data === null) {
     return (
-      <SafeAreaView className="flex-1 bg-white">
+      <SafeAreaView className="flex-1 bg-cream">
         <EmptyState
           title="Batch not found"
           detail="It may have been removed, or it belongs to a bakery or branch you cannot see."
@@ -101,7 +101,7 @@ export default function ProductionBatchScreen(): React.JSX.Element {
   const recipeName = recipes.data?.find((recipe) => recipe.id === row.recipe_id)?.name ?? null;
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-cream">
       <ScrollView contentContainerClassName="p-6 gap-6">
         <View className="gap-2">
           <View className="flex-row items-start justify-between gap-3">
