@@ -120,13 +120,30 @@ export {
   getTicketByNumber,
   getTicketWithItems,
   listCustomers,
+  listCustomersByIds,
   listTicketCorrections,
   listTicketItems,
+  listTicketItemsForTickets,
   listTickets,
   listTicketsByIds,
   type CustomerFilters,
   type TicketFilters,
 } from './queries/sales';
+
+// Ticket lifecycle for operational roles — see the module header for why each target uses
+// the RPC it does, and why this is separate from the driver-only `./mutations/sales`.
+export {
+  advanceTicket,
+  cancelTicket,
+  createTicket,
+  NEXT_TICKET_STATUS,
+  nextTicketStatus,
+  type AdvanceTicketInput,
+  type CancelTicketInput,
+  type CreateTicketInput,
+  type CreateTicketLine,
+  type TicketTransitionResult,
+} from './mutations/tickets';
 
 // ADR-001 Phase 5 — the driver "Sell" step: ticket creation (`createRoadsideTicket`, a
 // plain INSERT — verified live RLS lets a driver create their own ticket, not an RPC

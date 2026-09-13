@@ -55,11 +55,26 @@ function NavigationGate(): null {
   return null;
 }
 
+/*
+ * Push/pop: the prototype slides the incoming screen in from the right while the outgoing one
+ * drifts 22% left and dims (360ms on its navigation curve). `ios_from_right` is that motion on
+ * Android; on iOS it resolves to the system push, which is the same parallax slide.
+ *
+ * PORT-NOTE: native-stack does not accept a custom easing curve, and on iOS the push duration
+ * is system-controlled (~350ms against the prototype's 360ms). Keeping the native transition
+ * preserves the interactive edge-swipe back gesture, which a JS re-implementation would lose.
+ */
 export default function RootLayout(): React.JSX.Element {
   return (
     <AppProviders>
       <NavigationGate />
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: 'ios_from_right',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      />
     </AppProviders>
   );
 }

@@ -4,3 +4,5 @@
 
 expo-env.d.ts
 # @end expo-cli
+# Skia web CanvasKit binary — regenerate with: node ../../node_modules/@shopify/react-native-skia/scripts/setup-canvaskit.js public
+public/canvaskit.wasm

@@ -2,6 +2,8 @@ import { TextInput, type TextInputProps, View } from 'react-native';
 
 import { cn } from './cn';
 import { Text } from './Text';
+import { useScheme } from './ThemeProvider';
+import { colorFor } from './tokens';
 
 export interface FieldProps extends TextInputProps {
   label: string;
@@ -26,13 +28,14 @@ export function Field({
   ...rest
 }: FieldProps): React.JSX.Element {
   const invalid = error !== null && error !== '';
+  const scheme = useScheme();
 
   return (
     <View className="gap-2">
       <Text variant="label">{label}</Text>
       <TextInput
         accessibilityLabel={label}
-        placeholderTextColor="#736B62"
+        placeholderTextColor={colorFor(scheme, 'textMuted')}
         className={cn(
           'min-h-tap rounded-sm border bg-white px-4 py-3 text-body text-cocoa',
           invalid ? 'border-error' : 'border-border',

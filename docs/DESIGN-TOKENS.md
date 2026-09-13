@@ -1,6 +1,18 @@
 # BakeFlow — Design Tokens & Component Specification
 
-**Status:** canonical. This document instantiates the design system that `EB-015` mandates in principle but does not define in concrete values. Where `EB-015` says "the Primary Brand Color SHALL represent the BakeFlow identity," this document says what that color is.
+> **Superseded for visual values (2026-09-13).** The owner directed that the design
+> prototype (`# BakeFlow frontend design/export/bakeflow-frontend/`) is the product UI.
+> Its values now live in `bakeflow-frontend/packages/ui/tokens.ts` — the single source of
+> truth — and override this document for: colours and the brand palette, font weights,
+> radii, shadows and gradients, cards-vs-ledger-rows, touch-target size, tab IA, and dark
+> mode (now supported). See `bakeflow-frontend/docs/PROTOTYPE-PORT.md` decision D1.
+>
+> **Still binding from this document:** tabular numerals on every figure; `en-NG` money
+> formatting; display rounding is presentation-only and never written back; state is never
+> conveyed by colour alone; WCAG AA text/background pairs; every list has a defined empty
+> state; no hardcoded colours inside screens (resolve through tokens).
+
+**Status:** canonical for the rules listed as still binding above; superseded for visual values. This document instantiates the design system that `EB-015` mandates in principle but does not define in concrete values. Where `EB-015` says "the Primary Brand Color SHALL represent the BakeFlow identity," this document says what that color is.
 
 If `EB-015` and this document conflict, `EB-015` governs *policy* (there shall be a primary color, semantic colors shall be used consistently) and this document governs *values*.
 

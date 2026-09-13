@@ -298,11 +298,19 @@ export interface TicketFilters {
    * sprung.
    */
   status?: TicketStatus;
+  /**
+   * Any of several statuses — for a screen filter that groups stages ("still being made:
+   * submitted, confirmed, scheduled, in production"). Named explicitly per call site, so the
+   * `cancelled`-is-not-terminal trap above cannot hide inside it. Ignored when empty.
+   */
+  statuses?: readonly TicketStatus[];
   /** Restrict to statuses a ticket can still transition out of. */
   openOnly?: boolean;
   branchId?: Uuid;
   customerId?: Uuid;
   assignedTo?: Uuid;
+  /** `tickets.created_by` — "my sales". The read policy is branch-scoped, so this is needed. */
+  createdBy?: Uuid;
   fulfilmentType?: TicketFulfilmentType;
   /** `tickets.driver_trip_id` — ADR-001. What one driver trip has sold so far. */
   driverTripId?: Uuid;
@@ -359,10 +367,14 @@ export async function listTickets(
   );
 
   if (filters.status !== undefined) query = query.eq('status', filters.status);
+  if (filters.statuses !== undefined && filters.statuses.length > 0) {
+    query = query.in('status', [...filters.statuses]);
+  }
   if (filters.openOnly === true) query = query.in('status', [...OPEN_TICKET_STATUSES]);
   if (filters.branchId !== undefined) query = query.eq('branch_id', filters.branchId);
   if (filters.customerId !== undefined) query = query.eq('customer_id', filters.customerId);
   if (filters.assignedTo !== undefined) query = query.eq('assigned_to', filters.assignedTo);
+  if (filters.createdBy !== undefined) query = query.eq('created_by', filters.createdBy);
   if (filters.fulfilmentType !== undefined)
     query = query.eq('fulfilment_type', filters.fulfilmentType);
   if (filters.driverTripId !== undefined) query = query.eq('driver_trip_id', filters.driverTripId);
@@ -557,4 +569,68 @@ export async function getTicketWithItems(
   if (ticket === null) return null;
   const items = await listTicketItems(client, ticketId);
   return { ticket, items };
+}
+
+/**
+ * The lines of many tickets at once — what a ticket *list* needs to say what each order
+ * contains ("2 × Celebration Cake · 5 × Agege Bread") without one round trip per card.
+ *
+ * Chunked for the URL-length reason in `IN_CLAUSE_CHUNK`, and ordered like `listTicketItems`
+ * so a card lists its lines in the same sequence the detail screen does.
+ */
+export async function listTicketItemsForTickets(
+  client: BakeflowClient,
+  ticketIds: readonly Uuid[],
+): Promise<TicketItem[]> {
+  const unique = [...new Set(ticketIds)];
+  if (unique.length === 0) return [];
+
+  const batches = await Promise.all(
+    chunk(unique, IN_CLAUSE_CHUNK).map(async (ids) =>
+      parseRows(
+        TICKET_ITEMS.schema,
+        await run(
+          withSoftDeleteFilter(
+            client.from(TICKET_ITEMS.table).select(TICKET_ITEMS.columns).in('ticket_id', ids),
+            TICKET_ITEMS,
+          )
+            .order('product_variant_id', { ascending: true })
+            .order('id', { ascending: true }),
+        ),
+        'listTicketItemsForTickets',
+      ),
+    ),
+  );
+  return batches.flat();
+}
+
+/**
+ * Customers by id, for resolving names on a page of tickets.
+ *
+ * Returns the customers the caller can see, not one row per id: a soft-deleted or
+ * out-of-scope customer is simply absent, and the caller must render a ticket whose
+ * customer did not resolve (a walk-in has no `customer_id` at all).
+ */
+export async function listCustomersByIds(
+  client: BakeflowClient,
+  customerIds: readonly Uuid[],
+): Promise<Customer[]> {
+  const unique = [...new Set(customerIds)];
+  if (unique.length === 0) return [];
+
+  const batches = await Promise.all(
+    chunk(unique, IN_CLAUSE_CHUNK).map(async (ids) =>
+      parseRows(
+        CUSTOMERS.schema,
+        await run(
+          withSoftDeleteFilter(
+            client.from(CUSTOMERS.table).select(CUSTOMERS.columns).in('id', ids),
+            CUSTOMERS,
+          ),
+        ),
+        'listCustomersByIds',
+      ),
+    ),
+  );
+  return batches.flat();
 }

@@ -36,6 +36,20 @@
 
 import {
   adjustStock,
+  advanceTicket,
+  createTicket,
+  type CreateTicketInput,
+  cancelTicket,
+  getTicketWithItems,
+  listCustomersByIds,
+  listCustomers,
+  getCustomerById,
+  findCustomersByPhone,
+  type CustomerFilters,
+  listTicketItemsForTickets,
+  type AdvanceTicketInput,
+  type CancelTicketInput,
+  type TicketTransitionResult,
   cancelProductionBatch,
   closeCashSession,
   completeDriverFieldSale,
@@ -109,6 +123,8 @@ import {
   type VerifyTripLoadingInput,
 } from '@bakeflow/api';
 import type {
+  Customer,
+  TicketItem,
   Delivery,
   Driver,
   DriverTrip,
@@ -131,10 +147,13 @@ import type {
   Warehouse,
 } from '@bakeflow/types';
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
   type QueryClient,
+  type UseInfiniteQueryResult,
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
@@ -240,6 +259,14 @@ export const queryKeys = {
     orgScoped(tenantId, 'expenses', branchId ?? 'all'),
   dailyRevenueSummary: (tenantId: string, branchId: string, date?: string): unknown[] =>
     orgScoped(tenantId, 'daily-revenue-summary', branchId, date ?? 'today'),
+  /** Every ticket list shares the `tickets` prefix, so one invalidation refreshes all filters. */
+  tickets: (tenantId: string, filters?: TicketFilters, options?: PageOptions): unknown[] =>
+    orgScoped(tenantId, 'tickets', filters ?? {}, options ?? {}),
+  ticket: (tenantId: string, ticketId: string): unknown[] => orgScoped(tenantId, 'ticket', ticketId),
+  ticketItemsFor: (tenantId: string, ticketIds: readonly string[]): unknown[] =>
+    orgScoped(tenantId, 'ticket-items-for', [...ticketIds].sort()),
+  customersByIds: (tenantId: string, customerIds: readonly string[]): unknown[] =>
+    orgScoped(tenantId, 'customers-by-ids', [...customerIds].sort()),
 } as const;
 
 /* -------------------------------------------------------------------------- */
@@ -1298,5 +1325,217 @@ export function useDailyRevenueSummary(
       return getDailyRevenueSummary(client, branch, date);
     },
     enabled: tenantId !== null && branchId !== null,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tickets — the operational list and detail                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One page of tickets, newest first, for the active organization.
+ *
+ * Disabled without a tenant claim for the same reason as `useProducts`: with a null claim
+ * every policy denies and the empty result would read as "no orders" rather than "no bakery
+ * selected".
+ */
+export function useTickets(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: TicketFilters,
+  options?: PageOptions,
+): UseQueryResult<Page<Ticket>, Error> {
+  return useQuery({
+    queryKey: queryKeys.tickets(tenantId ?? 'none', filters, options),
+    queryFn: () => listTickets(client, filters, options),
+    enabled: tenantId !== null,
+  });
+}
+
+/** A ticket with its lines, or `null` when it is not visible to the caller. */
+export function useTicketWithItems(
+  client: BakeflowClient,
+  tenantId: string | null,
+  ticketId: string | null,
+): UseQueryResult<TicketWithItems | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.ticket(tenantId ?? 'none', ticketId ?? 'none'),
+    queryFn: () => {
+      if (ticketId === null) throw new Error('No ticket selected.');
+      return getTicketWithItems(client, ticketId);
+    },
+    enabled: tenantId !== null && ticketId !== null,
+  });
+}
+
+/** The lines of a page of tickets, in one request. */
+export function useTicketItemsForTickets(
+  client: BakeflowClient,
+  tenantId: string | null,
+  ticketIds: readonly string[],
+): UseQueryResult<TicketItem[], Error> {
+  return useQuery({
+    queryKey: queryKeys.ticketItemsFor(tenantId ?? 'none', ticketIds),
+    queryFn: () => listTicketItemsForTickets(client, ticketIds),
+    enabled: tenantId !== null && ticketIds.length > 0,
+  });
+}
+
+/** Customers for a page of tickets. Missing ids resolve to no entry — see the query. */
+export function useCustomersByIds(
+  client: BakeflowClient,
+  tenantId: string | null,
+  customerIds: readonly string[],
+): UseQueryResult<Customer[], Error> {
+  return useQuery({
+    queryKey: queryKeys.customersByIds(tenantId ?? 'none', customerIds),
+    queryFn: () => listCustomersByIds(client, customerIds),
+    enabled: tenantId !== null && customerIds.length > 0,
+  });
+}
+
+/**
+ * Everything a ticket transition can change on screen: every ticket list, the ticket itself,
+ * the payment picker, today's revenue (completion recognises it) and product stock
+ * (completion writes a sale movement).
+ */
+function invalidateAfterTicketTransition(
+  queryClient: QueryClient,
+  tenant: string,
+  ticketId: string,
+): void {
+  for (const key of [
+    orgScoped(tenant, 'tickets'),
+    queryKeys.ticket(tenant, ticketId),
+    orgScoped(tenant, 'payment-tickets'),
+    orgScoped(tenant, 'daily-revenue-summary'),
+    orgScoped(tenant, 'product-stock-levels'),
+  ]) {
+    void queryClient.invalidateQueries({ queryKey: key });
+  }
+}
+
+/** Advance a ticket one step. The database guard decides whether the hop is allowed. */
+export function useAdvanceTicket(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<TicketTransitionResult, Error, AdvanceTicketInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input) => {
+      requireTenant(tenantId);
+      return advanceTicket(client, input);
+    },
+    onSuccess: (result) => {
+      invalidateAfterTicketTransition(queryClient, requireTenant(tenantId), result.ticketId);
+    },
+  });
+}
+
+/** Cancel a ticket with a reason. Manager-only, enforced by the database. */
+export function useCancelTicket(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<TicketTransitionResult, Error, CancelTicketInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input) => {
+      requireTenant(tenantId);
+      return cancelTicket(client, input);
+    },
+    onSuccess: (result) => {
+      invalidateAfterTicketTransition(queryClient, requireTenant(tenantId), result.ticketId);
+    },
+  });
+}
+
+/**
+ * Tickets as successive keyset pages, for a list that loads more as it scrolls.
+ *
+ * Shares the `tickets` key prefix, so a transition's invalidation refreshes it along with the
+ * single-page `useTickets` callers.
+ */
+export function useTicketPages(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: TicketFilters,
+): UseInfiniteQueryResult<InfiniteData<Page<Ticket>, string | undefined>, Error> {
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.tickets(tenantId ?? 'none', filters), 'pages'],
+    queryFn: ({ pageParam }) => listTickets(client, filters, { after: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: tenantId !== null,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Customers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** The customer directory as keyset pages, ordered by name. */
+export function useCustomerPages(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters?: CustomerFilters,
+): UseInfiniteQueryResult<InfiniteData<Page<Customer>, string | undefined>, Error> {
+  return useInfiniteQuery({
+    queryKey: orgScoped(tenantId ?? 'none', 'customers', filters ?? {}, 'pages'),
+    queryFn: ({ pageParam }) => listCustomers(client, filters, { after: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: tenantId !== null,
+  });
+}
+
+/** One customer, or `null` when not visible to the caller. */
+export function useCustomer(
+  client: BakeflowClient,
+  tenantId: string | null,
+  customerId: string | null,
+): UseQueryResult<Customer | null, Error> {
+  return useQuery({
+    queryKey: orgScoped(tenantId ?? 'none', 'customer', customerId ?? 'none'),
+    queryFn: () => {
+      if (customerId === null) throw new Error('No customer selected.');
+      return getCustomerById(client, customerId);
+    },
+    enabled: tenantId !== null && customerId !== null,
+  });
+}
+
+/**
+ * Customers on an exact phone number — the server-side search the directory has. Several
+ * customers can share one number, so this is a list. Disabled until a number is entered.
+ */
+export function useCustomersByPhone(
+  client: BakeflowClient,
+  tenantId: string | null,
+  phone: string,
+): UseQueryResult<Customer[], Error> {
+  const trimmed = phone.trim();
+  return useQuery({
+    queryKey: orgScoped(tenantId ?? 'none', 'customers-by-phone', trimmed),
+    queryFn: () => findCustomersByPhone(client, trimmed),
+    enabled: tenantId !== null && trimmed !== '',
+  });
+}
+
+/**
+ * Create a customer order as a draft. Refreshes every ticket list so the new draft appears
+ * under Today and Pending immediately.
+ */
+export function useCreateTicket(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<TicketWithItems, Error, CreateTicketInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input) => createTicket(client, requireTenant(tenantId), input),
+    onSuccess: (row) => {
+      const tenant = requireTenant(tenantId);
+      void queryClient.invalidateQueries({ queryKey: orgScoped(tenant, 'tickets') });
+      queryClient.setQueryData(queryKeys.ticket(tenant, row.ticket.id), row);
+    },
   });
 }

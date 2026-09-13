@@ -6,6 +6,8 @@ import {
 } from 'react-native';
 
 import { cn } from './cn';
+import { useScheme } from './ThemeProvider';
+import { colorFor, type ColorToken } from './tokens';
 
 export type ButtonTone = 'primary' | 'secondary' | 'danger';
 
@@ -21,11 +23,11 @@ const LABEL: Record<ButtonTone, string> = {
   danger: 'text-cream',
 };
 
-/** Spinner colour must be a literal — ActivityIndicator takes a prop, not a class. */
-const SPINNER: Record<ButtonTone, string> = {
-  primary: '#F7F3EC',
-  secondary: '#2A211C',
-  danger: '#F7F3EC',
+/** ActivityIndicator takes a colour prop, not a class — so it resolves through the scheme. */
+const SPINNER: Record<ButtonTone, ColorToken> = {
+  primary: 'cream',
+  secondary: 'cocoa',
+  danger: 'cream',
 };
 
 export interface ButtonProps extends Omit<PressableProps, 'children' | 'className'> {
@@ -54,6 +56,7 @@ export function Button({
   ...rest
 }: ButtonProps): React.JSX.Element {
   const inert = disabled === true || busy;
+  const scheme = useScheme();
 
   return (
     <Pressable
@@ -68,7 +71,7 @@ export function Button({
       )}
       {...rest}
     >
-      {busy && <ActivityIndicator color={SPINNER[tone]} />}
+      {busy && <ActivityIndicator color={colorFor(scheme, SPINNER[tone])} />}
       <RNText
         className={cn('text-body font-semibold', inert ? 'text-warm-gray' : LABEL[tone])}
       >

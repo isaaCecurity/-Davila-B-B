@@ -3,41 +3,29 @@
 // react-native-css-interop@0.2.6, whose peer range is `tailwindcss: ~3`.
 // Tailwind v4 breaks NativeWind 4.2.6.
 //
-// ---------------------------------------------------------------------------
-// DESIGN TOKENS
-// Ported from the design prototype's single source of truth:
-//   "# BakeFlow frontend design/export/bakeflow-frontend/css/tokens.css"
-// Keep the two in step — that file is still the living visual spec.
+// Every value comes from packages/ui/tokens.ts — nothing is declared here. Requiring a
+// .ts file works because tailwindcss@3.4.17 always loads its config through jiti with a
+// TypeScript transform (see lib/lib/load-config.js), which applies to nested requires.
 //
-// Colours that flip between light and dark are declared here as CSS variables
-// and given their VALUES in global.css, so a theme switch happens in one
-// place. The `rgb(var(--x) / <alpha-value>)` form is what makes opacity
-// utilities (`bg-cream/50`) work.
-//
-// Colours that do NOT change between themes — apricot, success, warning,
-// error, info, ink — are plain hex, because the prototype doesn't flip them.
-// ---------------------------------------------------------------------------
+// Themeable colours are CSS variables. Their VALUES are set at runtime by
+// packages/ui/ThemeProvider via NativeWind's vars(), which is what flips light/dark on
+// native. The `:root` block below is generated from the same tokens as a first-paint
+// fallback for web.
+const {
+  THEMED_COLORS,
+  themed,
+  fixed,
+  radius,
+  layout,
+  type,
+  elevation,
+  duration,
+  easing,
+  hexToTriplet,
+} = require('../../packages/ui/tokens.ts');
 
-/** Themeable colours. Values live in global.css under :root and .dark. */
-const THEMED = [
-  'cocoa',
-  'cocoa-soft',
-  'cream',
-  'cream-deep',
-  'white',
-  'warm-gray',
-  'warm-gray-soft',
-  'border',
-  'apricot-tint',
-  'success-tint',
-  'warning-tint',
-  'error-tint',
-  'info-tint',
-];
-
-const themedColors = Object.fromEntries(
-  THEMED.map((k) => [k, `rgb(var(--bf-${k}) / <alpha-value>)`])
-);
+const px = (n) => `${n}px`;
+const map = (obj, fn) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, fn(v)]));
 
 module.exports = {
   content: [
@@ -56,60 +44,26 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        ...themedColors,
-        // Fixed across themes — an always-dark surface and the semantics.
-        ink: '#2A211C',
-        'ink-soft': '#43362E',
-        apricot: '#E58A5B',
-        'apricot-deep': '#C8703F',
-        success: '#3E8F68',
-        warning: '#D49A3A',
-        error: '#C95C54',
-        info: '#5B7FA6',
+        ...Object.fromEntries(
+          THEMED_COLORS.map((k) => [k, `rgb(var(--bf-${k}) / <alpha-value>)`])
+        ),
+        ...fixed,
       },
-      // The prototype's 8pt space scale already matches Tailwind's default
-      // (1=4px … 12=48px), so spacing is deliberately NOT overridden.
-      borderRadius: {
-        xs: '8px',
-        sm: '11px',
-        md: '18px',
-        lg: '22px',
-        xl: '26px',
-        pill: '999px',
-      },
-      fontSize: {
-        display: ['34px', { lineHeight: '1.06' }],
-        'title-1': ['27px', { lineHeight: '1.06' }],
-        'title-2': ['21px', { lineHeight: '1.25' }],
-        'title-3': ['17px', { lineHeight: '1.25' }],
-        body: ['15px', { lineHeight: '1.45' }],
-        callout: ['14px', { lineHeight: '1.45' }],
-        foot: ['13px', { lineHeight: '1.45' }],
-        caption: ['12.5px', { lineHeight: '1.45' }],
-      },
-      lineHeight: { tight: '1.06', snug: '1.25', body: '1.45' },
-      spacing: {
-        // Layout constants that aren't part of the 8pt scale.
-        tabbar: '62px',
-        appbar: '52px',
-        gutter: '20px',
-        tap: '44px', // minimum comfortable touch target
-      },
-      // NOTE: on native these degrade to elevation with limited fidelity —
-      // they are correct on web and harmless (no shadow) if unsupported.
-      boxShadow: {
-        e1: '0 1px 2px rgba(42, 33, 28, .04)',
-        e2: '0 2px 6px rgba(42, 33, 28, .05), 0 1px 1px rgba(42, 33, 28, .03)',
-        e3: '0 8px 24px rgba(42, 33, 28, .08), 0 2px 6px rgba(42, 33, 28, .04)',
-        e4: '0 -10px 40px rgba(42, 33, 28, .14)',
-      },
-      transitionTimingFunction: {
-        out: 'cubic-bezier(.22, 1, .36, 1)',
-        inout: 'cubic-bezier(.5, 0, .2, 1)',
-        nav: 'cubic-bezier(.32, .72, 0, 1)',
-      },
-      transitionDuration: { fast: '130ms', base: '215ms', slow: '360ms' },
+      borderRadius: map(radius, px),
+      spacing: map(layout, px),
+      minHeight: map(layout, px),
+      fontSize: map(type, (t) => [px(t.size), { lineHeight: px(t.lineHeight) }]),
+      boxShadow: elevation,
+      transitionDuration: map(duration, (ms) => `${ms}ms`),
+      transitionTimingFunction: map(easing, (b) => `cubic-bezier(${b.join(', ')})`),
     },
   },
-  plugins: [],
+  plugins: [
+    ({ addBase }) =>
+      addBase({
+        ':root': Object.fromEntries(
+          THEMED_COLORS.map((k) => [`--bf-${k}`, hexToTriplet(themed.light[k])])
+        ),
+      }),
+  ],
 };

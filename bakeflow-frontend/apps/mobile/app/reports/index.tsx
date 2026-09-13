@@ -1,157 +1,198 @@
-import { getSupabaseClient } from '@bakeflow/auth';
-import { useDailyRevenueSummary, useWarehouses } from '@bakeflow/hooks';
+import { isZeroDecimalString } from '@bakeflow/types';
+import {
+  Card,
+  Chips,
+  GroupLabel,
+  Menu,
+  MenuItem,
+  ScreenScroll,
+  Skeleton,
+  Text,
+  TrendChart,
+} from '@bakeflow/ui';
+import { formatNaira } from '@bakeflow/utils';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useState } from 'react';
+import { View } from 'react-native';
 
-import { EmptyState, ErrorState, LoadingState, NoOrganizationState } from '../../components/ScreenState';
+import { EmptyState, ErrorState, NoOrganizationState } from '../../components/ScreenState';
+import { useActivePersona } from '../../features/auth/hooks/useActivePersona';
+import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
+import { useRevenueWeek } from '../../features/reports/hooks/useRevenueWeek';
 import { useSessionStore } from '../../stores/session';
 
-/**
- * P9.8 — the revenue/cash half of P5.8's reporting model. One card, one branch, "today"
- * in the organization's own timezone (server-resolved — see
- * `getDailyRevenueSummary()`'s header). No COGS/gross-profit/margin: BLOCKER-018
- * (`stock_movements.unit_cost` is 100% NULL live) blocks weighted-average costing, so
- * this screen only shows what `get_daily_revenue_summary()` can compute without it.
- */
-export default function ReportsScreen(): React.JSX.Element {
-  const client = getSupabaseClient();
-  const router = useRouter();
-  const tenantId = useSessionStore((state) => state.activeTenantId);
-  const warehouses = useWarehouses(client, tenantId);
-  const [branchIndex, setBranchIndex] = useState(0);
-
-  const branchOptions = useMemo(() => {
-    const seen = new Set<string>();
-    return (warehouses.data ?? []).filter((warehouse) => {
-      if (seen.has(warehouse.branch_id)) return false;
-      seen.add(warehouse.branch_id);
-      return true;
-    });
-  }, [warehouses.data]);
-
-  const branchId = branchOptions[branchIndex]?.branch_id ?? null;
-  const summary = useDailyRevenueSummary(client, tenantId, branchId);
-
-  if (tenantId === null) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <NoOrganizationState onChoose={() => router.push('/select-organization')} />
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView className="flex-1 bg-cream">
-      <View className="flex-row items-center justify-between border-b border-neutral-200 p-6 pb-4">
-        <View className="flex-1 gap-1 pr-3">
-          <Text className="text-2xl font-bold text-neutral-900">Reports</Text>
-          <Text className="text-sm text-neutral-500">Today&apos;s revenue and cash, by branch</Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push('/')}
-          className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
-        >
-          <Text className="text-sm font-medium text-neutral-900">Catalog</Text>
-        </Pressable>
-      </View>
-
-      <ScrollView contentContainerClassName="gap-4 p-6">
-        {branchOptions.length === 0 ? (
-          <EmptyState title="No branch available" detail="A branch needs a stockroom before it has reports." />
-        ) : (
-          <>
-            {branchOptions.length > 1 && (
-              <View className="flex-row flex-wrap gap-2">
-                {branchOptions.map((warehouse, index) => (
-                  <Pressable
-                    key={warehouse.branch_id}
-                    accessibilityRole="button"
-                    onPress={() => setBranchIndex(index)}
-                    className={`rounded-lg border px-3 py-2 ${index === branchIndex ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
-                  >
-                    <Text className={index === branchIndex ? 'text-white' : 'text-neutral-900'}>
-                      {warehouse.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            )}
-
-            {summary.isPending ? (
-              <LoadingState label="Loading today's numbers…" />
-            ) : summary.isError ? (
-              <ErrorState error={summary.error} onRetry={() => void summary.refetch()} />
-            ) : (
-              <View className="gap-4">
-                <Text className="text-sm text-neutral-500">
-                  {summary.data.reporting_date} · {summary.data.timezone}
-                </Text>
-
-                <SummaryCard title="Revenue">
-                  <SummaryRow label="Gross revenue" value={summary.data.gross_revenue} />
-                  <SummaryRow label="Refunds" value={summary.data.recognized_refunds} negative />
-                  <SummaryRow label="Net revenue" value={summary.data.net_revenue} emphasize />
-                </SummaryCard>
-
-                <SummaryCard title="Cash collected">
-                  <SummaryRow label="Gross collected" value={summary.data.gross_collected} />
-                  <SummaryRow label="Refunds paid" value={summary.data.refunds_paid} negative />
-                  <SummaryRow label="Net collected" value={summary.data.net_collected} emphasize />
-                </SummaryCard>
-
-                <Text className="text-xs text-neutral-400">
-                  Cost of goods, gross profit and margin are not shown yet — ingredient purchase
-                  cost is not captured anywhere in the system today, so those figures cannot be
-                  computed correctly.
-                </Text>
-              </View>
-            )}
-          </>
-        )}
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function SummaryCard({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
-  return (
-    <View className="gap-2 rounded-xl border border-neutral-200 p-4">
-      <Text className="text-base font-semibold text-neutral-900">{title}</Text>
-      {children}
-    </View>
-  );
-}
-
-function SummaryRow({
+/** One ledger line: label left, exact figure right. */
+function Line({
   label,
   value,
-  negative,
-  emphasize,
+  total,
+  minus,
 }: {
   label: string;
   value: string;
-  negative?: boolean;
-  emphasize?: boolean;
+  total?: boolean;
+  minus?: boolean;
 }): React.JSX.Element {
   return (
-    <View className="flex-row items-center justify-between">
-      <Text className={emphasize ? 'text-base font-semibold text-neutral-900' : 'text-sm text-neutral-500'}>
-        {label}
-      </Text>
-      <Text
-        className={
-          emphasize
-            ? 'text-base font-semibold text-neutral-900'
-            : negative === true
-              ? 'text-sm text-red-700'
-              : 'text-sm text-neutral-900'
-        }
-      >
-        {negative === true ? `-${value}` : value}
+    <View
+      className={`flex-row items-center py-2.5 ${total === true ? 'mt-1 border-t border-border pt-3' : ''}`}
+      accessible
+      accessibilityLabel={`${label}${minus === true ? ', deducted' : ''}: ${value}`}
+    >
+      <Text className="w-4 text-foot text-warm-gray-soft">{minus === true ? '−' : ''}</Text>
+      <Text className={`flex-1 text-foot ${total === true ? 'font-semibold text-cocoa' : 'text-warm-gray'}`}>{label}</Text>
+      <Text tabular className={`text-foot ${total === true ? 'font-bold text-cocoa' : 'font-semibold text-cocoa'}`}>
+        {value}
       </Text>
     </View>
+  );
+}
+
+/**
+ * Reports — the prototype's `reports` (and supervisor `supervisor-reports`) screen: a hero over
+ * the week, the day's statement, then the reports you can open.
+ *
+ * The statement is `get_daily_revenue_summary()` for the chosen day, shown line by line from
+ * its exact strings. The week's days are one cached query each (`useRevenueWeek`), so switching
+ * day costs no request.
+ *
+ * PORT-NOTE: the prototype's "This month so far" hero, monthly delta and net-profit line need a
+ * ranged report and cost of goods (BLOCKER-018); the Profit & Loss, Product performance and
+ * Branch performance reports have no endpoint yet; PDF/spreadsheet export and scheduled e-mail
+ * have no backend. None are shown as if available — the menu lists only screens that exist.
+ * Whether a role may read the summary is the RPC's decision (supervisors are refused
+ * server-side today); a refusal is shown as returned.
+ */
+export default function ReportsScreen(): React.JSX.Element {
+  const router = useRouter();
+  const persona = useActivePersona();
+  const tenantId = useSessionStore((s) => s.activeTenantId);
+  const branches = useBranchOptions();
+  const [branchIndex, setBranchIndex] = useState(0);
+  const [dayIndex, setDayIndex] = useState(6);
+  const branch = branches.options[branchIndex] ?? branches.options[0] ?? null;
+  const week = useRevenueWeek(branch?.branchId ?? null);
+
+  if (tenantId === null) {
+    return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
+  }
+
+  const day = week.days[dayIndex];
+  const summary = day?.summary;
+  const points = week.days.map((d) => ({
+    value: d.summary === undefined ? 0 : Number(d.summary.net_revenue),
+    label: d.label,
+  }));
+  const moneyRoles = persona === 'owner' || persona === 'manager' || persona === 'admin';
+
+  return (
+    <ScreenScroll
+      title="Reports"
+      sub={branch?.label}
+      onBack={() => router.back()}
+      refreshing={week.isRefetching}
+      onRefresh={week.refetch}
+    >
+      {branches.isLoading ? (
+        <Skeleton variant="chart" className="mt-5 h-[240px]" />
+      ) : branch === null ? (
+        <EmptyState title="No branch available" detail="A branch needs a stockroom before it has reports." />
+      ) : (
+        <>
+          {branches.options.length > 1 && (
+            <Chips
+              className="mt-2"
+              accessibilityLabel="Branch"
+              options={branches.options.map((b, i) => ({ key: String(i), label: b.label }))}
+              value={String(branchIndex)}
+              onChange={(k) => setBranchIndex(Number(k))}
+            />
+          )}
+
+          {week.isError ? (
+            <View className="mt-5">
+              <ErrorState error={week.error ?? new Error('Could not load reports.')} onRetry={week.refetch} />
+            </View>
+          ) : (
+            <>
+              <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-3 pt-5">
+                <View className="px-5">
+                  <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
+                    Net revenue · last 7 days
+                  </Text>
+                  {week.today?.data === undefined ? (
+                    <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
+                  ) : (
+                    <Text tabular className="mt-1.5 text-title-1 font-bold tracking-[-0.8px] text-white">
+                      {formatNaira(week.today.data.net_revenue)}
+                    </Text>
+                  )}
+                  <Text className="mt-1 text-foot text-white/60">today · {week.today?.data?.timezone ?? ' '}</Text>
+                </View>
+                <View className="mt-3">
+                  <TrendChart
+                    points={points}
+                    onDark
+                    accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
+                  />
+                </View>
+              </Card>
+
+              <GroupLabel>Daily statement</GroupLabel>
+              <Chips
+                accessibilityLabel="Day"
+                options={week.days.map((d, i) => ({ key: String(i), label: i === 6 ? 'Today' : d.label }))}
+                value={String(dayIndex)}
+                onChange={(k) => setDayIndex(Number(k))}
+              />
+              <Card className="mt-3 px-4 py-2">
+                {summary === undefined ? (
+                  <View className="gap-2 py-2">
+                    <Skeleton variant="row" className="h-6" />
+                    <Skeleton variant="row" className="h-6" />
+                    <Skeleton variant="row" className="h-6" />
+                  </View>
+                ) : (
+                  <>
+                    <Text variant="caption" className="pb-1 pt-2">
+                      {summary.reporting_date} · {summary.timezone}
+                    </Text>
+                    <Text variant="label" className="pt-2">Revenue</Text>
+                    <Line label="Gross revenue" value={formatNaira(summary.gross_revenue)} />
+                    <Line label="Refunds" value={formatNaira(summary.recognized_refunds)} minus />
+                    <Line label="Net revenue" value={formatNaira(summary.net_revenue)} total />
+                    <Text variant="label" className="pt-4">Cash collected</Text>
+                    <Line label="Gross collected" value={formatNaira(summary.gross_collected)} />
+                    <Line label="Refunds paid" value={formatNaira(summary.refunds_paid)} minus />
+                    <Line label="Net collected" value={formatNaira(summary.net_collected)} total />
+                    {isZeroDecimalString(summary.gross_revenue) && isZeroDecimalString(summary.gross_collected) && (
+                      <Text variant="meta" className="pb-2 pt-1">Nothing was sold or collected on this day.</Text>
+                    )}
+                  </>
+                )}
+              </Card>
+            </>
+          )}
+
+          <GroupLabel>Available reports</GroupLabel>
+          <Menu>
+            <MenuItem icon="sales" tone="accent" title="Sales" sub="Today's take and orders" onPress={() => router.push('/sales')} />
+            {moneyRoles && (
+              <MenuItem icon="receipt" title="Expenses" sub="What was spent, by day" onPress={() => router.push('/expenses')} />
+            )}
+            {persona !== 'supervisor' && (
+              <MenuItem icon="cash" tone="warn" title="Cash sessions" sub="Floats, counts and variance" onPress={() => router.push('/cash')} />
+            )}
+            {persona === 'supervisor' && (
+              <MenuItem icon="history" title="Staff activity" sub="Shifts, sales and orders" onPress={() => router.push('/staff')} />
+            )}
+          </Menu>
+
+          <Text variant="meta" className="mt-4">
+            Profit & loss, product and branch performance arrive once ingredient costs and ranged reports are in place.
+          </Text>
+        </>
+      )}
+    </ScreenScroll>
   );
 }

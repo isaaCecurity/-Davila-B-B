@@ -1,444 +1,312 @@
 import { getSupabaseClient } from '@bakeflow/auth';
+import { useCashSessions, useExpenses } from '@bakeflow/hooks';
+import { isZeroDecimalString } from '@bakeflow/types';
 import {
-  useCashSessions,
-  useCloseCashSession,
-  useCreateExpense,
-  useExpenses,
-  useOpenCashSession,
-  usePaymentTickets,
-  useRecordPayment,
-  useWarehouses,
-} from '@bakeflow/hooks';
-import { PAYMENT_METHODS, type PaymentMethod } from '@bakeflow/api';
-import {
-  EXPENSE_CATEGORIES,
-  EXPENSE_PAID_METHODS,
-  type CashSession,
-  type ExpenseCategory,
-  type ExpensePaidMethod,
-} from '@bakeflow/types';
-import { useRouter } from 'expo-router';
+  Badge,
+  Callout,
+  Card,
+  Chips,
+  Icon,
+  IconButton,
+  IconTile,
+  List,
+  ListRow,
+  PressableScale,
+  ScreenScroll,
+  Skeleton,
+  Text,
+  TrendChart,
+  type BadgeTone,
+  type IconName,
+} from '@bakeflow/ui';
+import { formatNaira } from '@bakeflow/utils';
+import { useRouter, type Href } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View } from 'react-native';
 
-import { EmptyState, ErrorState, LoadingState, NoOrganizationState } from '../../components/ScreenState';
+import { EmptyState, ErrorState, NoOrganizationState } from '../../components/ScreenState';
+import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
+import { CATEGORY_META, METHOD_LABEL, varianceView, when } from '../../features/finance/financeDisplay';
+import { useRevenueWeek } from '../../features/reports/hooks/useRevenueWeek';
 import { useSessionStore } from '../../stores/session';
 
-export default function FinanceScreen(): React.JSX.Element {
-  const client = getSupabaseClient();
-  const router = useRouter();
-  const tenantId = useSessionStore((state) => state.activeTenantId);
-  const userId = useSessionStore((state) => state.userId);
-  const sessions = useCashSessions(client, tenantId);
-  const warehouses = useWarehouses(client, tenantId);
-  const openSession = useOpenCashSession(client, tenantId);
-  const closeSession = useCloseCashSession(client, tenantId);
-  const paymentTickets = usePaymentTickets(client, tenantId);
-  const recordPayment = useRecordPayment(client, tenantId);
-  const expenses = useExpenses(client, tenantId);
-  const createExpense = useCreateExpense(client, tenantId, userId);
-  const [openingFloat, setOpeningFloat] = useState('0');
-  const [countedAmounts, setCountedAmounts] = useState<Record<string, string>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
-  const [selectedTicketId, setSelectedTicketId] = useState('');
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [paymentReference, setPaymentReference] = useState('');
-  const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>('other');
-  const [expenseAmount, setExpenseAmount] = useState('');
-  const [expensePaidMethod, setExpensePaidMethod] = useState<ExpensePaidMethod | null>(null);
-  const [expenseDescription, setExpenseDescription] = useState('');
+const clock = new Intl.DateTimeFormat('en-NG', { hour: 'numeric', minute: '2-digit' });
 
-  const branchOptions = useMemo(() => {
-    const seen = new Set<string>();
-    return (warehouses.data ?? []).filter((warehouse) => {
-      if (seen.has(warehouse.branch_id)) return false;
-      seen.add(warehouse.branch_id);
-      return true;
-    });
-  }, [warehouses.data]);
-
-  if (tenantId === null) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <NoOrganizationState onChoose={() => router.push('/select-organization')} />
-      </SafeAreaView>
-    );
-  }
-
-  const openSessions = (sessions.data ?? []).filter((session) => session.status === 'open');
-  const eligibleTickets = (paymentTickets.data?.rows ?? []).filter(
-    (ticket) => ticket.status !== 'draft' && ticket.status !== 'cancelled',
-  );
-  const selectedTicket = eligibleTickets.find((ticket) => ticket.id === selectedTicketId);
-  const openTill = openSessions.find((session) => session.status === 'open');
-
+function FootStat({ value, label }: { value: string; label: string }): React.JSX.Element {
   return (
-    <SafeAreaView className="flex-1 bg-cream">
-      <View className="flex-row items-center justify-between border-b border-neutral-200 p-6 pb-4">
-        <View className="flex-1 gap-1 pr-3">
-          <Text className="text-2xl font-bold text-neutral-900">Finance</Text>
-          <Text className="text-sm text-neutral-500">Cash sessions and till control</Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push('/')}
-          className="rounded-lg border border-neutral-300 px-4 py-2 active:opacity-70"
-        >
-          <Text className="text-sm font-medium text-neutral-900">Catalog</Text>
-        </Pressable>
-      </View>
-
-      {sessions.isPending ? (
-        <LoadingState label="Loading cash sessions…" />
-      ) : sessions.isError ? (
-        <ErrorState error={sessions.error} onRetry={() => void sessions.refetch()} />
-      ) : (
-        <FlatList
-          data={sessions.data}
-          keyExtractor={(session) => session.id}
-          contentContainerClassName="gap-4 p-6"
-          refreshing={sessions.isRefetching}
-          onRefresh={() => void sessions.refetch()}
-          ListHeaderComponent={
-            <View className="gap-3">
-              <View className="gap-3 rounded-xl border border-neutral-200 p-4">
-                <Text className="text-base font-semibold text-neutral-900">Record payment</Text>
-                <Text className="text-sm text-neutral-500">
-                  Choose an invoiced ticket. The server rejects payments above the outstanding balance.
-                </Text>
-                <View className="gap-2">
-                  {eligibleTickets.slice(0, 8).map((ticket) => (
-                    <Pressable
-                      key={ticket.id}
-                      accessibilityRole="button"
-                      onPress={() => setSelectedTicketId(ticket.id)}
-                      className={`rounded-lg border p-3 ${selectedTicketId === ticket.id ? 'border-neutral-900 bg-neutral-100' : 'border-neutral-200'}`}
-                    >
-                      <Text className="font-medium text-neutral-900">{ticket.ticket_number}</Text>
-                      <Text className="text-sm text-neutral-500">
-                        Outstanding: {ticket.total_amount} minus {ticket.amount_paid}
-                      </Text>
-                    </Pressable>
-                  ))}
-                  {eligibleTickets.length === 0 && (
-                    <Text className="text-sm text-neutral-500">No invoiced tickets are available.</Text>
-                  )}
-                </View>
-                {selectedTicket !== undefined && (
-                  <View className="gap-2">
-                    <TextInput
-                      accessibilityLabel="Payment amount"
-                      value={paymentAmount}
-                      onChangeText={setPaymentAmount}
-                      keyboardType="decimal-pad"
-                      placeholder="Amount received"
-                      className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-                    />
-                    <View className="flex-row flex-wrap gap-2">
-                      {PAYMENT_METHODS.map((method) => (
-                        <Pressable
-                          key={method}
-                          accessibilityRole="button"
-                          onPress={() => setPaymentMethod(method)}
-                          className={`rounded-lg border px-3 py-2 ${paymentMethod === method ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
-                        >
-                          <Text className={paymentMethod === method ? 'text-white' : 'text-neutral-900'}>
-                            {method}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                    {paymentMethod !== 'cash' && (
-                      <TextInput
-                        accessibilityLabel="Payment reference"
-                        value={paymentReference}
-                        onChangeText={setPaymentReference}
-                        placeholder="Reference (optional)"
-                        className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-                      />
-                    )}
-                    {paymentMethod === 'cash' && openTill === undefined && (
-                      <Text className="text-sm text-amber-800">Open a till before recording cash.</Text>
-                    )}
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={
-                        recordPayment.isPending ||
-                        paymentAmount.length === 0 ||
-                        (paymentMethod === 'cash' && openTill === undefined)
-                      }
-                      onPress={() =>
-                        recordPayment.mutate({
-                          input: {
-                            ticketId: selectedTicket.id,
-                            amount: paymentAmount,
-                            method: paymentMethod,
-                            reference: paymentReference || null,
-                            cashSessionId: paymentMethod === 'cash' ? (openTill?.id ?? null) : null,
-                          },
-                        })
-                      }
-                      className="rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70 disabled:opacity-40"
-                    >
-                      {recordPayment.isPending ? <ActivityIndicator color="white" /> : <Text className="text-center font-semibold text-white">Record payment</Text>}
-                    </Pressable>
-                    {recordPayment.isError && (
-                      <Text className="text-sm text-red-700">{recordPayment.error.message}</Text>
-                    )}
-                  </View>
-                )}
-              </View>
-              <View className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                <Text className="text-base font-semibold text-neutral-900">Open a till</Text>
-                <Text className="mt-1 text-sm text-neutral-500">
-                  Opening float is an exact amount. The server rejects a second open session per branch.
-                </Text>
-                <View className="mt-3 flex-row gap-2">
-                  <TextInput
-                    accessibilityLabel="Opening float"
-                    value={openingFloat}
-                    onChangeText={setOpeningFloat}
-                    keyboardType="decimal-pad"
-                    className="flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-base text-neutral-900"
-                    placeholder="0.0000"
-                  />
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={openSession.isPending || branchOptions.length === 0}
-                    onPress={() =>
-                      openSession.mutate({
-                        input: { branchId: branchOptions[0]?.branch_id ?? '', openingFloat },
-                      })
-                    }
-                    className="rounded-lg bg-neutral-900 px-4 py-2 active:opacity-70 disabled:opacity-40"
-                  >
-                    {openSession.isPending ? (
-                      <ActivityIndicator color="white" />
-                    ) : (
-                      <Text className="font-semibold text-white">Open</Text>
-                    )}
-                  </Pressable>
-                </View>
-                {branchOptions.length === 0 && (
-                  <Text className="mt-2 text-sm text-amber-800">No branch stockroom is available to select.</Text>
-                )}
-                {openSession.isError && (
-                  <Text className="mt-2 text-sm text-red-700">{openSession.error.message}</Text>
-                )}
-              </View>
-              <View className="gap-3 rounded-xl border border-neutral-200 p-4">
-                <Text className="text-base font-semibold text-neutral-900">Record expense</Text>
-                <Text className="text-sm text-neutral-500">
-                  Cash expenses require the currently open till; other methods do not.
-                </Text>
-                <View className="flex-row flex-wrap gap-2">
-                  {EXPENSE_CATEGORIES.map((category) => (
-                    <Pressable
-                      key={category}
-                      accessibilityRole="button"
-                      onPress={() => setExpenseCategory(category)}
-                      className={`rounded-lg border px-3 py-2 ${expenseCategory === category ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
-                    >
-                      <Text className={expenseCategory === category ? 'text-white' : 'text-neutral-900'}>
-                        {category}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <TextInput
-                  accessibilityLabel="Expense amount"
-                  value={expenseAmount}
-                  onChangeText={setExpenseAmount}
-                  keyboardType="decimal-pad"
-                  placeholder="Amount"
-                  className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-                />
-                <View className="flex-row flex-wrap gap-2">
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => setExpensePaidMethod(null)}
-                    className={`rounded-lg border px-3 py-2 ${expensePaidMethod === null ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
-                  >
-                    <Text className={expensePaidMethod === null ? 'text-white' : 'text-neutral-900'}>
-                      unspecified
-                    </Text>
-                  </Pressable>
-                  {EXPENSE_PAID_METHODS.map((method) => (
-                    <Pressable
-                      key={method}
-                      accessibilityRole="button"
-                      onPress={() => setExpensePaidMethod(method)}
-                      className={`rounded-lg border px-3 py-2 ${expensePaidMethod === method ? 'border-neutral-900 bg-neutral-900' : 'border-neutral-300'}`}
-                    >
-                      <Text className={expensePaidMethod === method ? 'text-white' : 'text-neutral-900'}>
-                        {method}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                {expensePaidMethod === 'cash' && openTill === undefined && (
-                  <Text className="text-sm text-amber-800">Open a till before recording a cash expense.</Text>
-                )}
-                <TextInput
-                  accessibilityLabel="Expense description"
-                  value={expenseDescription}
-                  onChangeText={setExpenseDescription}
-                  placeholder="Description (optional)"
-                  className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-                />
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={
-                    createExpense.isPending ||
-                    expenseAmount.length === 0 ||
-                    branchOptions.length === 0 ||
-                    (expensePaidMethod === 'cash' && openTill === undefined)
-                  }
-                  onPress={() =>
-                    createExpense.mutate(
-                      {
-                        input: {
-                          branchId: branchOptions[0]?.branch_id ?? '',
-                          category: expenseCategory,
-                          amount: expenseAmount,
-                          paidMethod: expensePaidMethod,
-                          cashSessionId: expensePaidMethod === 'cash' ? (openTill?.id ?? null) : null,
-                          description: expenseDescription || null,
-                        },
-                      },
-                      {
-                        onSuccess: () => {
-                          setExpenseAmount('');
-                          setExpenseDescription('');
-                        },
-                      },
-                    )
-                  }
-                  className="rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70 disabled:opacity-40"
-                >
-                  {createExpense.isPending ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text className="text-center font-semibold text-white">Record expense</Text>
-                  )}
-                </Pressable>
-                {createExpense.isError && (
-                  <Text className="text-sm text-red-700">{createExpense.error.message}</Text>
-                )}
-                {expenses.data !== undefined && expenses.data.length > 0 && (
-                  <View className="mt-2 gap-1 border-t border-neutral-200 pt-2">
-                    <Text className="text-xs font-semibold uppercase text-neutral-500">Recent expenses</Text>
-                    {expenses.data.slice(0, 5).map((expense) => (
-                      <Text key={expense.id} className="text-sm text-neutral-700">
-                        {expense.category} — {expense.amount}
-                        {expense.paid_method !== null ? ` (${expense.paid_method})` : ''}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-              </View>
-              {openSessions.length > 0 && (
-                <Text className="text-lg font-semibold text-neutral-900">Open sessions</Text>
-              )}
-            </View>
-          }
-          ListEmptyComponent={
-            <EmptyState title="No cash sessions yet" detail="Open a till when a branch is ready for trading." />
-          }
-          renderItem={({ item }) => (
-            <CashSessionCard
-              session={item}
-              countedAmount={countedAmounts[item.id] ?? ''}
-              note={notes[item.id] ?? ''}
-              onCountedAmountChange={(value) =>
-                setCountedAmounts((current) => ({ ...current, [item.id]: value }))
-              }
-              onNoteChange={(value) => setNotes((current) => ({ ...current, [item.id]: value }))}
-              onClose={() =>
-                closeSession.mutate({
-                  input: {
-                    sessionId: item.id,
-                    countedAmount: countedAmounts[item.id] ?? '',
-                    note: notes[item.id] ?? null,
-                  },
-                })
-              }
-              isClosing={closeSession.isPending}
-              closeError={closeSession.isError ? closeSession.error.message : null}
-            />
-          )}
-        />
-      )}
-    </SafeAreaView>
+    <View className="min-w-0 flex-1">
+      <Text tabular className="text-callout font-semibold text-white" numberOfLines={1}>{value}</Text>
+      <Text className="mt-0.5 text-caption text-white/50" numberOfLines={1}>{label}</Text>
+    </View>
   );
 }
 
-function CashSessionCard({
-  session,
-  countedAmount,
-  note,
-  onCountedAmountChange,
-  onNoteChange,
-  onClose,
-  isClosing,
-  closeError,
+/** The prototype's `.stat` drill-in tile. */
+function DrillTile({
+  icon,
+  label,
+  value,
+  sub,
+  badge,
+  href,
 }: {
-  session: CashSession;
-  countedAmount: string;
-  note: string;
-  onCountedAmountChange: (value: string) => void;
-  onNoteChange: (value: string) => void;
-  onClose: () => void;
-  isClosing: boolean;
-  closeError: string | null;
+  icon: IconName;
+  label: string;
+  value: string;
+  sub?: string;
+  badge?: { label: string; tone: BadgeTone };
+  href: Href;
 }): React.JSX.Element {
-  const isOpen = session.status === 'open';
+  const router = useRouter();
   return (
-    <View className="gap-3 rounded-xl border border-neutral-200 p-4">
-      <View className="flex-row items-center justify-between">
-        <Text className="font-semibold text-neutral-900">Branch {session.branch_id.slice(0, 8)}</Text>
-        <Text className="text-xs font-semibold uppercase text-neutral-500">{session.status}</Text>
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={[label, value, badge?.label, sub].filter(Boolean).join(', ')}
+      onPress={() => router.push(href)}
+      scaleTo={0.97}
+      className="w-[48.5%] rounded-md bg-white p-4 shadow-e2"
+    >
+      <View className="flex-row items-center gap-2">
+        <View className="h-7 w-7 items-center justify-center rounded-[9px] bg-cream-deep">
+          <Icon name={icon} size={15} color="cocoa" />
+        </View>
+        <Text variant="meta" numberOfLines={1} className="flex-1">{label}</Text>
       </View>
-      <Text className="text-sm text-neutral-500">Opening float: {session.opening_float}</Text>
-      {!isOpen && (
-        <View className="gap-1">
-          <Text className="text-sm text-neutral-500">Expected: {session.expected_amount ?? '—'}</Text>
-          <Text className="text-sm text-neutral-500">Counted: {session.counted_amount ?? '—'}</Text>
-          <Text className="text-sm font-semibold text-neutral-900">
-            Variance: {session.variance_amount ?? '—'}
-          </Text>
-        </View>
+      <Text tabular className="mt-3 text-title-3 font-bold tracking-[-0.4px] text-cocoa" numberOfLines={1}>
+        {value}
+      </Text>
+      {badge !== undefined ? (
+        <Badge label={badge.label} tone={badge.tone} className="mt-2 self-start" />
+      ) : (
+        <Text variant="caption" numberOfLines={1} className="mt-1">{sub ?? ' '}</Text>
       )}
-      {isOpen && (
-        <View className="gap-2">
-          <TextInput
-            accessibilityLabel="Counted amount"
-            value={countedAmount}
-            onChangeText={onCountedAmountChange}
-            keyboardType="decimal-pad"
-            className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-            placeholder="Counted amount"
+    </PressableScale>
+  );
+}
+
+/**
+ * Finance — the prototype's owner `finance` tab: the money that came in, where it went, and a
+ * way into each ledger.
+ *
+ * Every figure is an exact string from the server: today's summary from
+ * `get_daily_revenue_summary()`, the till state from `cash_sessions`, and individual expenses.
+ * Nothing is added, subtracted or divided on the device.
+ *
+ * The record-payment, open/close-till and add-expense forms this tab used to carry now live
+ * where the prototype puts them: payment on the order, the till on Cash sessions, and Add
+ * expense.
+ *
+ * PORT-NOTE: the prototype's hero is net profit with a margin, a "how revenue divides" flow bar
+ * (cost of goods fixed at 40% of revenue), a gross-margin tile, an expense donut and period
+ * totals. Profit and margin need cost of goods, which is blocked on ingredient costs
+ * (BLOCKER-018: `stock_movements.unit_cost` is empty live); the fixed ratios are invented; and
+ * period and category totals are sums over money that belong to a server report. So the hero is
+ * money collected today, the chart is the server's net revenue by day, and expense composition
+ * becomes the latest expenses themselves. The 7/30/90-day switch waits for a ranged report —
+ * the daily summary is the only aggregate endpoint.
+ */
+export default function FinanceScreen(): React.JSX.Element {
+  const router = useRouter();
+  const client = getSupabaseClient();
+  const tenantId = useSessionStore((s) => s.activeTenantId);
+  const branches = useBranchOptions();
+  const [branchIndex, setBranchIndex] = useState(0);
+  const branch = branches.options[branchIndex] ?? branches.options[0] ?? null;
+
+  const week = useRevenueWeek(branch?.branchId ?? null);
+  const sessions = useCashSessions(client, tenantId, branch?.branchId);
+  const expenses = useExpenses(client, tenantId, branch?.branchId);
+
+  const cash = useMemo(() => {
+    // ISO-8601 timestamps order correctly as strings; this sorts by time, not by money.
+    const rows = [...(sessions.data ?? [])].sort((a, b) => b.opened_at.localeCompare(a.opened_at));
+    return {
+      open: rows.find((s) => s.status === 'open') ?? null,
+      lastClosed: rows.find((s) => s.status === 'closed') ?? null,
+    };
+  }, [sessions.data]);
+
+  const recentExpenses = useMemo(() => {
+    const rows = [...(expenses.data ?? [])].sort((a, b) => b.incurred_at.localeCompare(a.incurred_at));
+    const todayKey = new Date().toDateString();
+    return {
+      latest: rows.slice(0, 4),
+      today: rows.filter((e) => new Date(e.incurred_at).toDateString() === todayKey).length,
+    };
+  }, [expenses.data]);
+
+  if (tenantId === null) {
+    return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
+  }
+
+  const today = week.today?.data;
+  const points = week.days.map((d) => ({
+    value: d.summary === undefined ? 0 : Number(d.summary.net_revenue),
+    label: d.label,
+  }));
+  const lastVariance = varianceView(cash.lastClosed?.variance_amount ?? null);
+
+  return (
+    <ScreenScroll
+      title="Finance"
+      sub={branch?.label ?? 'All branches'}
+      right={<IconButton icon="doc" label="Reports" tinted onPress={() => router.push('/reports')} />}
+      refreshing={week.isRefetching || sessions.isRefetching || expenses.isRefetching}
+      onRefresh={() => {
+        week.refetch();
+        void sessions.refetch();
+        void expenses.refetch();
+      }}
+    >
+      {branches.isLoading ? (
+        <Skeleton variant="chart" className="mt-5 h-[280px]" />
+      ) : branch === null ? (
+        <EmptyState title="No branch available" detail="A branch needs a stockroom before it has finance figures." />
+      ) : (
+        <>
+          {branches.options.length > 1 && (
+            <Chips
+              className="mt-2"
+              accessibilityLabel="Branch"
+              options={branches.options.map((b, i) => ({ key: String(i), label: b.label }))}
+              value={String(branchIndex)}
+              onChange={(k) => setBranchIndex(Number(k))}
+            />
+          )}
+
+          {week.isError ? (
+            <View className="mt-5">
+              <ErrorState error={week.error ?? new Error('Could not load finance figures.')} onRetry={week.refetch} />
+            </View>
+          ) : (
+            <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-4 pt-5">
+              <View className="px-5">
+                <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
+                  Money in today
+                </Text>
+                {today === undefined ? (
+                  <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
+                ) : (
+                  <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">
+                    {formatNaira(today.net_collected)}
+                  </Text>
+                )}
+                <Text className="mt-1.5 text-foot text-white/60">
+                  {today === undefined ? ' ' : `Collected after refunds · ${today.reporting_date}`}
+                </Text>
+              </View>
+
+              <View className="mt-3">
+                <TrendChart
+                  points={points}
+                  onDark
+                  accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
+                />
+              </View>
+
+              {today !== undefined && (
+                <View className="mx-5 mt-3 flex-row gap-5 border-t border-white/10 pt-3">
+                  <FootStat value={formatNaira(today.net_revenue)} label="Net revenue" />
+                  <View className="w-px bg-white/10" />
+                  <FootStat value={formatNaira(today.refunds_paid)} label="Refunds paid" />
+                </View>
+              )}
+            </Card>
+          )}
+
+          <View className="mt-5 flex-row flex-wrap justify-between gap-y-3">
+            <DrillTile
+              icon="sales"
+              label="Revenue"
+              value={today === undefined ? '—' : formatNaira(today.gross_revenue)}
+              sub="Gross, today"
+              href="/sales"
+            />
+            <DrillTile
+              icon="receipt"
+              label="Expenses"
+              value={expenses.isLoading ? '—' : String(recentExpenses.today)}
+              sub="recorded today"
+              href="/expenses"
+            />
+            <DrillTile
+              icon="cash"
+              label="Cash session"
+              value={sessions.isLoading ? '—' : cash.open !== null ? 'Open' : 'Closed'}
+              sub={cash.open !== null ? `since ${clock.format(new Date(cash.open.opened_at))}` : undefined}
+              badge={
+                cash.open === null && lastVariance !== null
+                  ? {
+                      label:
+                        lastVariance.label === 'Balanced'
+                          ? 'Last: balanced'
+                          : `Last: ${lastVariance.label.toLowerCase()} ${lastVariance.amount}`,
+                      tone: lastVariance.tone,
+                    }
+                  : undefined
+              }
+              href="/cash"
+            />
+            <DrillTile icon="chart" label="Reports" value="Daily" sub="Revenue & cash" href="/reports" />
+          </View>
+
+          <Callout
+            className="mt-5"
+            tone="info"
+            title="Profit and margin are on the way"
+            detail="They need what your ingredients cost. Once purchase costs are recorded, net profit, cost of goods and margin appear here."
           />
-          <TextInput
-            accessibilityLabel="Variance note"
-            value={note}
-            onChangeText={onNoteChange}
-            className="rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900"
-            placeholder="Note if the drawer does not balance"
-          />
-          <Pressable
-            accessibilityRole="button"
-            disabled={isClosing || countedAmount.length === 0}
-            onPress={onClose}
-            className="rounded-lg bg-neutral-900 px-4 py-3 active:opacity-70 disabled:opacity-40"
-          >
-            {isClosing ? <ActivityIndicator color="white" /> : <Text className="text-center font-semibold text-white">Close session</Text>}
-          </Pressable>
-          {closeError !== null && <Text className="text-sm text-red-700">{closeError}</Text>}
-        </View>
+
+          <View className="mt-8">
+            <View className="mb-3 flex-row items-center">
+              <Text variant="subtitle" accessibilityRole="header" className="flex-1">Latest expenses</Text>
+              <PressableScale
+                accessibilityRole="link"
+                accessibilityLabel="All expenses"
+                onPress={() => router.push('/expenses')}
+                className="min-h-tap justify-center px-1"
+              >
+                <Text className="text-foot font-semibold text-apricot-deep">Detail</Text>
+              </PressableScale>
+            </View>
+            {expenses.isLoading ? (
+              <Skeleton variant="row" />
+            ) : expenses.isError ? (
+              <ErrorState error={expenses.error} onRetry={() => void expenses.refetch()} />
+            ) : recentExpenses.latest.length === 0 ? (
+              <Card tone="recessed" className="items-center gap-2 p-6">
+                <Icon name="receipt" size={22} color="textMuted" />
+                <Text variant="meta" className="text-center">No expenses recorded at {branch.label} yet.</Text>
+              </Card>
+            ) : (
+              <List>
+                {recentExpenses.latest.map((e) => (
+                  <ListRow
+                    key={e.id}
+                    leading={<IconTile icon={CATEGORY_META[e.category].icon} size="sm" />}
+                    title={e.description ?? CATEGORY_META[e.category].label}
+                    sub={[
+                      CATEGORY_META[e.category].label,
+                      e.paid_method === null ? null : METHOD_LABEL[e.paid_method],
+                      when(e.incurred_at),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    end={formatNaira(e.amount)}
+                    chevron={false}
+                  />
+                ))}
+              </List>
+            )}
+          </View>
+
+          {today !== undefined && !isZeroDecimalString(today.recognized_refunds) && (
+            <Text variant="caption" className="mt-4">
+              Refunds recognised today: {formatNaira(today.recognized_refunds)}
+            </Text>
+          )}
+        </>
       )}
-    </View>
+    </ScreenScroll>
   );
 }

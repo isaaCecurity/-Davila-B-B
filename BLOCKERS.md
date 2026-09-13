@@ -1845,3 +1845,26 @@ needed.
 <what is unknown and why guessing is unsafe>
 **Needed:** <the specific decision or action>
 ```
+
+## BLOCKER-030 · No single-action counter sale for cashiers and managers
+**Status:** OPEN · **Affects:** prototype port — `new-sale` counter flow (`bakeflow-frontend/docs/PROTOTYPE-PORT.md`, Sales) · **Type:** business rule / architecture
+
+The design prototype rings up a walk-in counter sale in one action: pick items, take payment,
+done. The live ticket lifecycle has no such path for non-drivers. `STATE-MACHINES.md` §1 walks a
+ticket `draft → submitted → confirmed → scheduled → in_production → ready → delivered →
+completed`, one guarded hop at a time; the only shortcut, `complete_driver_field_sale()`
+(AD-020), is deliberately driver- and trip-scoped. Verified live 2026-09-13: `tickets_insert`
+and `ticket_items_insert` let owner/admin/branch_manager/cashier create the draft, but nothing
+completes it in one step.
+
+Building it in the client would mean firing up to six transition RPCs plus `record_payment()`
+in sequence — non-atomic orchestration of a financial event, which `FRONTEND-STRUCTURE.md` §1 and
+`API-CONTRACT.md` §1 reserve for the database. It would also have to decide which hops a counter
+sale legitimately skips (it is never scheduled, produced to order, or delivered), which is a
+business rule nobody has specified.
+
+**Needed:** a decision on the counter-sale lifecycle — e.g. a `complete_counter_sale()` RPC that
+takes `draft → completed` atomically for owner/admin/branch_manager/cashier on a `ROADSIDE`
+pickup ticket (mirroring AD-020's driver shortcut), and whether payment is recorded inside it.
+Until then the port builds customer orders as drafts (a documented, bounded contract) and
+omits the one-tap counter sale.

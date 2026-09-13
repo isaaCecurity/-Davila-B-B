@@ -22,11 +22,16 @@
 
 import { getSupabaseClient, activeTenantIdFromSession } from '@bakeflow/auth';
 import { clearOrganizationScopedCache } from '@bakeflow/hooks';
+import { ThemeProvider } from '@bakeflow/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { ToastHost } from '../components/ToastHost';
 import { useSessionStore } from '../stores/session';
+import { useSettingsStore } from '../stores/settings/settings.store';
+import { SkiaReady } from './SkiaReady';
 
 /**
  * One client for the app's lifetime.
@@ -54,6 +59,11 @@ function createQueryClient(): QueryClient {
 export function AppProviders({ children }: { children: ReactNode }): React.JSX.Element {
   const [queryClient] = useState(createQueryClient);
   const setSession = useSessionStore((s) => s.setSession);
+  const theme = useSettingsStore((s) => s.theme);
+
+  useEffect(() => {
+    void useSettingsStore.getState().hydrate();
+  }, []);
 
   // Held in a ref rather than read from the store inside the listener: the listener is
   // registered once, and a store value captured in its closure would be the value from
@@ -100,9 +110,22 @@ export function AppProviders({ children }: { children: ReactNode }): React.JSX.E
   // `SafeAreaView` from `react-native-safe-area-context` directly, and a screen rendered
   // outside a navigator — an error boundary, a modal, anything added later — would then
   // measure zero insets and draw under the status bar.
+  //
+  // `GestureHandlerRootView` wraps everything so pan gestures (sheet drag-to-dismiss) work;
+  // `SkiaReady` holds the tree only on web, until CanvasKit has loaded; `ToastHost` sits
+  // inside the theme so toasts pick up the active colour variables.
   return (
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <SkiaReady>
+          <ThemeProvider preference={theme}>
+            <QueryClientProvider client={queryClient}>
+              {children}
+              <ToastHost />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </SkiaReady>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

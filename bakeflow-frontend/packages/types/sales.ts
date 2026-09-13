@@ -255,6 +255,17 @@ export interface Ticket {
   server_received_at: Timestamptz | null;
   /** Monotonic per-ticket counter used for sync conflict ordering. */
   revision: number;
+  /**
+   * Who created the ticket. Nullable live (verified 2026-09-13) — rows written by service-role
+   * paths carry none. `tickets_select` is branch-scoped, not creator-scoped, so a cashier's
+   * "my sales" must filter on this rather than trusting the read to narrow it.
+   */
+  created_by: Uuid | null;
+  /**
+   * Stamped when the ticket reaches `completed` (P9.8) — the reporting layer's revenue
+   * recognition timestamp. Null until then.
+   */
+  completed_at: Timestamptz | null;
   created_at: Timestamptz;
   updated_at: Timestamptz;
 }

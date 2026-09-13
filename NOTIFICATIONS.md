@@ -1,4 +1,22 @@
-# BakeFlow — Notifications
+# Ba## ACTION NEEDED: decide how a cashier rings up a walk-in sale (2026-09-13)
+
+The new screens include the prototype's quick counter sale — tap the items, take the money,
+done. The backend doesn't have a one-step way to do that for cashiers or managers: an order has
+to walk through every stage (confirmed, scheduled, in production, ready, delivered, completed),
+one at a time. Only drivers have a shortcut.
+
+Faking it in the app would mean firing six separate updates plus a payment, and if the phone
+loses signal halfway you get a half-finished sale. So it needs a decision, not a workaround.
+
+**What to decide:** should a counter sale jump straight from "started" to "completed" in one
+safe step (like the driver shortcut), and should the payment be recorded as part of that same
+step? Customer orders are built and work in the meantime; only the one-tap counter sale waits.
+
+See `BLOCKERS.md` BLOCKER-030.
+
+---
+
+keFlow — Notifications
 
 Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.md` entry.
 

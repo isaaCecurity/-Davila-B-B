@@ -136,6 +136,8 @@ export const ticketSchema = z
     device_created_at: timestamptzSchema.nullable(),
     server_received_at: timestamptzSchema.nullable(),
     revision: z.number().int().positive(),
+    created_by: uuidSchema.nullable(),
+    completed_at: timestamptzSchema.nullable(),
   })
   .refine(
     (row) =>

@@ -2,54 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---------------------------------------------------------------------------
-   BakeFlow design tokens — themeable colour values.
-
-   Ported from the prototype's source of truth:
-     "# BakeFlow frontend design/export/bakeflow-frontend/css/tokens.css"
-   Keep the two in step.
-
-   Values are space-separated RGB triplets, not hex, because tailwind.config.js
-   composes them as `rgb(<triplet> / <alpha>)` — that is what makes opacity
-   utilities like `bg-cream/50` work.
-
-   These are deliberately OUTSIDE `@layer base`. Tailwind v3 tree-shakes the
-   contents of `@layer`, and `.dark` never appears as a bare class in any
-   scanned file — it is applied at runtime — so inside a layer the whole dark
-   theme gets purged and silently never emits. Plain top-level CSS is never
-   purged. (Declaring them via the config's addBase() fails the same way.)
-
-   Only colours that actually flip between themes belong here; fixed ones
-   (apricot, success, warning, error, info, ink) are plain hex in the config.
---------------------------------------------------------------------------- */
-:root {
-  --bf-cocoa: 42 33 28;
-  --bf-cocoa-soft: 67 54 46;
-  --bf-cream: 247 243 236;
-  --bf-cream-deep: 241 235 225;
-  --bf-white: 255 255 255;
-  --bf-warm-gray: 95 88 80;
-  --bf-warm-gray-soft: 115 107 98;
-  --bf-border: 231 225 216;
-  --bf-apricot-tint: 251 237 228;
-  --bf-success-tint: 230 240 234;
-  --bf-warning-tint: 250 240 220;
-  --bf-error-tint: 248 231 228;
-  --bf-info-tint: 232 238 244;
-}
-
-.dark {
-  --bf-cocoa: 239 231 220;
-  --bf-cocoa-soft: 216 204 188;
-  --bf-cream: 23 19 15;
-  --bf-cream-deep: 30 24 17;
-  --bf-white: 38 32 26;
-  --bf-warm-gray: 167 157 145;
-  --bf-warm-gray-soft: 140 131 119;
-  --bf-border: 58 48 38;
-  --bf-apricot-tint: 58 42 30;
-  --bf-success-tint: 29 50 38;
-  --bf-warning-tint: 58 46 20;
-  --bf-error-tint: 58 33 25;
-  --bf-info-tint: 28 42 56;
-}
+/* Design token values are not declared here. Themeable colours are CSS variables whose
+   values come from packages/ui/tokens.ts: tailwind.config.js generates the light `:root`
+   fallback, and packages/ui/ThemeProvider sets the active scheme at runtime via vars(). */

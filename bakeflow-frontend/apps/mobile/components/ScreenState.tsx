@@ -12,16 +12,14 @@
  *   dead end with no button is a reinstall.
  */
 
-import { Button, Text } from '@bakeflow/ui';
+import { Button, colorFor, Text, useScheme } from '@bakeflow/ui';
 import { ActivityIndicator, View } from 'react-native';
 
-/** Cocoa — ActivityIndicator takes a colour prop, not a class. */
-const SPINNER = '#2A211C';
-
 export function LoadingState({ label = 'Loading…' }: { label?: string }): React.JSX.Element {
+  const scheme = useScheme();
   return (
     <View className="flex-1 items-center justify-center gap-3 p-gutter">
-      <ActivityIndicator size="large" color={SPINNER} />
+      <ActivityIndicator size="large" color={colorFor(scheme, 'textPrimary')} />
       <Text variant="meta">{label}</Text>
     </View>
   );
