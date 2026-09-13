@@ -23,6 +23,7 @@ import { ErrorState, NoOrganizationState } from '../../../components/ScreenState
 import { useSessionStore } from '../../../stores/session';
 import { useBranchOptions } from '../../branch/hooks/useBranchOptions';
 import { varianceView, when } from '../financeDisplay';
+import { useOffBarBack } from '../../../navigation/useOffBarBack';
 import { OpenSessionSheet } from './CashSessionSheets';
 import { CashSessionPanel } from './CashSessionPanel';
 
@@ -35,6 +36,7 @@ import { CashSessionPanel } from './CashSessionPanel';
  */
 export function CashScreen({ mine }: { mine: boolean }): React.JSX.Element {
   const router = useRouter();
+  const onBack = useOffBarBack(mine ? 'my-cash' : 'cash');
   const client = getSupabaseClient();
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const userId = useSessionStore((s) => s.userId);
@@ -64,6 +66,7 @@ export function CashScreen({ mine }: { mine: boolean }): React.JSX.Element {
   return (
     <ScreenScroll
       title={mine ? 'My cash' : 'Cash session'}
+      onBack={onBack}
       sub={branch?.label}
       refreshing={sessions.isRefetching || expenses.isRefetching}
       onRefresh={() => {

@@ -1868,3 +1868,27 @@ takes `draft → completed` atomically for owner/admin/branch_manager/cashier on
 pickup ticket (mirroring AD-020's driver shortcut), and whether payment is recorded inside it.
 Until then the port builds customer orders as drafts (a documented, bounded contract) and
 omits the one-tap counter sale.
+
+## BLOCKER-031 · Invite acceptance is not bound to the invited email address
+**Status:** OPEN · **Affects:** invitations — `app/invite.tsx`, `accept_organization_invite()` · **Type:** security / authorization decision
+
+Read live 2026-09-13 while porting the invite screens. `accept_organization_invite(p_raw_token)`
+looks the invite up by token hash, checks it is `pending` and unexpired, and grants the role to
+**whichever signed-in account presents the token** — it never compares the caller's email with
+`organization_invites.email`. The token is 32 random bytes and emailed only to the invitee, so
+this is a bearer-link design; but links get forwarded, and while email delivery is simulated
+(AD-023) owners share them by hand through the new "Share link" fallback, which widens that
+exposure. Whether an invite should be redeemable only by its addressee is a security decision,
+not something to guess in the client (a client check would be bypassable anyway).
+
+Related, lower risk: on an expired token the function runs `UPDATE … SET status = 'expired'` and
+then `RAISE`s, which rolls the update back — so expired invites stay `pending` in the table. The
+new Invites screen reads a pending invite past `expires_at` as "Expired" so people are not misled,
+but the stored status never changes.
+
+**Needed:** (1) decide whether acceptance must match the invited email (e.g. compare
+`lower(auth.email())` to the invite, with an owner-visible override if needed); (2) whether
+expiry should be persisted (mark expired in a separate, committed step, or a scheduled sweep).
+Until decided, the app shows a "share only with them" warning beside every shared link and
+changes nothing server-side.
+

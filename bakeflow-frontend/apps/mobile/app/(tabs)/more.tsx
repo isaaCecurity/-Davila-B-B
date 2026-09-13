@@ -18,9 +18,8 @@ import { toast } from '../../stores/ui/toast.store';
  * screen could show if reached some other way.
  *
  * PORT-NOTE: the prototype's rows carry live counts ("12 items · 2 low on stock"). Rows
- * link only to routes that exist; counts and the remaining destinations (Customers,
- * Expenses, Profit & Loss, Settings, Profile, My activity) arrive with their screens in
- * Phase 3. The prototype-only "Design system" and "States gallery" rows are not ported.
+ * link only to routes that exist. My activity is covered by My sales / Tickets; Profit & Loss is
+ * out of MVP scope (AD-022); row counts need aggregates and are not shown. The prototype-only "Design system" and "States gallery" rows are not ported.
  */
 export default function MoreScreen(): React.JSX.Element {
   const router = useRouter();
@@ -76,14 +75,20 @@ export default function MoreScreen(): React.JSX.Element {
         {!isDriver && (
           <MenuItem icon="layers" title="Stock" onPress={() => router.push('/inventory')} />
         )}
+        {(isOwner || isManager) && (
+          <MenuItem icon="flame" title="Production" onPress={() => router.push('/production')} />
+        )}
         {!isDriver && (
           <MenuItem icon="truck" title="Deliveries" onPress={() => router.push('/delivery')} />
         )}
         {canManageStaff && (
-          <MenuItem icon="user" title="Staff & activity" onPress={() => router.push('/staff')} />
+          <MenuItem icon="user" title="Staff & activity" sub="Team and invites" onPress={() => router.push('/staff')} />
+        )}
+        {!isDriver && (
+          <MenuItem icon="truck" title="Driver trips" sub="Verify loads, reconcile, settle" onPress={() => router.push('/trips')} />
         )}
         {isDriver && (
-          <MenuItem icon="truck" title="My trip" onPress={() => router.push('/driver/home')} />
+          <MenuItem icon="truck" title="My trip" onPress={() => router.push('/trip')} />
         )}
       </Menu>
 
@@ -91,7 +96,7 @@ export default function MoreScreen(): React.JSX.Element {
         <>
           <GroupLabel>You</GroupLabel>
           <Menu>
-            <MenuItem icon="bell" title="Notifications" onPress={() => router.push('/alerts')} />
+            <MenuItem icon="bell" title="Alerts" onPress={() => router.push('/alerts')} />
           </Menu>
         </>
       )}
@@ -118,6 +123,10 @@ export default function MoreScreen(): React.JSX.Element {
             sub={org?.name}
             onPress={() => router.push('/select-organization')}
           />
+        )}
+        <MenuItem icon="settings" title="Settings" sub="Appearance, account and more" onPress={() => router.push('/settings')} />
+        {(isOwner || persona === 'admin') && (
+          <MenuItem icon="history" title="Audit log" onPress={() => router.push('/audit')} />
         )}
         <MenuItem icon="logout" tone="bad" title="Sign out" onPress={() => void onSignOut()} />
       </Menu>

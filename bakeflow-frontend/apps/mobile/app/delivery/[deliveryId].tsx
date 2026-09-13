@@ -1,175 +1,194 @@
 import { getSupabaseClient } from '@bakeflow/auth';
-import { useDelivery, useTicketsByIds } from '@bakeflow/hooks';
+import { useCustomersByIds, useDelivery, useDrivers, useTicketsByIds } from '@bakeflow/hooks';
 import { isDeliveryVerified } from '@bakeflow/types';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo } from 'react';
-import { ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-import { DeliveryActions } from '../../components/DeliveryActions';
-import { DeliveryStatusBadge } from '../../components/DeliveryStatusBadge';
 import {
+  Badge,
+  Button,
+  Callout,
+  Card,
   EmptyState,
-  ErrorState,
-  LoadingState,
-  NoOrganizationState,
-} from '../../components/ScreenState';
+  GroupLabel,
+  Icon,
+  List,
+  ListRow,
+  ScreenScroll,
+  Skeleton,
+  Text,
+} from '@bakeflow/ui';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useMemo, useState } from 'react';
+import { Linking, View } from 'react-native';
+
+import { ErrorState, NoOrganizationState } from '../../components/ScreenState';
+import { DeliveryActionSheet } from '../../features/delivery/components/DeliveryActionSheet';
+import { DELIVERY_META, NEXT_ACTIONS, deliveryWhen, type DeliveryAction } from '../../features/delivery/deliveryDisplay';
 import { useSessionStore } from '../../stores/session';
 
-/**
- * One delivery — the P9.6 detail.
- *
- * ## The proof panel reports the gate; it is not the gate
- *
- * `STATE-MACHINES.md` §1 lets a ticket move `ready → delivered` only when its
- * `fulfilment_type` is `pickup` **or** the linked delivery's own status is `delivered`, and
- * a guard trigger performs that lookup itself. `isDeliveryVerified` mirrors the condition
- * for display and nothing else. A driver's phone is the device most likely to be holding
- * stale state at the moment it matters, so this screen states what the database would say
- * rather than deciding anything.
- *
- * ## Proof is shown as recorded, never inferred
- *
- * `deliveries_delivered_needs_proof` is a standing table CHECK — read live, not assumed —
- * requiring a `proof_url` **or** a `recipient_name` on a delivered row. So exactly one of
- * the two can legitimately be absent, and the screen shows whichever exists rather than
- * implying both were captured.
- *
- * ## Controls
- *
- * `authenticated` holds `INSERT, SELECT` and no UPDATE on `deliveries` (grants read live),
- * so every transition goes through `transition_delivery()`, a SECURITY DEFINER RPC.
- * `DeliveryActions` renders the hops that are legal from the current status; the trigger
- * remains the authority on whether any of them actually is.
- */
-export default function DeliveryDetailScreen(): React.JSX.Element {
-  const client = getSupabaseClient();
-  const router = useRouter();
-  const { deliveryId } = useLocalSearchParams<{ deliveryId: string }>();
-  const activeTenantId = useSessionStore((s) => s.activeTenantId);
-
-  const id = typeof deliveryId === 'string' && deliveryId !== '' ? deliveryId : null;
-
-  const delivery = useDelivery(client, activeTenantId, id);
-
-  const ticketIds = useMemo(
-    () => (delivery.data == null ? [] : [delivery.data.ticket_id]),
-    [delivery.data],
-  );
-  const tickets = useTicketsByIds(client, activeTenantId, ticketIds);
-
-  if (activeTenantId === null) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <NoOrganizationState onChoose={() => router.push('/select-organization')} />
-      </SafeAreaView>
-    );
-  }
-
-  if (delivery.isPending) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <LoadingState label="Loading delivery…" />
-      </SafeAreaView>
-    );
-  }
-
-  if (delivery.isError) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <ErrorState error={delivery.error} onRetry={() => void delivery.refetch()} />
-      </SafeAreaView>
-    );
-  }
-
-  if (delivery.data === null) {
-    return (
-      <SafeAreaView className="flex-1 bg-cream">
-        <EmptyState
-          title="Delivery not found"
-          detail="It may have been removed, or it belongs to a bakery or branch you cannot see."
-        />
-      </SafeAreaView>
-    );
-  }
-
-  const row = delivery.data;
-  const ticket = tickets.data?.find((t) => t.id === row.ticket_id) ?? null;
-  const verified = isDeliveryVerified(row.status);
-
+function Line({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
-    <SafeAreaView className="flex-1 bg-cream">
-      <ScrollView contentContainerClassName="p-6 gap-6">
-        <View className="gap-2">
-          <View className="flex-row items-start justify-between gap-3">
-            <Text className="flex-1 text-2xl font-bold text-neutral-900">{row.address_line}</Text>
-            <DeliveryStatusBadge status={row.status} />
-          </View>
-          <Text className="text-sm text-neutral-500">
-            {ticket === null ? 'Ticket unavailable' : ticket.ticket_number}
-          </Text>
-        </View>
-
-        <DeliveryActions delivery={row} tenantId={activeTenantId} />
-
-        {row.status === 'failed' && row.failure_reason !== null && (
-          <View className="gap-1 rounded-xl bg-amber-50 p-4">
-            <Text className="text-xs font-semibold uppercase text-amber-800">Why it failed</Text>
-            <Text className="text-base text-amber-900">{row.failure_reason}</Text>
-            <Text className="pt-1 text-sm text-amber-800">
-              A failed delivery is not finished. The goods are still out until it is returned.
-            </Text>
-          </View>
-        )}
-
-        <View className="gap-3 rounded-xl border border-neutral-200 p-4">
-          <Field label="Contact" value={row.contact_phone ?? '—'} />
-          <Field label="Driver" value={row.driver_id ?? 'Not assigned'} />
-          <Field label="Scheduled" value={formatTimestamp(row.scheduled_at)} />
-          <Field label="Dispatched" value={formatTimestamp(row.dispatched_at)} />
-          <Field label="Delivered" value={formatTimestamp(row.delivered_at)} />
-        </View>
-
-        <View className="gap-3 rounded-xl border border-neutral-200 p-4">
-          <Text className="text-lg font-semibold text-neutral-900">Proof of delivery</Text>
-          {verified ? (
-            <>
-              <Field label="Received by" value={row.recipient_name ?? '—'} />
-              <Field label="Photo or signature" value={row.proof_url ?? '—'} />
-              <Text className="text-sm text-green-800">
-                This delivery is verified, so its ticket may be completed.
-              </Text>
-            </>
-          ) : (
-            <Text className="text-sm text-neutral-500">
-              Nothing recorded yet. A ticket cannot be completed on a delivery that is not
-              delivered — the database enforces that, not this screen.
-            </Text>
-          )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }): React.JSX.Element {
-  return (
-    <View className="flex-row items-center justify-between gap-3">
-      <Text className="text-sm text-neutral-500">{label}</Text>
-      <Text className="flex-1 text-right text-base font-medium text-neutral-900">{value}</Text>
+    <View className="flex-row items-center gap-3 py-2" accessible accessibilityLabel={`${label}: ${value}`}>
+      <Text variant="meta" className="w-[112px]">{label}</Text>
+      <Text className="flex-1 text-right text-foot font-semibold text-cocoa">{value}</Text>
     </View>
   );
 }
 
 /**
- * `null` renders as an em dash rather than a sentence.
+ * One delivery — the stop a driver or dispatcher is acting on: where, for whom, where it stands,
+ * and the next step.
  *
- * A null `delivered_at` on a pending delivery means "not yet"; on a returned one it means
- * "never happened". The screen cannot tell which, and the status badge above already says
- * it, so it prints the absence instead of narrating it wrongly.
+ * The steps offered transcribe `guard_delivery_transition()`; each opens
+ * `DeliveryActionSheet`, which calls `transition_delivery()`. Who may take which step (a manager
+ * assigns; the assigned driver or a manager moves it on) is the database's decision, shown as
+ * returned.
+ *
+ * PORT-NOTE: BLOCKER-016 — a return does not restore stock in the live database. The return
+ * step is still offered (it is the legal exit from a problem) and says only that the delivery
+ * closes, never that stock was put back.
  */
-function formatTimestamp(value: string | null): string {
-  if (value === null) return '—';
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+export default function DeliveryDetailScreen(): React.JSX.Element {
+  const router = useRouter();
+  const client = getSupabaseClient();
+  const tenantId = useSessionStore((s) => s.activeTenantId);
+  const { deliveryId } = useLocalSearchParams<{ deliveryId: string }>();
+  const id = typeof deliveryId === 'string' && deliveryId !== '' ? deliveryId : null;
+
+  const delivery = useDelivery(client, tenantId, id);
+  const ticketIds = useMemo(() => (delivery.data == null ? [] : [delivery.data.ticket_id]), [delivery.data]);
+  const tickets = useTicketsByIds(client, tenantId, ticketIds);
+  const ticket = tickets.data?.[0] ?? null;
+  const customers = useCustomersByIds(client, tenantId, ticket?.customer_id == null ? [] : [ticket.customer_id]);
+  const drivers = useDrivers(client, delivery.data?.driver_id == null ? null : tenantId);
+  const [action, setAction] = useState<DeliveryAction | null>(null);
+
+  const back = (): void => (router.canGoBack() ? router.back() : router.replace('/delivery'));
+
+  if (tenantId === null) {
+    return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
+  }
+
+  if (delivery.isLoading) {
+    return (
+      <ScreenScroll title="Delivery" onBack={back}>
+        <View className="mt-2 gap-3">
+          <Skeleton variant="row" className="h-[150px]" />
+          <Skeleton variant="row" className="h-[180px]" />
+        </View>
+      </ScreenScroll>
+    );
+  }
+
+  if (delivery.isError || delivery.data == null) {
+    return (
+      <ScreenScroll title="Delivery" onBack={back}>
+        {delivery.isError ? (
+          <ErrorState error={delivery.error} onRetry={() => void delivery.refetch()} />
+        ) : (
+          <EmptyState
+            icon="truck"
+            title="Delivery not found"
+            text="It may have been removed, or it belongs to a branch you cannot see."
+          />
+        )}
+      </ScreenScroll>
+    );
+  }
+
+  const row = delivery.data;
+  const meta = DELIVERY_META[row.status];
+  const actions = NEXT_ACTIONS[row.status];
+  const driverName =
+    row.driver_id === null ? 'Not assigned' : (drivers.data?.find((d) => d.profile_id === row.driver_id)?.full_name ?? 'Driver');
+  const customerName =
+    ticket === null ? '—' : ticket.customer_id === null ? 'Walk-in customer' : (customers.data?.[0]?.full_name ?? 'Customer');
+
+  return (
+    <ScreenScroll
+      title={ticket?.ticket_number ?? 'Delivery'}
+      sub={meta.label}
+      onBack={back}
+      refreshing={delivery.isRefetching}
+      onRefresh={() => void delivery.refetch()}
+    >
+      {/* The prototype's ink hero: the address is the thing to get right. */}
+      <Card tone="ink" className="mt-2 rounded-lg p-5">
+        <View className="flex-row items-center justify-between gap-3">
+          <Badge label={meta.label} tone={meta.tone} icon={meta.icon} onDark />
+          <Text className="text-caption text-white/50">{deliveryWhen(row.scheduled_at) ?? 'Not scheduled'}</Text>
+        </View>
+        <Text className="mt-3 text-title-2 font-bold tracking-[-0.4px] text-white">{row.address_line}</Text>
+        <Text className="mt-1 text-foot text-white/60">{customerName}</Text>
+        {row.contact_phone !== null && (
+          <Button
+            className="mt-4"
+            label={`Call ${row.contact_phone}`}
+            tone="secondary"
+            onPress={() => void Linking.openURL(`tel:${row.contact_phone ?? ''}`)}
+            block
+          />
+        )}
+      </Card>
+
+      {row.status === 'failed' && row.failure_reason !== null && row.failure_reason !== '' && (
+        <Callout
+          className="mt-4"
+          tone="warning"
+          title="Could not deliver"
+          detail={`${row.failure_reason}. The goods are still out until this is returned to the bakery.`}
+        />
+      )}
+
+      {actions.length > 0 && (
+        <View className="mt-4 gap-2.5">
+          {actions.map((a, i) => (
+            <Button
+              key={a.to}
+              label={a.label}
+              tone={i === 0 ? 'primary' : a.to === 'failed' ? 'danger' : 'secondary'}
+              onPress={() => setAction(a)}
+              block
+            />
+          ))}
+        </View>
+      )}
+
+      <GroupLabel>Details</GroupLabel>
+      <Card className="gap-1 px-4 py-2">
+        <Line label="Driver" value={driverName} />
+        <Line label="Contact" value={row.contact_phone ?? '—'} />
+        <Line label="Scheduled" value={deliveryWhen(row.scheduled_at) ?? '—'} />
+        <Line label="Left the bakery" value={deliveryWhen(row.dispatched_at) ?? '—'} />
+        <Line label="Delivered" value={deliveryWhen(row.delivered_at) ?? '—'} />
+      </Card>
+
+      <GroupLabel>Proof of delivery</GroupLabel>
+      {isDeliveryVerified(row.status) ? (
+        <Card className="gap-1 px-4 py-2">
+          <Line label="Received by" value={row.recipient_name ?? '—'} />
+          <View className="flex-row items-center gap-2 py-2">
+            <Icon name="checkCircle" size={15} color="success" />
+            <Text variant="caption" className="flex-1">Delivered, so its order can now be completed.</Text>
+          </View>
+        </Card>
+      ) : (
+        <Text variant="meta">Nothing recorded yet. An order cannot be completed until its delivery is delivered.</Text>
+      )}
+
+      {ticket !== null && (
+        <>
+          <GroupLabel>Order</GroupLabel>
+          <List>
+            <ListRow
+              leading={<Icon name="receipt" size={18} color="cocoa" />}
+              title={ticket.ticket_number}
+              sub={customerName}
+              onPress={() => router.push(`/order/${ticket.id}`)}
+            />
+          </List>
+        </>
+      )}
+
+      <DeliveryActionSheet delivery={row} action={action} onClose={() => setAction(null)} />
+    </ScreenScroll>
+  );
 }

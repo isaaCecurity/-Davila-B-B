@@ -74,6 +74,12 @@ import {
   listMyOrganizations,
   listProductCategories,
   listProductStockLevels,
+  listOrganizationInvites,
+  listStaffRoles,
+  listAuditEvents,
+  createAndSendInvite,
+  acceptOrganizationInvite,
+  listStockMovements,
   listProductVariants,
   listProducts,
   listCashSessions,
@@ -94,7 +100,11 @@ import {
   transitionDelivery,
   updateDeliveryDetails,
   verifyTripLoading,
+  type AcceptInviteResult,
   type AdjustStockInput,
+  type CreateInviteInput,
+  type CreateInviteResult,
+  type SendInviteEmailResult,
   type AdjustStockResult,
   type BakeflowClient,
   type CompleteDriverTripInput,
@@ -118,6 +128,7 @@ import {
   type RecordDriverTripPaymentResult,
   type ReturnDriverTripInput,
   type StartDriverTripInput,
+  type StockMovementFilters,
   type TicketFilters,
   type UpdateDeliveryDetailsInput,
   type VerifyTripLoadingInput,
@@ -138,6 +149,10 @@ import type {
   ProductVariant,
   ProductionBatch,
   ProductionBatchWithIngredients,
+  OrganizationInvite,
+  StaffRole,
+  AuditEvent,
+  StockMovement,
   CashSession,
   DailyRevenueSummary,
   Expense,
@@ -206,6 +221,9 @@ export const queryKeys = {
   ): unknown[] => orgScoped(tenantId, 'ingredient-stock-levels', warehouseId, options ?? {}),
   productStockLevels: (tenantId: string, warehouseId: string, options?: PageOptions): unknown[] =>
     orgScoped(tenantId, 'product-stock-levels', warehouseId, options ?? {}),
+  /** The ledger. Prefix `stock-movements` is what an adjustment invalidates. */
+  stockMovements: (tenantId: string, filters?: StockMovementFilters): unknown[] =>
+    orgScoped(tenantId, 'stock-movements', filters ?? {}),
 
   /* P9.5 — production. */
   productionBatches: (
@@ -235,6 +253,9 @@ export const queryKeys = {
     orgScoped(tenantId, 'tickets-by-id', [...new Set(ticketIds)].sort().join(',')),
   /** Not paged and not filtered by anything but role — see `queries/staff.ts`. */
   drivers: (tenantId: string): unknown[] => orgScoped(tenantId, 'drivers'),
+  staffRoles: (tenantId: string): unknown[] => orgScoped(tenantId, 'staff-roles'),
+  invites: (tenantId: string): unknown[] => orgScoped(tenantId, 'invites'),
+  auditEvents: (tenantId: string): unknown[] => orgScoped(tenantId, 'audit-events'),
 
   /* ADR-001 — driver trips. */
   driverTrips: (
@@ -469,6 +490,28 @@ export function useProductStockLevels(
     queryKey: queryKeys.productStockLevels(tenantId ?? 'none', warehouseId ?? 'none', options),
     queryFn: () => listProductStockLevels(client, warehouseId ?? '', options),
     enabled: tenantId !== null && warehouseId !== null,
+  });
+}
+
+/**
+ * The immutable stock ledger as keyset pages, newest first.
+ *
+ * Read-only by construction: `authenticated` holds SELECT only on `stock_movements`, and
+ * every change arrives through a domain RPC (`adjust_stock`, sales, production).
+ */
+export function useStockMovementPages(
+  client: BakeflowClient,
+  tenantId: string | null,
+  filters: StockMovementFilters,
+  options: { enabled?: boolean; limit?: number } = {},
+): UseInfiniteQueryResult<InfiniteData<Page<StockMovement>, string | undefined>, Error> {
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.stockMovements(tenantId ?? 'none', filters), 'pages', options.limit ?? null],
+    queryFn: ({ pageParam }) =>
+      listStockMovements(client, filters, { after: pageParam, ...(options.limit === undefined ? {} : { limit: options.limit }) }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: tenantId !== null && (options.enabled ?? true),
   });
 }
 
@@ -841,6 +884,8 @@ function invalidateStockLevels(
 ): void {
   const listName = itemType === 'ingredient' ? 'ingredient-stock-levels' : 'product-stock-levels';
   void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, listName, warehouseId) });
+  // Every adjustment appends a ledger row, so any movement list is now stale too.
+  void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, 'stock-movements') });
 }
 
 /**
@@ -1537,5 +1582,80 @@ export function useCreateTicket(
       void queryClient.invalidateQueries({ queryKey: orgScoped(tenant, 'tickets') });
       queryClient.setQueryData(queryKeys.ticket(tenant, row.ticket.id), row);
     },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Staff and invitations (prototype port — `staff`, `invites`, invite link)     */
+/* -------------------------------------------------------------------------- */
+
+/** Every role held in the organization. RLS shows managers the directory, others themselves. */
+export function useStaffRoles(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseQueryResult<StaffRole[], Error> {
+  return useQuery({
+    queryKey: queryKeys.staffRoles(tenantId ?? 'none'),
+    queryFn: () => listStaffRoles(client),
+    enabled: tenantId !== null,
+  });
+}
+
+/** The organization's invitations (owner/admin; RLS returns none to anyone else). */
+export function useOrganizationInvites(
+  client: BakeflowClient,
+  tenantId: string | null,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<OrganizationInvite[], Error> {
+  return useQuery({
+    queryKey: queryKeys.invites(tenantId ?? 'none'),
+    queryFn: () => listOrganizationInvites(client),
+    enabled: tenantId !== null && (options.enabled ?? true),
+  });
+}
+
+/**
+ * Create an invitation and hand it to `send-invite-email`. The result's `delivery.status` says
+ * whether an email actually went out (`simulated` while no email provider is configured —
+ * AD-023), so the screen can offer the link instead of claiming it was sent.
+ */
+export function useCreateAndSendInvite(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] }, Error, CreateInviteInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateInviteInput) => {
+      requireTenant(tenantId);
+      return createAndSendInvite(client, input);
+    },
+    onSettled: () => {
+      // Invalidate on error too: the invite row may exist even if the email step failed.
+      if (tenantId !== null) void queryClient.invalidateQueries({ queryKey: queryKeys.invites(tenantId) });
+    },
+  });
+}
+
+/**
+ * Accept an invitation by its raw token. Not organization-scoped — the caller may have no active
+ * organization yet — so it deliberately skips `requireTenant`. Follow with
+ * `setActiveOrganization` to put the new organization into the token.
+ */
+export function useAcceptInvite(client: BakeflowClient): UseMutationResult<AcceptInviteResult, Error, { rawToken: string }> {
+  return useMutation({
+    mutationFn: ({ rawToken }) => acceptOrganizationInvite(client, rawToken),
+  });
+}
+
+/** The newest audit entries (owner/admin/accountant; RLS returns none to anyone else). */
+export function useAuditEvents(
+  client: BakeflowClient,
+  tenantId: string | null,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<AuditEvent[], Error> {
+  return useQuery({
+    queryKey: queryKeys.auditEvents(tenantId ?? 'none'),
+    queryFn: () => listAuditEvents(client),
+    enabled: tenantId !== null && (options.enabled ?? true),
   });
 }

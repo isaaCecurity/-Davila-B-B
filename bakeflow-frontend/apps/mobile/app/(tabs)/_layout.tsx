@@ -31,6 +31,9 @@ export default function TabsLayout(): React.JSX.Element {
 
   return (
     <Tabs
+      // Some tab routes are also reached from other screens (Finance → Cash sessions). Walking
+      // back through visit history returns there, instead of dropping to the first tab.
+      backBehavior="history"
       tabBar={({ state, navigation }) => {
         const active = state.routes[state.index]?.name ?? 'index';
         return (

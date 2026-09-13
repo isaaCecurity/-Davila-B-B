@@ -436,3 +436,302 @@ zero mutating calls, zero errors. `tsc` ✓ `eslint` ✓.
 **Cross-cutting rules applied:** no client-side money arithmetic; writes to production never
 executed during verification; every transition and create path checked against the live function
 or policy definition first.
+
+
+### Finance — slice 1: Cash sessions + Expenses ✅
+
+**Screens.** `cash` → `app/(tabs)/cash.tsx`, `my-cash` → `app/(tabs)/my-cash.tsx` (both render
+`features/finance/components/CashScreen` with `mine`), `expenses` → `app/expenses/index.tsx`,
+`add-expense` → `app/add-expense.tsx`.
+**Components.** `CashSessionPanel` (open session ledger), `CashSessionSheets` (`OpenSessionSheet`,
+`CloseSessionSheet` — Reanimated `Sheet`), `features/finance/financeDisplay.ts` (`CATEGORY_META`,
+`METHOD_LABEL`, `varianceView`, `when`).
+**Hooks used (existing):** `useCashSessions`, `useOpenCashSession`, `useCloseCashSession`,
+`useExpenses`, `useCreateExpense`. No new API.
+
+**PORT-NOTEs.** Variance is described from the sign of the server's exact figure; the prototype's
+₦5,000 warning threshold and percentage-of-drawer are invented rule + money arithmetic, not ported.
+"Spent today", month total, category flow bar and per-day subtotals are money sums (belong to a
+server report). "My cash" narrows to `opened_by = me` as presentation only — RLS decides. Cash is
+not hidden from supervisors (authorization is the database's call). Receipt photos wait for an
+upload flow. A cash expense requires the branch's open till (same rule the old finance form used).
+
+**Verified** (read-only; zero mutating calls, zero errors): More → Cash sessions sends
+branch-scoped `cash_sessions` and `expenses` reads; "No open till" empty state; open-session sheet
+keeps submit disabled until a valid float and shows the amount hint (never submitted); `/my-cash`
+deep link; `/expenses` empty state + category chips; Add expense — save disabled when empty, bad
+amount hint, cash + no till → warning and disabled, transfer → enabled (not pressed).
+
+### Finance — slice 2: Finance overview + Reports ✅
+
+**Screens.** `finance` → `app/(tabs)/finance.tsx` (replaces the 443-line do-everything form: its
+payment, till and expense forms now live on Order detail, Cash sessions and Add expense), `reports`
+→ `app/reports/index.tsx` (restyled; also covers `supervisor-reports`).
+
+**Finance tab.** Ink hero "Money in today" (`net_collected`), 7-day net revenue `TrendChart` with a
+quiet-week notice, foot stats (net revenue, refunds paid), four drill-in tiles (Revenue → Sales,
+Expenses count today → Expenses, Cash session state + last variance → Cash, Reports), a profit
+callout (revenue and cash only in this version), and the latest four expenses.
+**Reports.** Hero (today's net revenue + week chart), a day switcher over the cached week (no extra
+requests on switch — verified), the daily statement as ledger lines, and a menu of reports that
+exist. Menu varies by persona (presentation only).
+
+**Navigation fix.** `(tabs)/_layout.tsx` now uses `backBehavior="history"`: tab routes pushed from
+another screen (Finance → `/cash`) previously returned to Home on back. Verified: back now lands
+on `/finance`.
+
+**PORT-NOTEs.** Net profit, margin, cost of goods, gross-margin tile and the "how revenue divides"
+bar are out of MVP scope by decision (AD-022, which resolved BLOCKER-018 by descope), and the
+prototype's fixed 40%/21.2% ratios are invented. Period switch (7/30/90 days), month hero, expense donut, P&L, Product performance, Branch
+performance, PDF/spreadsheet export and scheduled e-mail need endpoints that do not exist — none is
+shown as if available. `get_daily_revenue_summary` refuses supervisors server-side; shown as
+returned.
+
+**Verified** (read-only; zero mutating calls, zero errors): Finance tab issues 7 summary RPCs (one
+per day, shared cache with Sales), 1 canvas, tiles and callout render, latest-expenses empty state;
+Cash tile → `/cash` → back → `/finance`; Reports statement for 2026-09-13 Africa/Lagos, switching
+to Sat shows 2026-09-12 with 0 new RPCs; menu Sales/Expenses/Cash sessions for owner.
+`tsc` ✓ `eslint` ✓.
+
+---
+
+### Finance domain — report
+
+| Prototype screen | App route | Status |
+|---|---|---|
+| finance | `app/(tabs)/finance.tsx` | ✅ verified (profit out of MVP scope — AD-022) |
+| cash | `app/(tabs)/cash.tsx` | ✅ verified (open/close not executed) |
+| my-cash | `app/(tabs)/my-cash.tsx` | ✅ verified |
+| expenses | `app/expenses/index.tsx` | ✅ verified |
+| add-expense | `app/add-expense.tsx` | ✅ verified to validation (save not executed) |
+| reports / supervisor-reports | `app/reports/index.tsx` | ✅ verified |
+| pnl | — | ⏸ out of MVP scope (AD-022) |
+| report-products / report-branches | — | ⛔ need report endpoints |
+
+**API created:** none. **Hooks created:** none (feature hooks reused: `useBranchOptions`,
+`useRevenueWeek`). **Files changed:** `app/(tabs)/finance.tsx`, `app/(tabs)/cash.tsx`,
+`app/(tabs)/my-cash.tsx`, `app/(tabs)/_layout.tsx`, `app/expenses/index.tsx`, `app/add-expense.tsx`,
+`app/reports/index.tsx`, `features/finance/*`.
+
+
+---
+
+### Inventory domain — Stock ✅
+
+**Screens.** `inventory-monitor` (+ the product screen's "Adjust") → `app/inventory/index.tsx` and
+`app/inventory/[warehouseId].tsx`, both rendering `features/inventory/components/StockScreen`.
+**Components.** `AdjustStockSheet` (Reanimated `Sheet`; absolute target, reason chips, note),
+`features/inventory/stockDisplay.ts` (`REASON_LABEL`, `ADJUST_REASONS`, `signedDelta`,
+`levelView`), `features/catalog/hooks/useVariantLabels.ts` (variant id → name; extracted from
+`useOrderRows`, which now uses it). Removed: `components/AdjustStockAction.tsx` (replaced).
+**Hooks created (`packages/hooks`).** `useStockMovementPages` (keyset pages of the ledger) and
+`queryKeys.stockMovements`; `useAdjustStock` now also invalidates the movement feed.
+
+**Behaviour.** Stockroom chips (default first) · search by product or SKU · sections Below zero /
+Out of stock / On the shelf · tap a row → adjust sheet pre-filled with the current count (a target,
+never a delta), validated by `nonNegativeQuantitySchema`, server errors in plain words, "No change"
+toast when the target equals the level · recent movements with signed deltas and reason labels,
+expandable and pageable.
+
+**PORT-NOTEs.** "Running low" needs a reorder level product variants do not have (AD-022) — only out
+and below-zero are flagged. Levels load one page of 200 per stockroom, with a visible notice beyond.
+Items never moved have no level row. Ingredient stock deactivated for MVP (AD-022).
+
+**Verified** (read-only; zero mutating calls, zero errors): More → Stock shows "Smoke Store A · 32
+products", one level read and one movement read, 8 movement rows, no unnamed rows; search no-match
+notice; adjust sheet pre-filled "42", 5-decimal and negative input show the hint and disable save,
+Waste shows its hint, Escape closes (never saved). **Regression:** Orders → Pending still shows 25
+named item lines, 0 generic. `tsc` ✓ `eslint` ✓ `npm test` 39/39 ✓.
+
+### Production domain — order queue ✅ (batches out of MVP scope)
+
+**Finding.** AD-022 (2026-09-01) deactivated production batches and ingredient tracking for MVP:
+client grants on `production_batches`, `recipes`, `ingredients` are revoked and the batch RPCs are
+not executable. The prototype's Record production / batch cards / production records / entry
+corrections therefore have no backend in this version. What a baker *can* do — verified in
+`IMPLEMENTATION_LOG.md` (update_ticket role-gate fix, 12 live assertions) — is move orders
+`scheduled → in_production → ready`.
+
+**Screens.** `production` + `production-monitor` → `app/(tabs)/production.tsx` (the kitchen queue:
+Preparing / To start / Confirmed · not yet scheduled / Ready, with To start · Preparing · Ready
+counts, a Stock link for waste); `app/production/[batchId].tsx` → a "not tracked in this version"
+notice with a way to the queue. More → Operations gains Production for owner/manager.
+**Components.** `features/production/components/ProductionCard.tsx` (Reanimated `FadeIn` entering +
+`LinearTransition` layout, both `ReduceMotion.System`).
+**Optimistic updates.** A move shows the card in its next section immediately with a busy button;
+a refusal restores it and raises an error toast. No new API or hooks (`useOrderRows`,
+`useAdvanceTicket`).
+
+**Also.** `navigation/useOffBarBack.ts` — the prototype's `back: !ROLE_TABS[role].includes(tab)`:
+tab screens reached from More (Production, Finance, Sales, My sales, Cash, My cash) get a back
+arrow only when the tab is not on the persona's bar.
+
+**PORT-NOTEs.** Batches/recipes/record-production quantity: AD-022. Schedule is hidden from bakers
+because the trigger refuses it for them (advisory). The old batch screen and
+`ProductionBatchActions`/`BatchStatusBadge` components remain in the repo for v2, unreferenced.
+
+**Verified** (read-only): queue reads carry `in_production` status filters; zero reads of
+`production_batches`/`recipes`; empty state for this branch (no orders currently in the queue — the
+card and move path are typechecked but have no live row to render); old batch deep link shows the
+notice; zero mutating calls, zero errors.
+
+### Delivery domain ✅
+
+**Screens.** `delivery-monitor` → `app/delivery/index.tsx` (stat tiles Need a driver / On the road /
+Problems, Needs a driver section folded at 6, Drivers with stop/problem counts and an active
+badge); `driver-detail` → `app/delivery/driver/[driverId].tsx` (new; grouped Active / Pending /
+Problems / Completed / Returned, failure reasons shown, Call); delivery detail →
+`app/delivery/[deliveryId].tsx` (ink hero with address, customer and Call; next-step buttons;
+details; proof; link to the order).
+**Components.** `features/delivery/deliveryDisplay.ts` (`DELIVERY_META`, `NEXT_ACTIONS` transcribed
+from `guard_delivery_transition()`, `DRIVER_GROUPS`, `describeDeliveryError`),
+`features/delivery/components/DeliveryActionSheet.tsx` (assign-driver radio list, dispatch confirm,
+recipient name, failure reason, return confirm — each required field gates the button),
+`features/delivery/hooks/useDeliveryBoard.ts` (open + today's deliveries, tickets, customers and
+drivers joined in four batched reads). Removed (replaced): `components/DeliveryActions.tsx`,
+`DriverPicker.tsx`, `DeliveryStatusBadge.tsx`. No new API or hooks.
+
+**PORT-NOTEs.** Proof of delivery is a recipient name only (photo/signature needs upload + camera).
+BLOCKER-016: a return restores no stock live — the return step says only that the delivery closes.
+Stop items and amounts are one tap away on the order; unassigned stops get their own section (the
+prototype lists drivers only).
+
+**Verified** (read-only; zero mutating calls, zero errors): board reads use the open-status filter;
+36 unassigned deliveries listed, no drivers in this tenant (driver detail typechecked, no live
+driver to open); opening a delivery shows 4 detail lines and "Assign a driver"; its sheet shows the
+"No drivers yet" callout with submit disabled; Escape closes. `tsc` ✓ `eslint` ✓.
+
+
+### Driver-trips domain ✅
+
+**Screens.**
+| Prototype | App route |
+|---|---|
+| route (driver tab) | `app/(tabs)/route.tsx` — trip card, ink hero with animated progress track (Reanimated `withTiming`, `ReduceMotion.System`), stop cards with Call / Directions / Start / Delivered / Report a problem / Return, FAB New ticket |
+| tickets (driver tab) | `app/(tabs)/tickets.tsx` — `created_by` scoped; Today / This trip / Not finished / Completed; search; FAB |
+| trip | `app/trip.tsx` — no trip → pick vehicle + Start · created → waiting for loading · ready_to_depart → loaded stock + Confirm departure · in_transit → on-the-road hero, Create-ticket CTA, stock with you, Count what's left → Submit return · returning/reconciled → waiting states. `app/driver/home.tsx` now redirects here. |
+| trip-verify + trip-reconcile | `app/trips/index.tsx` (Driver trips hub: Needs you / On the road / Completed today) and `app/trips/[tripId].tsx` (verify load from the default stockroom · reconcile with inventory ledger, sales and counted cash · settle into an open till · review) |
+| new-ticket / created (driver) | `app/driver/sell.tsx` — products from the vehicle's stock with steppers → check → server total + payment (method chips, amount pre-filled with the server's exact total, "Customer pays later") → confirm panel (Reanimated `ZoomIn` spring) |
+
+**Components / helpers.** `features/driverTrip/quantity.ts` (exact BigInt scale-4 quantity arithmetic —
+`toUnits`, `fromUnits`, `sumQuantities`, `stepQuantity`, `isPositiveQuantity`; 18 unit tests),
+`tripDisplay.ts` (`TRIP_STAGE`, `describeTripError`, `tripTime`), `components/CountStepper.tsx`,
+`hooks/useWarehouseStock.ts`. `useDeliveryBoard` gained `{ branchId, driverId }` and item lines.
+`DeliveryActionSheet` gained the prototype's failure-reason presets (+ "Other" with a note). More →
+Driver trips (non-drivers), My trip → `/trip` (drivers). No new API or hooks.
+
+**Data-integrity fix (`packages/types`).** `STOCK_REFERENCE_TYPES` lacked `'driver_trip'`, which
+the live CHECK allows (read 2026-09-13) and `verify_trip_loading()`/`return_driver_trip()` write.
+The first verified load would have made every ledger read containing those rows fail schema
+parsing. Added; `npm test` ✓.
+
+**Retry safety.** If `completeDriverFieldSale` fails after `createRoadsideTicket` succeeded, the
+sell screen keeps the draft id and "Try again" completes that ticket instead of creating another.
+
+**PORT-NOTEs.** Loading is one-party live (ADR-001 §23 item 5): the verifier records the load on
+their device, so the driver's load-entry step is not ported. "Held by you" cash, per-method totals,
+change and customer-credit maths are money sums — the server's `expected_cash`, `cash_variance`
+and ticket totals replace them. Live reconciliation needs a note only for a *cash* variance and a
+completed trip cannot be reopened (the prototype's stock-variance note and "Flag for correction"
+have no backend). Roadside tickets have no customer by contract. Directions open maps.
+
+**Verified** (read-only; zero mutating calls, zero errors): `/trips` reads trips (empty today);
+`/trip` as owner shows the driver-view notice, vehicle chips and a disabled Start; `/route` sends
+`driver_id=eq.` and shows the empty route, trip card and FAB; `/tickets` sends `created_by=eq.`,
+"Not finished" lists 50 drafts; `/driver/sell` shows "No trip on the road"; `/driver/home` lands on
+`/trip`. Trip mutations (start, verify, depart, return, reconcile, complete, sale, payment) are
+typechecked against their live contracts and **not executed** against production.
+`tsc` ✓ `eslint` ✓ `npm test` ✓ (57).
+
+
+### Invitations & staff domain ✅
+
+**Screens.** `staff` → `app/(tabs)/staff.tsx` (supervisor tab; More → Staff & activity for
+owner/manager): searchable team grouped per person with role · branch lines, suspended badge, person
+sheet (roles held, since, Call), Invite (+) and an Invites row for owner/admin. `invites` →
+`app/invites.tsx` (status badges, detail sheet, "Send a new invite"). **New:** `app/invite.tsx` — the
+invitee's side of `bakeflow://invite?token=…` (the link `send-invite-email` builds): accept →
+`setActiveOrganization` → cache eviction → welcome panel (Reanimated `ZoomIn`).
+**Components.** `features/staff/components/InviteStaffSheet.tsx` (email validated by
+`inviteEmailSchema`, canonical role chips with hints, branch chips for branch roles; when delivery is
+`simulated` — AD-023, no email provider — it says so and offers the link via the native share sheet
+instead of claiming an email went out), `features/staff/staffDisplay.ts` (`INVITABLE_ROLES`,
+`ORG_WIDE_ROLES`, `inviteView` — a pending invite past `expires_at` reads Expired; 3 unit tests).
+**Navigation gate.** `app/_layout.tsx` lets a signed-in user stay on `/invite` with or without an
+organization, and holds a token opened while signed out in memory
+(`stores/auth/pendingInvite.store.ts`, never persisted — it is a bearer secret) through sign-in.
+
+**API created (`packages/api`).** `queries/staff.ts`: `listStaffRoles` (user_roles ⋈ profiles ⋈
+roles), `listOrganizationInvites` (token_hash never projected); `mutations/invitations.ts`:
+`acceptOrganizationInvite` (token format checked, only string fields read from the envelope).
+**Types/validation.** `StaffRole`, `OrganizationInvite`, `PROFILE_STATUSES`, `INVITE_STATUSES`;
+`staffRoleSchema`, `organizationInviteSchema`, `inviteEmailSchema`.
+**Hooks created.** `useStaffRoles`, `useOrganizationInvites`, `useCreateAndSendInvite` (invalidates
+on settle — the row can exist even if email fails), `useAcceptInvite`; `queryKeys.staffRoles`,
+`queryKeys.invites`. Every contract read live 2026-09-13 (`create_organization_invite` owner/admin
+only; `organization_invites_select` owner/admin; `user_roles_select`/`profiles_select`
+owner/admin/manager or self; no UPDATE grant on invites).
+
+**Blocker raised.** BLOCKER-031 — `accept_organization_invite()` does not bind acceptance to the
+invited email, and its expiry update is rolled back by the following RAISE. Recorded with a
+notification; nothing changed server-side.
+
+**PORT-NOTEs.** On-shift status, per-person sales/orders, activity timeline and sales-by-staff have
+no read endpoint (and involve money sums). Copy link / Resend / Revoke per invite have no backend
+(only the token hash is stored; no UPDATE grant). Invite is shown to owner/admin only (the RPC's
+gate; advisory). Branch names come from stockrooms, as elsewhere.
+
+**Verified** (read-only; zero mutating calls, zero errors): Staff reads `user_roles` and
+`organization_invites` without selecting `token_hash`; one person (the smoke owner) listed; person
+sheet opens; invite sheet — send disabled when empty and for a bad email, enabled for a valid one
+(never pressed), Admin hides branch chips; `/invites` empty state; `/invite` without a token shows
+the no-invite state, with a token stays on the accept screen (never accepted). `tsc` ✓ `eslint` ✓
+`npm test` 60/60 ✓.
+
+
+### Home & shell screens ✅
+
+**Screens.**
+| Prototype | App route |
+|---|---|
+| home (role-adaptive) | `app/(tabs)/index.tsx` → `features/home/OwnerHome`, `ManagerHome`, `SupervisorHome`, `CrewHomes` (`CashierHome`, `BakerHome`, `DriverHome`, `AdminHome`) |
+| notifications | `app/(tabs)/alerts.tsx` — a live to-do feed derived from readable rows |
+| operations (supervisor) | `app/(tabs)/operations.tsx` |
+| settings | `app/settings.tsx` (Appearance sheet on the persisted theme store) |
+| account / profile | `app/account.tsx` |
+| audit | `app/audit.tsx` |
+| org | `app/select-organization.tsx` (restyled as the prototype's Bakeries screen) |
+| search | `app/search.tsx` |
+
+**Components/hooks.** `features/home/components/HomeParts.tsx` (`HomeScaffold` greeting header with
+Search and Notifications; `StatTile` with the prototype's staggered reveal — Reanimated
+`FadeInDown.duration(420).delay(60 + i·55)`, `ReduceMotion.System`; `TileGrid`; `QuickActions`;
+`SectionHead`), `features/home/hooks/useHomeData.ts` (`useTicketCount` — row counts only —
+and `useOpenTill`). Removed: `components/PortPending.tsx` (no placeholder screens remain).
+**API/hooks created.** `listAuditEvents` + `useAuditEvents` + `queryKeys.auditEvents`,
+`AuditEvent` type and `auditEventSchema` (`before`/`after` snapshots never selected).
+
+**Navigation fix.** `app/_layout.tsx` no longer bounces a signed-in user with an organization off
+`/select-organization`; the picker is also the switcher (More → Organisation, Settings → Switch
+bakery were dead ends) and returns home itself after a choice.
+
+**PORT-NOTEs.** Owner: profit flow and margin (AD-022), expenses/net/deltas (money arithmetic) and
+insights (no source) not ported; hero is server net revenue + collected, refunds, till state.
+Manager: insights and the daily financial audit have no backend. Supervisor: sales total is a sum
+and the revenue RPC refuses supervisors — hero counts orders. Cashier: one-tap sale waits on
+BLOCKER-030. Baker: production records are AD-022 — hero counts orders to make. Admin: branches,
+records archiving, audit detail and system settings belong to the Web workspace. Alerts: no
+notifications table/push, so no history or read state. Settings: notification switches, haptics,
+language, pricing tiers, billing, sessions, change password have no backend and are omitted.
+Account: edit name / photo upload not built. Search: no full-text endpoint — newest 200 orders,
+first 200 products/customers, exact phone lookup; the screen says what it searched.
+`my-activity` is covered by My sales / Tickets; `sales-monitor` needs per-staff aggregates;
+`states`/`ds` are prototype-only; `admin-*` are Web workspace.
+
+**Verified** (read-only; zero mutating calls; zero errors except one transient 401 during a sign-in
+that did not reproduce): owner Home — 7 summary RPCs, 1 chart, tiles Orders 0 / Needs attention 80 /
+Cash session Closed / Stock, 3 quick actions, tile → `/orders`, bell → `/alerts`; Settings groups by
+role, Appearance → Dark repaints the whole screen (screenshot), back to System; Account shows
+Owner · Whole bakery; Audit lists 100 events without selecting `before`/`after`, own actions as
+"You"; Alerts derives "No till is open"; Operations 7 tiles; Bakeries reachable from More with the
+current-bakery card and Close back to More. `tsc` ✓ `eslint` ✓ `npm test` 60/60 ✓.

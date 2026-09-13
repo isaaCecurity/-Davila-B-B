@@ -164,3 +164,58 @@ export async function createAndSendInvite(
     delivery: emailResult.delivery,
   };
 }
+
+export interface AcceptInviteResult {
+  organizationId: Uuid;
+  organizationName: string;
+  roleName: string;
+}
+
+/**
+ * Accept an invitation with the raw token from its link — `accept_organization_invite()`.
+ *
+ * The function adds the role (and branch assignment), marks the invite accepted, and adopts the
+ * organization as the active one only when the user had none. It returns `refresh_session:
+ * true`: the caller must then switch to the organization and refresh the token
+ * (`setActiveOrganization` in `@bakeflow/auth`) before any tenant read will see it.
+ *
+ * Only the organization id, its name and the role name are read from the envelope — strings
+ * that survive `to_jsonb` intact.
+ *
+ * @throws {BakeflowApiError} `invalid_transition` for an unknown, used, revoked or expired
+ *   token; `insufficient_role` when not signed in.
+ */
+export async function acceptOrganizationInvite(
+  client: BakeflowClient,
+  rawToken: string
+): Promise<AcceptInviteResult> {
+  const token = rawToken.trim();
+  if (!/^[0-9a-f]{64}$/.test(token)) {
+    throw new BakeflowApiError({
+      code: 'invalid_request',
+      message: 'acceptOrganizationInvite: the invite token is not in the expected format',
+    });
+  }
+  try {
+    const { data, error } = await client.rpc('accept_organization_invite', { p_raw_token: token });
+    if (error) throw normalizePostgrestError(error);
+
+    const payload = (data ?? {}) as Record<string, unknown>;
+    const org = (payload.organization ?? {}) as Record<string, unknown>;
+    const role = (payload.role ?? {}) as Record<string, unknown>;
+    if (typeof org.id !== 'string') {
+      throw new BakeflowApiError({
+        code: 'response_shape_invalid',
+        message: 'acceptOrganizationInvite: the response carried no organization',
+      });
+    }
+    return {
+      organizationId: org.id as Uuid,
+      organizationName: typeof org.name === 'string' ? org.name : 'your bakery',
+      roleName: typeof role.name === 'string' ? role.name : 'team member',
+    };
+  } catch (err) {
+    if (err instanceof BakeflowApiError) throw err;
+    throw normalizeThrown(err);
+  }
+}

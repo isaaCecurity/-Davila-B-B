@@ -49,3 +49,66 @@ export interface Driver {
   full_name: string;
   phone: string | null;
 }
+
+/** `profiles_status_check`, read live. */
+export const PROFILE_STATUSES = ['active', 'suspended'] as const;
+export type ProfileStatus = (typeof PROFILE_STATUSES)[number];
+
+/**
+ * One role a person holds in the active organization — a `user_roles` row joined to its
+ * profile and role. A person with two roles appears twice; screens group by `profile_id`.
+ *
+ * Readable by the person themself and by owner/admin/branch_manager (`user_roles_select`,
+ * `profiles_select`, read live 2026-09-13).
+ */
+export interface StaffRole {
+  user_role_id: Uuid;
+  profile_id: Uuid;
+  full_name: string;
+  phone: string | null;
+  status: ProfileStatus;
+  role_key: string;
+  role_name: string;
+  role_rank: number;
+  /** Null for an organization-wide role (owner, admin). */
+  branch_id: Uuid | null;
+  created_at: string;
+}
+
+/** `organization_invites_status_check`, read live 2026-09-13. */
+export const INVITE_STATUSES = ['pending', 'accepted', 'revoked', 'expired'] as const;
+export type InviteStatus = (typeof INVITE_STATUSES)[number];
+
+/**
+ * An invitation to the active organization. `token_hash` is never selected.
+ *
+ * Readable by owner/admin only (`organization_invites_select`). No client grant can update a
+ * row — there is no revoke or resend path; a new invite is a new row.
+ */
+export interface OrganizationInvite {
+  id: Uuid;
+  email: string;
+  status: InviteStatus;
+  role_key: string;
+  role_name: string;
+  branch_id: Uuid | null;
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
+/**
+ * One `audit_log` entry — who did what to which record, and when. `before`/`after` snapshots
+ * are not carried: they can hold any column of any table, including money rendered as JSON
+ * numbers, so the read model keeps only the identifying fields.
+ *
+ * Readable by owner/admin/accountant (`audit_log_select`, read live 2026-09-13).
+ */
+export interface AuditEvent {
+  id: Uuid;
+  actor_id: Uuid | null;
+  entity_type: string;
+  entity_id: Uuid | null;
+  action: string;
+  occurred_at: string;
+}

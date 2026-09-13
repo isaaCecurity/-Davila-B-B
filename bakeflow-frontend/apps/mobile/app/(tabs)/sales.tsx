@@ -21,6 +21,7 @@ import { OrderCard } from '../../features/tickets/components/OrderCard';
 import { useOrderRows } from '../../features/tickets/hooks/useOrderRows';
 import { TODAY_FILTER } from '../../features/tickets/ticketDisplay';
 import { useSessionStore } from '../../stores/session';
+import { useOffBarBack } from '../../navigation/useOffBarBack';
 
 function Stat({ value, label }: { value: string; label: string }): React.JSX.Element {
   return (
@@ -45,6 +46,7 @@ function Stat({ value, label }: { value: string; label: string }): React.JSX.Ele
  */
 export default function SalesScreen(): React.JSX.Element {
   const router = useRouter();
+  const onBack = useOffBarBack('sales');
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const branches = useBranchOptions();
   const [branchIndex, setBranchIndex] = useState(0);
@@ -70,6 +72,7 @@ export default function SalesScreen(): React.JSX.Element {
   return (
     <ScreenScroll
       title="Sales"
+      onBack={onBack}
       sub={branch !== null ? `${branch.label} · today` : 'Today'}
       refreshing={week.isRefetching || orders.isRefetching}
       onRefresh={() => {

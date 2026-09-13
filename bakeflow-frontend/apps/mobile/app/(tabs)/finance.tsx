@@ -29,6 +29,7 @@ import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
 import { CATEGORY_META, METHOD_LABEL, varianceView, when } from '../../features/finance/financeDisplay';
 import { useRevenueWeek } from '../../features/reports/hooks/useRevenueWeek';
 import { useSessionStore } from '../../stores/session';
+import { useOffBarBack } from '../../navigation/useOffBarBack';
 
 const clock = new Intl.DateTimeFormat('en-NG', { hour: 'numeric', minute: '2-digit' });
 
@@ -98,15 +99,16 @@ function DrillTile({
  *
  * PORT-NOTE: the prototype's hero is net profit with a margin, a "how revenue divides" flow bar
  * (cost of goods fixed at 40% of revenue), a gross-margin tile, an expense donut and period
- * totals. Profit and margin need cost of goods, which is blocked on ingredient costs
- * (BLOCKER-018: `stock_movements.unit_cost` is empty live); the fixed ratios are invented; and
- * period and category totals are sums over money that belong to a server report. So the hero is
- * money collected today, the chart is the server's net revenue by day, and expense composition
- * becomes the latest expenses themselves. The 7/30/90-day switch waits for a ranged report —
- * the daily summary is the only aggregate endpoint.
+ * totals. Profit, cost of goods and margin are out of MVP scope by decision (AD-022, which
+ * resolved BLOCKER-018 by descope: revenue and cash only for v1); the fixed ratios are invented;
+ * and period and category totals are sums over money that belong to a server report. So the
+ * hero is money collected today, the chart is the server's net revenue by day, and expense
+ * composition becomes the latest expenses themselves. The 7/30/90-day switch waits for a ranged
+ * report — the daily summary is the only aggregate endpoint.
  */
 export default function FinanceScreen(): React.JSX.Element {
   const router = useRouter();
+  const onBack = useOffBarBack('finance');
   const client = getSupabaseClient();
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const branches = useBranchOptions();
@@ -145,10 +147,14 @@ export default function FinanceScreen(): React.JSX.Element {
     label: d.label,
   }));
   const lastVariance = varianceView(cash.lastClosed?.variance_amount ?? null);
+  // Judged on the exact strings, not the plot numbers.
+  const quietWeek =
+    !week.isLoading && week.days.every((d) => d.summary !== undefined && isZeroDecimalString(d.summary.net_revenue));
 
   return (
     <ScreenScroll
       title="Finance"
+      onBack={onBack}
       sub={branch?.label ?? 'All branches'}
       right={<IconButton icon="doc" label="Reports" tinted onPress={() => router.push('/reports')} />}
       refreshing={week.isRefetching || sessions.isRefetching || expenses.isRefetching}
@@ -202,6 +208,11 @@ export default function FinanceScreen(): React.JSX.Element {
                   onDark
                   accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
                 />
+                {quietWeek && (
+                  <View pointerEvents="none" className="absolute left-0 right-0 top-8 items-center">
+                    <Text className="text-foot text-white/45">No revenue recorded in the last 7 days</Text>
+                  </View>
+                )}
               </View>
 
               {today !== undefined && (
@@ -233,7 +244,7 @@ export default function FinanceScreen(): React.JSX.Element {
               icon="cash"
               label="Cash session"
               value={sessions.isLoading ? '—' : cash.open !== null ? 'Open' : 'Closed'}
-              sub={cash.open !== null ? `since ${clock.format(new Date(cash.open.opened_at))}` : undefined}
+              sub={cash.open !== null ? `since ${clock.format(new Date(cash.open.opened_at))}` : 'No till open'}
               badge={
                 cash.open === null && lastVariance !== null
                   ? {
@@ -253,8 +264,8 @@ export default function FinanceScreen(): React.JSX.Element {
           <Callout
             className="mt-5"
             tone="info"
-            title="Profit and margin are on the way"
-            detail="They need what your ingredients cost. Once purchase costs are recorded, net profit, cost of goods and margin appear here."
+            title="Revenue and cash for now"
+            detail="This version reports what came in and what was spent. Profit, cost of goods and margin arrive in a later version."
           />
 
           <View className="mt-8">

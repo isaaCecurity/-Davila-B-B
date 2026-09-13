@@ -85,7 +85,7 @@ export type OrderFilterKey = 'today' | 'pending' | 'ready' | 'upcoming' | 'compl
  * the reasonable reading of "today's orders", but a bakery operating across timezones would
  * see the boundary differ.
  */
-function startOfToday(): string {
+export function startOfToday(): string {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.toISOString();

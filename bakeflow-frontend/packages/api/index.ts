@@ -186,7 +186,7 @@ export {
 // P9.6 — driver picker read path. `listDrivers` answers "who in this tenant holds the
 // `driver` role", which `transition_delivery`'s `assigned` hop has always needed and never
 // had. See `queries/staff.ts` for the RLS/RPC provenance.
-export { listDrivers } from './queries/staff';
+export { listAuditEvents, listDrivers, listOrganizationInvites, listStaffRoles } from './queries/staff';
 
 // P8.1 — organization membership reads. The one read path that works with a null tenant
 // claim, because `organizations_select` keys off auth.uid() rather than
@@ -197,9 +197,11 @@ export { listMyOrganizationRoles, listMyOrganizations } from './queries/organiza
 
 // P6.2 — invitation creation and delivery.
 export {
+  acceptOrganizationInvite,
   createAndSendInvite,
   createOrganizationInvite,
   sendInviteEmail,
+  type AcceptInviteResult,
   type CreateInviteInput,
   type CreateInviteResult,
   type SendInviteEmailInput,

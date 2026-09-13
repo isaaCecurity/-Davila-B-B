@@ -114,7 +114,8 @@ export {
 
 export type { OrganizationMembership, OrganizationRole } from './organization';
 
-export type { Driver } from './staff';
+export type { AuditEvent, Driver, InviteStatus, OrganizationInvite, ProfileStatus, StaffRole } from './staff';
+export { INVITE_STATUSES, PROFILE_STATUSES } from './staff';
 
 export type { DriverTrip, DriverTripPhase, DriverTripStatus } from './driver-trip';
 export {

@@ -57,7 +57,7 @@ function Line({
  * day costs no request.
  *
  * PORT-NOTE: the prototype's "This month so far" hero, monthly delta and net-profit line need a
- * ranged report and cost of goods (BLOCKER-018); the Profit & Loss, Product performance and
+ * ranged report, and cost of goods is out of MVP scope (AD-022); the Profit & Loss, Product performance and
  * Branch performance reports have no endpoint yet; PDF/spreadsheet export and scheduled e-mail
  * have no backend. None are shown as if available — the menu lists only screens that exist.
  * Whether a role may read the summary is the RPC's decision (supervisors are refused
@@ -83,6 +83,9 @@ export default function ReportsScreen(): React.JSX.Element {
     value: d.summary === undefined ? 0 : Number(d.summary.net_revenue),
     label: d.label,
   }));
+  // Judged on the exact strings, not the plot numbers.
+  const quietWeek =
+    !week.isLoading && week.days.every((d) => d.summary !== undefined && isZeroDecimalString(d.summary.net_revenue));
   const moneyRoles = persona === 'owner' || persona === 'manager' || persona === 'admin';
 
   return (
@@ -118,7 +121,7 @@ export default function ReportsScreen(): React.JSX.Element {
               <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-3 pt-5">
                 <View className="px-5">
                   <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
-                    Net revenue · last 7 days
+                    Net revenue today
                   </Text>
                   {week.today?.data === undefined ? (
                     <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
@@ -127,7 +130,7 @@ export default function ReportsScreen(): React.JSX.Element {
                       {formatNaira(week.today.data.net_revenue)}
                     </Text>
                   )}
-                  <Text className="mt-1 text-foot text-white/60">today · {week.today?.data?.timezone ?? ' '}</Text>
+                  <Text className="mt-1 text-foot text-white/60">Last 7 days below · {week.today?.data?.timezone ?? ' '}</Text>
                 </View>
                 <View className="mt-3">
                   <TrendChart
@@ -135,6 +138,11 @@ export default function ReportsScreen(): React.JSX.Element {
                     onDark
                     accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
                   />
+                  {quietWeek && (
+                    <View pointerEvents="none" className="absolute left-0 right-0 top-8 items-center">
+                      <Text className="text-foot text-white/45">No revenue recorded in the last 7 days</Text>
+                    </View>
+                  )}
                 </View>
               </Card>
 
@@ -189,7 +197,7 @@ export default function ReportsScreen(): React.JSX.Element {
           </Menu>
 
           <Text variant="meta" className="mt-4">
-            Profit & loss, product and branch performance arrive once ingredient costs and ranged reports are in place.
+            Profit & loss, product and branch performance arrive in a later version.
           </Text>
         </>
       )}

@@ -76,7 +76,7 @@ export const NEGATIVE_STOCK_REASONS = [
 
 /**
  * Live: `CHECK (reference_type = ANY (ARRAY['order','production_batch','purchase',
- * 'delivery','manual']))`.
+ * 'delivery','manual','driver_trip']))` (re-read 2026-09-13).
  *
  * Note `'order'`, not `'ticket'`. This is the same historical wart `CLAUDE.md` records for
  * the `p_order_id` RPC arguments: the canonical entity is **Ticket**, but the stored value
@@ -89,6 +89,10 @@ export const STOCK_REFERENCE_TYPES = [
   'purchase',
   'delivery',
   'manual',
+  // ADR-001 trip custody: `transfer_out`/`transfer_in` rows written by `verify_trip_loading()`
+  // and `return_driver_trip()`. Live CHECK read 2026-09-13; without it the first loaded trip
+  // would make every ledger read that includes those rows fail to parse.
+  'driver_trip',
 ] as const;
 export type StockReferenceType = (typeof STOCK_REFERENCE_TYPES)[number];
 

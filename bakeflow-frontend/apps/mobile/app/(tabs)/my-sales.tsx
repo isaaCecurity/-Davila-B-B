@@ -8,6 +8,7 @@ import { ErrorState, NoOrganizationState } from '../../components/ScreenState';
 import { useOrderRows } from '../../features/tickets/hooks/useOrderRows';
 import { STATUS_META, TODAY_FILTER, ticketTime } from '../../features/tickets/ticketDisplay';
 import { useSessionStore } from '../../stores/session';
+import { useOffBarBack } from '../../navigation/useOffBarBack';
 
 /**
  * My sales — the prototype's cashier `my-sales` tab: the orders this person rang up today.
@@ -23,6 +24,7 @@ import { useSessionStore } from '../../stores/session';
  */
 export default function MySalesScreen(): React.JSX.Element {
   const router = useRouter();
+  const onBack = useOffBarBack('my-sales');
   const userId = useSessionStore((s) => s.userId);
   const [query, setQuery] = useState('');
 
@@ -52,6 +54,7 @@ export default function MySalesScreen(): React.JSX.Element {
   return (
     <ScreenList
       title="Today's sales"
+      onBack={onBack}
       sub={list.isLoading ? undefined : `${count} sale${count === '1' ? '' : 's'}`}
       data={list.isLoading || list.isError ? [] : rows}
       keyExtractor={(r) => r.ticket.id}

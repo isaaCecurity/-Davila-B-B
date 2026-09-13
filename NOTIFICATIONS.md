@@ -1,4 +1,25 @@
-# Ba## ACTION NEEDED: decide how a cashier rings up a walk-in sale (2026-09-13)
+# BakeFlow — Notifications
+
+Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.md` entry.
+
+---
+
+## ACTION NEEDED: should an invite link only work for the person it was sent to? (2026-09-13)
+
+When someone opens an invite link, the backend gives the role to whatever account is signed in —
+it doesn't check that it's the email address the invite was sent to. That's how many apps work
+("anyone with the link"), but links get forwarded, and right now emails aren't actually sent
+(invites are shared by hand from the app), so links travel more than usual.
+
+**What to decide:** should accepting an invite require signing in with the invited email? Also a
+small bug to OK fixing: expired invites never get marked "expired" in the database (the app already
+shows them as expired). Nothing is changed until you decide.
+
+See `BLOCKERS.md` BLOCKER-031.
+
+---
+
+## ACTION NEEDED: decide how a cashier rings up a walk-in sale (2026-09-13)
 
 The new screens include the prototype's quick counter sale — tap the items, take the money,
 done. The backend doesn't have a one-step way to do that for cashiers or managers: an order has
@@ -13,12 +34,6 @@ safe step (like the driver shortcut), and should the payment be recorded as part
 step? Customer orders are built and work in the meantime; only the one-tap counter sale waits.
 
 See `BLOCKERS.md` BLOCKER-030.
-
----
-
-keFlow — Notifications
-
-Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.md` entry.
 
 ---
 
