@@ -1,4 +1,4 @@
-import { Card, Chips, IconTile, List, ListRow, Skeleton, Text, TrendChart } from '@bakeflow/ui';
+import { Card, Chips, CountUp, IconTile, List, ListRow, Skeleton, Text, TrendChart } from '@bakeflow/ui';
 import { isZeroDecimalString } from '@bakeflow/types';
 import { formatNaira } from '@bakeflow/utils';
 import { useMemo, useState } from 'react';
@@ -74,7 +74,7 @@ export function OwnerHome(): React.JSX.Element {
           {today === undefined ? (
             <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
           ) : (
-            <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">{formatNaira(today.net_revenue)}</Text>
+            <CountUp to={Number(today.net_revenue)} text={formatNaira(today.net_revenue)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
           )}
           <Text className="mt-1.5 text-foot text-white/60">{today === undefined ? ' ' : `Net of refunds · ${today.timezone}`}</Text>
         </View>

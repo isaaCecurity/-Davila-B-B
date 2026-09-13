@@ -10,6 +10,7 @@ import {
   Button,
   Callout,
   Chips,
+  Dock,
   Field,
   Icon,
   IconButton,
@@ -22,7 +23,6 @@ import { positiveMoneySchema } from '@bakeflow/validation';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NoOrganizationState } from '../components/ScreenState';
 import { useBranchOptions } from '../features/branch/hooks/useBranchOptions';
@@ -45,7 +45,6 @@ import { toast } from '../stores/ui/toast.store';
  */
 export default function AddExpenseScreen(): React.JSX.Element {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const client = getSupabaseClient();
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const userId = useSessionStore((s) => s.userId);
@@ -180,10 +179,7 @@ export default function AddExpenseScreen(): React.JSX.Element {
         <View className="h-28" />
       </ScreenScroll>
 
-      <View
-        className="absolute bottom-0 left-0 right-0 border-t border-border bg-white px-gutter pt-3 shadow-e4"
-        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
-      >
+      <Dock>
         <Button
           label="Save expense"
           busy={create.isPending}
@@ -191,7 +187,7 @@ export default function AddExpenseScreen(): React.JSX.Element {
           onPress={save}
           block
         />
-      </View>
+      </Dock>
     </View>
   );
 }

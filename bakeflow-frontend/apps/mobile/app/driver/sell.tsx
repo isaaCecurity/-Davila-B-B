@@ -13,8 +13,10 @@ import {
   Callout,
   Card,
   Chips,
+  ConfirmRing,
+  CountUp,
+  Dock,
   EmptyState,
-  Icon,
   IconButton,
   List,
   ListRow,
@@ -29,7 +31,7 @@ import { positiveMoneySchema } from '@bakeflow/validation';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { TextInput, View } from 'react-native';
-import Animated, { FadeIn, ReduceMotion, ZoomIn } from 'react-native-reanimated';
+import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ErrorState, NoOrganizationState } from '../../components/ScreenState';
@@ -44,7 +46,6 @@ import { toast } from '../../stores/ui/toast.store';
 type Step = 1 | 2 | 3 | 4;
 
 const STEP_ENTER = FadeIn.duration(215).reduceMotion(ReduceMotion.System);
-const RING_ENTER = ZoomIn.springify().damping(14).reduceMotion(ReduceMotion.System);
 
 const METHODS: readonly { key: DriverTripPaymentMethod; label: string }[] = [
   { key: 'cash', label: 'Cash' },
@@ -215,11 +216,9 @@ function SellFlow({ trip, onLeave }: { trip: DriverTrip; onLeave: () => void }):
       <View className="flex-1 bg-cream px-gutter" style={{ paddingTop: insets.top + 72, paddingBottom: Math.max(insets.bottom, 24) }}>
         {/* The prototype's `.confirm-panel`. */}
         <View className="items-center">
-          <Animated.View entering={RING_ENTER} className="h-16 w-16 items-center justify-center rounded-full bg-success-tint">
-            <Icon name="check" size={28} color="success" strokeWidth={2.4} />
-          </Animated.View>
+          <ConfirmRing />
           <Text variant="title" className="mt-4 text-center">Sale recorded</Text>
-          <Text tabular className="mt-3 text-display font-bold tracking-[-1.2px] text-cocoa">{formatNaira(completed.total_amount)}</Text>
+          <CountUp to={Number(completed.total_amount)} text={formatNaira(completed.total_amount)} className="mt-3 text-display font-bold tracking-[-1.2px] text-cocoa" />
           <Text variant="meta" className="mt-1 text-center">
             {completed.ticket_number} · {paid === null ? 'nothing collected yet' : `${formatNaira(paid)} collected by ${METHODS.find((m) => m.key === method)?.label.toLowerCase() ?? method}`}
           </Text>
@@ -370,10 +369,7 @@ function SellFlow({ trip, onLeave }: { trip: DriverTrip; onLeave: () => void }):
         <View className="h-32" />
       </ScreenScroll>
 
-      <View
-        className="absolute bottom-0 left-0 right-0 border-t border-border bg-white px-gutter pt-3 shadow-e4"
-        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
-      >
+      <Dock key={step === 3 ? 'pay' : 'cart'}>
         {step === 3 ? (
           <View className="gap-2">
             <Button label="Record payment" busy={recordPayment.isPending} disabled={!parsedAmount.success} onPress={pay} block />
@@ -404,7 +400,7 @@ function SellFlow({ trip, onLeave }: { trip: DriverTrip; onLeave: () => void }):
             />
           </View>
         )}
-      </View>
+      </Dock>
 
       <Sheet
         visible={confirmDiscard}

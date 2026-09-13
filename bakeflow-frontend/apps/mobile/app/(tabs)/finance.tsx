@@ -3,11 +3,14 @@ import { useCashSessions, useExpenses } from '@bakeflow/hooks';
 import { isZeroDecimalString } from '@bakeflow/types';
 import {
   Badge,
+  type BadgeTone,
   Callout,
   Card,
   Chips,
+  CountUp,
   Icon,
   IconButton,
+  type IconName,
   IconTile,
   List,
   ListRow,
@@ -16,8 +19,6 @@ import {
   Skeleton,
   Text,
   TrendChart,
-  type BadgeTone,
-  type IconName,
 } from '@bakeflow/ui';
 import { formatNaira } from '@bakeflow/utils';
 import { useRouter, type Href } from 'expo-router';
@@ -193,9 +194,7 @@ export default function FinanceScreen(): React.JSX.Element {
                 {today === undefined ? (
                   <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
                 ) : (
-                  <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">
-                    {formatNaira(today.net_collected)}
-                  </Text>
+                  <CountUp to={Number(today.net_collected)} text={formatNaira(today.net_collected)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
                 )}
                 <Text className="mt-1.5 text-foot text-white/60">
                   {today === undefined ? ' ' : `Collected after refunds · ${today.reporting_date}`}

@@ -1,17 +1,14 @@
 import { BakeflowApiError } from '@bakeflow/api';
 import { getSupabaseClient, setActiveOrganization } from '@bakeflow/auth';
 import { clearOrganizationScopedCache, useAcceptInvite } from '@bakeflow/hooks';
-import { Button, Callout, Card, EmptyState, Icon, ScreenScroll, Text } from '@bakeflow/ui';
+import { Button, Callout, Card, ConfirmRing, EmptyState, Icon, ScreenScroll, Text } from '@bakeflow/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import Animated, { ReduceMotion, ZoomIn } from 'react-native-reanimated';
 
 import { usePendingInviteStore } from '../stores/auth/pendingInvite.store';
 import { useSessionStore } from '../stores/session';
-
-const RING_ENTER = ZoomIn.springify().damping(14).reduceMotion(ReduceMotion.System);
 
 function describe(error: Error): string {
   const code = error instanceof BakeflowApiError ? error.code : 'unexpected_error';
@@ -84,9 +81,7 @@ export default function AcceptInviteScreen(): React.JSX.Element {
     return (
       <ScreenScroll title="Invitation">
         <View className="items-center pt-16">
-          <Animated.View entering={RING_ENTER} className="h-16 w-16 items-center justify-center rounded-full bg-success-tint">
-            <Icon name="check" size={28} color="success" strokeWidth={2.4} />
-          </Animated.View>
+          <ConfirmRing />
           <Text variant="title" className="mt-4 text-center">Welcome to {joined.org}</Text>
           <Text variant="meta" className="mt-1 text-center">You joined as {joined.role}.</Text>
           <Button className="mt-8 self-stretch" label="Open BakeFlow" onPress={leave} block />

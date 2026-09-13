@@ -12,6 +12,7 @@ import {
   Button,
   Callout,
   Chips,
+  Dock,
   Icon,
   IconButton,
   List,
@@ -28,7 +29,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NoOrganizationState } from '../components/ScreenState';
 import { useBranchOptions } from '../features/branch/hooks/useBranchOptions';
@@ -84,7 +84,6 @@ function Stepper({ value, onChange, label }: { value: number; onChange: (n: numb
  */
 export default function NewOrderScreen(): React.JSX.Element {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { customerId } = useLocalSearchParams<{ customerId?: string }>();
   const client = getSupabaseClient();
   const tenantId = useSessionStore((s) => s.activeTenantId);
@@ -318,10 +317,8 @@ export default function NewOrderScreen(): React.JSX.Element {
         <View className="h-28" />
       </ScreenScroll>
 
-      <View
-        className="absolute bottom-0 left-0 right-0 flex-row items-center gap-3 border-t border-border bg-white px-gutter pt-3 shadow-e4"
-        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
-      >
+      <Dock>
+        <View className="flex-row items-center gap-3">
         <View className="min-w-0 flex-1">
           <Text variant="caption">{step === 3 ? 'Draft order' : 'In this order'}</Text>
           <Text className="text-title-3 font-bold text-cocoa">
@@ -334,7 +331,8 @@ export default function NewOrderScreen(): React.JSX.Element {
           disabled={!canContinue}
           onPress={() => (step === 3 ? submit() : setStep((s) => (s + 1) as Step))}
         />
-      </View>
+        </View>
+      </Dock>
 
       <Sheet
         visible={confirmDiscard}

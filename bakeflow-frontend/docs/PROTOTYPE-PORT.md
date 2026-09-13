@@ -735,3 +735,238 @@ role, Appearance → Dark repaints the whole screen (screenshot), back to System
 Owner · Whole bakery; Audit lists 100 events without selecting `before`/`after`, own actions as
 "You"; Alerts derives "No till is open"; Operations 7 tiles; Bakeries reachable from More with the
 current-bakery card and Close back to More. `tsc` ✓ `eslint` ✓ `npm test` 60/60 ✓.
+
+
+---
+
+## Phase 4 — Motion polish ✅
+
+Checked the main-app half of the prototype's `ANIMATIONS.md` (§14–§20) against the port and
+filled the gaps. Every animation is Reanimated (UI thread, `ReduceMotion.System`), timed from
+`packages/ui/tokens.ts`.
+
+| Prototype motion | Where it lives now |
+|---|---|
+| §14 push / pop / tab-in | native stack `ios_from_right`; tab `sceneStyleInterpolator` (Phase 2) |
+| §15 sheet up/down + scrim | `Sheet` (Phase 2), swipe-to-dismiss via Gesture Handler |
+| §15 toast in/out | `Toast` Keyframe (Phase 2) |
+| §15 dialog `dlg-in` | not used — confirmations are sheets (PORT-NOTE in `AdvanceTicketSheet`) |
+| §15 **dock `dock-in`** 340ms | **new** `packages/ui/Dock.tsx` (`SlideInDown` on the out curve) — New order, Add expense, New ticket |
+| §15 **confirm ring `pop`** 460ms | **new** `packages/ui/ConfirmRing.tsx` (Keyframe .6 → 1.04 → 1) — Sale recorded, Invitation accepted |
+| §16 skeleton shimmer | `Skeleton` pulse (Phase 2) |
+| §17 **number counters** 620ms easeOutCubic | **new** `packages/ui/CountUp.tsx` — hero figures on the Owner, Cashier, Manager, Supervisor and Baker homes, Finance, Sales and Sale recorded. Native: frames are written into a non-editable `TextInput` through animated props (no JS-thread work); web: frames commit through state. The final frame is always the caller's exact formatted string; `to` is only a plot-style number for the in-between frames. |
+| §18 **chart entrance** | `TrendChart` draws its line (Skia `end` driven by a shared value, 620ms) while the area fades up; the active dot appears at the end; redraws when data changes |
+| §19 **FAB `fab-in`** 420ms | `Fab` Keyframe (12px rise + scale .9) |
+| §19 press scale, swipe-to-advance | `PressableScale`, `SwipeRow` (Phase 2) |
+| §19 tile reveal stagger (420ms, 55ms apart) | `StatTile` `FadeInDown.delay(60 + i·55)`; Operations cards |
+| §19 route progress track | Reanimated `withTiming` width in `route.tsx` |
+| §19 production card move | `ProductionCard` `LinearTransition` + `FadeIn` |
+| §19 `field-shake` | not ported — named in `ANIMATIONS.md` but absent from the prototype CSS |
+| §20 reduced motion | `ReduceMotion.System` everywhere; verified on web with `prefers-reduced-motion: reduce` |
+
+**Tokens added:** `duration.countUp` 620, `chartDraw` 620, `fabIn` 420, `dockIn` 340, `confirmPop` 460;
+`motion.fabInY` 12, `fabInScale` .9, `popFrom` .6, `popOvershoot` 1.04.
+Part 1 of `ANIMATIONS.md` (splash, onboarding carousel, dough bloom) belongs to the get-started flow,
+which is outside this port's screen list (sign-in itself was ported in Phase 2).
+
+**Verified** (web, read-only): the owner hero settles on "₦0.00" exactly; FAB opacity 0.56 early → 1
+settled with identity transform; the New-order dock is visible with no residual transform; in a
+reduced-motion browser context the FAB reads opacity 1 on first check; 1 chart canvas; zero page
+errors. `tsc` ✓ `eslint` ✓ `npm test` 60/60 ✓.
+
+---
+
+## Phase 5 — Backend wiring & data integrity ✅
+
+**Money.** Swept every `Number(` / `parseFloat` / `toFixed` in `apps/mobile`: each one on a money
+value is a chart coordinate (`TrendChart`) or a count-up animation frame (`CountUp`), both documented;
+every displayed figure is `formatNaira` of the server's exact string. Quantities that need arithmetic
+(trip loaded/sold/returned, stepper counts) use exact BigInt scale-4 maths in
+`features/driverTrip/quantity.ts` (18 tests).
+
+**Tenant isolation.** Every new query key is `orgScoped(tenant, …)`; switching organization evicts the
+`org` prefix (`AppProviders`; the invite screen calls `clearOrganizationScopedCache`). New reads never
+select secrets (`organization_invites.token_hash`) or unbounded JSON (`audit_log.before/after`).
+
+**Cache invalidation — stale-data bugs found and fixed (`packages/hooks`).** List keys for cash
+sessions, expenses and payment tickets end in a branch segment (`'all'` when unscoped), so invalidating
+the unscoped key never refreshed the branch-scoped queries the ported screens use. Symptoms: after
+**closing a till** the Cash screen still showed it open for up to 30s; **recording a payment** left the
+order, the order lists and the day's collected figure stale; a **cash expense** left the till stale.
+Added `invalidatePrefixes()` and now invalidate by prefix:
+
+| Mutation | Now also refreshes |
+|---|---|
+| `useOpenCashSession`, `useCloseCashSession` | every `cash-sessions` list (all branches) |
+| `useRecordPayment` | the ticket, all `tickets` lists, `payment-tickets`, `cash-sessions`, `daily-revenue-summary` |
+| `useCreateExpense` | every `expenses` list; `cash-sessions` for cash expenses |
+| ticket transitions (`useAdvanceTicket`, `useCancelTicket`) | + `stock-movements`, `deliveries`, `driver-trip-tickets` |
+| `useCreateRoadsideTicket` | + `tickets` |
+| `useCompleteDriverFieldSale` | + the ticket, `tickets`, `product-stock-levels`, `stock-movements`, `daily-revenue-summary` |
+| `useRecordDriverTripPayment` | + trip tickets, the ticket, `tickets`, `daily-revenue-summary` |
+| trip start / verify / depart / return / reconcile / complete | + `product-stock-levels`, `stock-movements`, `cash-sessions` |
+| `useAdjustStock` | + `stock-movements` (Inventory domain) |
+
+**Schema drift fixed.** `STOCK_REFERENCE_TYPES` gained `'driver_trip'` (live CHECK) — the first
+verified trip load would otherwise have broken every ledger read (Driver-trips domain).
+
+**Navigation integrity.** Tabs use `backBehavior="history"`; the organization picker is reachable as a
+switcher; invite links survive sign-in (token held in memory only).
+
+**Manual smoke test.** `docs/SMOKE-TEST.md` walks through every write the ported screens perform
+(orders, production moves, cash, expenses, stock, deliveries, a full driver trip, invitations, role
+homes, reduced motion) on a test bakery. None of these writes were executed against production
+during the port.
+
+---
+
+## Phase 6 — Final report
+
+### Screen status (the Phase 0 inventory)
+
+| # | Prototype screen | App route | Status |
+|---|---|---|---|
+| 1 | splash | — | ⏸ get-started flow, not in this port |
+| 2 | get-started | `sign-in` | ✅ Phase 2 (onboarding carousel not ported) |
+| 3 | login | `sign-in` | ✅ Phase 2 |
+| 4 | org | `select-organization` | ✅ |
+| 5 | home (role-adaptive) | `(tabs)/index` → `features/home/*` | ✅ all seven roles |
+| 6 | search | `search` | ✅ (newest 200 orders; no full-text endpoint) |
+| 7 | more | `(tabs)/more` | ✅ |
+| 8 | my-activity | → `my-sales`, `tickets` | ↪ covered |
+| 9 | profile | `account` | ✅ |
+| 10 | notifications | `(tabs)/alerts` | ✅ live to-do feed (no notification history table) |
+| 11 | orders | `(tabs)/orders` | ✅ |
+| 12 | order | `order/[id]` | ✅ |
+| 13 | new-ticket | `driver/sell` (driver), `new-order` | ✅ |
+| 14 | created | confirm panel in `driver/sell`; order detail | ✅ |
+| 15 | new-sale | — | ⛔ BLOCKER-030 |
+| 16 | new-customer-order | `new-order` | ✅ |
+| 17 | record-production | — | ⏸ AD-022 (batches out of MVP) |
+| 18 | tickets | `(tabs)/tickets` | ✅ |
+| 19 | trip | `trip` | ✅ |
+| 20 | trip-verify | `trips`, `trips/[tripId]` | ✅ |
+| 21 | trip-reconcile | `trips/[tripId]` | ✅ |
+| 22 | route | `(tabs)/route` | ✅ |
+| 23 | sales | `(tabs)/sales` | ✅ |
+| 24 | finance | `(tabs)/finance` | ✅ (profit: AD-022) |
+| 25 | pnl | — | ⏸ AD-022 |
+| 26 | supervisor-reports | `reports` | ✅ |
+| 27 | expenses | `expenses` | ✅ |
+| 28 | add-expense | `add-expense` | ✅ |
+| 29 | my-sales | `(tabs)/my-sales` | ✅ |
+| 30 | cash | `(tabs)/cash` | ✅ |
+| 31 | my-cash | `(tabs)/my-cash` | ✅ |
+| 32 | add-my-expense | `add-expense` | ✅ same screen |
+| 33 | reports | `reports` | ✅ |
+| 34 | report-products | — | ⛔ needs a report endpoint |
+| 35 | report-branches | — | ⛔ needs a report endpoint |
+| 36 | products | `products` | ✅ |
+| 37 | product-detail | `product/[id]` | ✅ |
+| 38 | customers | `customers` | ✅ |
+| 39 | customer | `customer/[id]` | ✅ |
+| 40 | staff | `(tabs)/staff` | ✅ |
+| 41 | invites | `invites` (+ new `invite` for the invitee) | ✅ |
+| 42 | operations | `(tabs)/operations` | ✅ |
+| 43 | sales-monitor | → `orders` | ⛔ needs per-staff / per-method aggregates |
+| 44 | inventory-monitor | `inventory`, `inventory/[warehouseId]` | ✅ |
+| 45 | production | `(tabs)/production` | ✅ as the order queue (AD-022) |
+| 46 | production-monitor | `(tabs)/production` | ✅ same |
+| 47 | delivery-monitor | `delivery` | ✅ |
+| 48 | driver-detail | `delivery/driver/[driverId]` | ✅ |
+| 49 | account | `account` | ✅ |
+| 50 | settings | `settings` | ✅ |
+| 51 | audit | `audit` | ✅ |
+| 52 | states | — | prototype-only showcase |
+| 53 | ds | — | prototype-only showcase |
+| 54–57 | admin-org / admin-staff / admin-records / admin-settings | Admin home links | ⏸ Web workspace (`ROLES-AND-PERMISSIONS.md`) |
+
+**Totals:** 43 of the 57 rows are live on mobile, one more (`my-activity`) is covered by other screens;
+of the rest, 4 wait on something outside the port (3 endpoints, BLOCKER-030), 2 are out of MVP scope
+(AD-022), 4 belong to the Web workspace and 3 are prototype-only (`splash`, `states`, `ds`). No
+placeholder screen remains.
+
+### PORT-NOTEs
+
+63 `PORT-NOTE` comments across 57 files (`grep -rn PORT-NOTE apps/mobile packages`). They fall into six
+kinds:
+1. **Money arithmetic not done on the device** — totals, deltas, margins, per-method splits, "held by
+   you": replaced by the server's figures or by row counts.
+2. **Out of MVP scope (AD-022)** — profit, cost of goods, margin, production batches, ingredients,
+   reorder levels.
+3. **No endpoint yet** — P&L, product/branch reports, sales monitoring, notification history, full-text
+   search, per-staff shift data, invite revoke/resend, profile update.
+4. **Decisions left to the database** — role-gated controls are advisory and refusals are shown as
+   returned; BLOCKER-030 and BLOCKER-031 raised where a decision is missing.
+5. **Missing dependency or flow** — photo proof and receipt upload (camera/upload), backdrop blur
+   (expo-blur), the Inter font (expo-font), the offline queue (P10).
+6. **Prototype fiction replaced by the live contract** — one-party trip loading, roadside tickets without
+   customers, delivery vs roadside tickets, bearer-link invites.
+
+### Where the tokens live
+
+`bakeflow-frontend/packages/ui/tokens.ts` is the single source: themed light/dark colours, fixed
+colours, semantic ink/tint pairs, radius, layout, type scale with pixel line-heights, weights,
+elevation, easing curves, durations and motion distances. `apps/mobile/tailwind.config.js` imports it
+(colours as `rgb(var(--bf-*) / <alpha-value>)`), `ThemeProvider` injects the variables at runtime, and
+`packages/ui/motion.ts` turns easing and duration tokens into Reanimated configs.
+`docs/DESIGN-TOKENS.md` carries a supersession notice pointing here.
+
+Correction to **D4**: charts ended up drawn directly with Skia (`TrendChart`) rather than Victory —
+one chart style was all the port needed, and drawing it directly keeps the entrance animation in our
+hands.
+
+### New API, hooks and package work (all phases)
+
+- **API** (`packages/api`): `mutations/tickets.ts` (advance, cancel, create), `listTicketItemsForTickets`,
+  `listCustomersByIds`, `TicketFilters.statuses` / `createdBy`, `listStaffRoles`,
+  `listOrganizationInvites`, `listAuditEvents`, `acceptOrganizationInvite`.
+- **Hooks** (`packages/hooks`): tickets and customers (Sales), `useStockMovementPages`, `useStaffRoles`,
+  `useOrganizationInvites`, `useCreateAndSendInvite`, `useAcceptInvite`, `useAuditEvents`, plus
+  `invalidatePrefixes` and the invalidation fixes above.
+- **Types / validation:** `Ticket.created_by` / `completed_at`, `StaffRole`, `OrganizationInvite`,
+  `AuditEvent`, the `'driver_trip'` reference type, `inviteEmailSchema`.
+- **UI kit** (`packages/ui`): the Phase 2 primitives plus `CountUp`, `Dock`, `ConfirmRing`, the `Fab`
+  entrance and the `TrendChart` draw.
+- **No new dependencies.**
+
+### Known gaps
+
+- **Blockers awaiting a decision:** BLOCKER-030 (one-step counter sale); BLOCKER-031 (invite acceptance
+  is not bound to the invited email, and expired invites are never marked expired). Still open from
+  before: BLOCKER-016 (returned deliveries restore no stock), BLOCKER-017 (production status writable
+  directly).
+- **Writes not executed against production:** every create, transition, payment, trip and invite path is
+  typechecked against its live contract and read-verified, but has not been pressed. Run
+  `docs/SMOKE-TEST.md` on a test bakery.
+- **Screens verified empty only:** production queue cards, driver detail and trip detail stages (the
+  smoke tenant has no queued orders, drivers or trips).
+- **Native-only paths not exercised:** `CountUp`'s animated-props text path, gestures and Skia on a
+  physical device — verification ran in the web export.
+- **Endpoints to build:** a ranged revenue report, product and branch performance, per-staff and
+  per-method sales, notification events, full-text search, invite revoke/resend, profile update, file
+  upload (receipts, proof of delivery).
+- **Presentation limits:** branches are named by their first stockroom (a `branches` read is allowed
+  live and could replace this); lists read at most 200 rows where noted.
+- **Harness noise:** a 401 console line appeared twice during automated sign-in and did not reproduce
+  in two runs with request logging.
+
+### Next steps for the web version
+
+1. **Share the data layer as-is.** `@bakeflow/api`, `@bakeflow/types`, `@bakeflow/validation`,
+   `@bakeflow/hooks` and `@bakeflow/utils` carry no React Native UI; only `@bakeflow/auth`'s session
+   storage is platform-specific, and it already sits behind a storage interface
+   (`createChunkedStorage`) that a web adapter can implement.
+2. **Share the tokens, not the components.** `tokens.ts` is plain data: feed it to the web Tailwind
+   config the same way `apps/mobile/tailwind.config.js` does, and build web components (tables, wide
+   layouts, keyboard-first forms) on the same colours, type scale, radii, elevation and motion
+   durations.
+3. **Build the Web-workspace screens the mobile port deferred:** admin-org, admin-staff, admin-records
+   (archiving), admin-settings, audit detail with safe before/after diffs, and the report screens once
+   their endpoints exist (product and branch performance, sales by staff and method; P&L if AD-022 is
+   lifted).
+4. **Resolve BLOCKER-030 and BLOCKER-031** before either app offers counter sales or relies on shared
+   invite links.
+5. **Choose the framework with the shared packages in mind** — a React-based framework keeps the hooks
+   and TanStack Query cache reusable. Expo's web export already renders the mobile screens and can serve
+   as a preview, but it is not a desktop-grade management UI.

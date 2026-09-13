@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '@bakeflow/auth';
 import { useCurrentDriverTrip } from '@bakeflow/hooks';
-import { Badge, Button, Card, Icon, IconTile, List, ListRow, Menu, MenuItem, PressableScale, Skeleton, Text } from '@bakeflow/ui';
+import { Badge, Button, Card, CountUp, Icon, IconTile, List, ListRow, Menu, MenuItem, PressableScale, Skeleton, Text } from '@bakeflow/ui';
 import { formatNaira } from '@bakeflow/utils';
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
@@ -40,7 +40,7 @@ export function CashierHome(): React.JSX.Element {
         {today === undefined ? (
           <Skeleton variant="figure" className="mt-2 w-40 bg-white/10" />
         ) : (
-          <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">{formatNaira(today.net_revenue)}</Text>
+          <CountUp to={Number(today.net_revenue)} text={formatNaira(today.net_revenue)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
         )}
         <Text className="mt-1 text-foot text-white/55">
           {branch?.label ?? 'Branch'} · {mine.label} ticket{mine.count === 1 ? '' : 's'} by you
@@ -96,7 +96,7 @@ export function BakerHome(): React.JSX.Element {
     <HomeScaffold context={branch?.label} refreshing={toMake.isRefetching} onRefresh={() => { void toMake.refetch(); void ready.refetch(); }}>
       <Card tone="ink" className="mt-2 rounded-lg p-5">
         <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/60">Today&apos;s production</Text>
-        <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">{toMake.label}</Text>
+        <CountUp format="integer" to={toMake.count} text={toMake.label} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
         <Text className="mt-1 text-foot text-white/55">orders to make · {ready.label} ready</Text>
       </Card>
       <Button className="mt-6" label="Open production queue" onPress={() => router.push('/production')} block />

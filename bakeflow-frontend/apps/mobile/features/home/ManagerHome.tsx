@@ -1,4 +1,4 @@
-import { Button, Card, Chips, Icon, IconTile, List, ListRow, Skeleton, Text } from '@bakeflow/ui';
+import { Button, Card, Chips, CountUp, Icon, IconTile, List, ListRow, Skeleton, Text } from '@bakeflow/ui';
 import { getSupabaseClient } from '@bakeflow/auth';
 import { useDriverTrips } from '@bakeflow/hooks';
 import { formatNaira } from '@bakeflow/utils';
@@ -82,9 +82,7 @@ export function ManagerHome(): React.JSX.Element {
             {open.isLoading ? (
               <Skeleton variant="figure" className="mt-2 w-16 bg-white/10" />
             ) : (
-              <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">
-                {open.rows.length}{open.hasNextPage === true ? '+' : ''}
-              </Text>
+              <CountUp format="integer" to={open.rows.length} text={`${open.rows.length}${open.hasNextPage === true ? '+' : ''}`} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
             )}
             <Text className="mt-1 text-foot text-white/60">orders across {branch?.label ?? 'the bakery'}</Text>
           </View>

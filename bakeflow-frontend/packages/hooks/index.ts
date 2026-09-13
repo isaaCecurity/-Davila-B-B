@@ -981,6 +981,19 @@ export function useCurrentDriverTrip(
  * since that is a *different* cache entry from `driverTrip(tripId)` and a stale copy there
  * is exactly what would leave the Home screen showing a trip that just completed.
  */
+/**
+ * Invalidate every query under one or more organization-scoped prefixes.
+ *
+ * Several list keys end in a branch segment (`'all'` when unscoped), so invalidating
+ * `queryKeys.cashSessions(tenant)` matches only the unscoped list — never the branch-scoped
+ * one a screen is showing. A prefix without the branch segment matches both.
+ */
+function invalidatePrefixes(queryClient: QueryClient, tenantId: string, ...prefixes: readonly string[]): void {
+  for (const prefix of prefixes) {
+    void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, prefix) });
+  }
+}
+
 function invalidateDriverTrip(queryClient: QueryClient, tenantId: string, row: DriverTrip): void {
   queryClient.setQueryData(queryKeys.driverTrip(tenantId, row.id), row);
   void queryClient.invalidateQueries({ queryKey: orgScoped(tenantId, 'driver-trips') });
@@ -988,6 +1001,9 @@ function invalidateDriverTrip(queryClient: QueryClient, tenantId: string, row: D
   void queryClient.invalidateQueries({
     queryKey: queryKeys.currentDriverTrip(tenantId, row.driver_id),
   });
+  // Loading and returning move stock between the branch stockroom and the vehicle; settling
+  // attaches the trip's cash to a till.
+  invalidatePrefixes(queryClient, tenantId, 'product-stock-levels', 'stock-movements', 'cash-sessions');
 }
 
 /**
@@ -1145,6 +1161,9 @@ export function useRecordDriverTripPayment(
     onSuccess: (_result, variables) => {
       const tenant = requireTenant(tenantId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenant, variables.tripId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.driverTripTickets(tenant, variables.tripId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'daily-revenue-summary');
     },
   });
 }
@@ -1192,6 +1211,7 @@ export function useCreateRoadsideTicket(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.driverTripTickets(tenant, variables.input.driverTripId),
       });
+      invalidatePrefixes(queryClient, tenant, 'tickets');
     },
   });
 }
@@ -1226,6 +1246,9 @@ export function useCompleteDriverFieldSale(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.driverTripTickets(tenant, variables.tripId),
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.ticketId) });
+      // Completion writes the sale movement out of the vehicle and recognises revenue.
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'product-stock-levels', 'stock-movements', 'daily-revenue-summary');
     },
   });
 }
@@ -1254,8 +1277,7 @@ export function useOpenCashSession(
     },
     onSuccess: (session) => {
       const tenant = requireTenant(tenantId);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant, session.branch_id) });
+      invalidatePrefixes(queryClient, tenant, 'cash-sessions');
     },
   });
 }
@@ -1272,7 +1294,7 @@ export function useCloseCashSession(
     },
     onSuccess: () => {
       const tenant = requireTenant(tenantId);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+      invalidatePrefixes(queryClient, tenant, 'cash-sessions');
     },
   });
 }
@@ -1299,10 +1321,12 @@ export function useRecordPayment(
       requireTenant(tenantId);
       return recordPayment(client, input);
     },
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       const tenant = requireTenant(tenantId);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.paymentTickets(tenant) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
+      // amount_paid changes every ticket list and the day's collected figure; a cash payment
+      // lands in a till's expected amount.
+      invalidatePrefixes(queryClient, tenant, 'payment-tickets', 'tickets', 'cash-sessions', 'daily-revenue-summary');
     },
   });
 }
@@ -1341,13 +1365,8 @@ export function useCreateExpense(
     },
     onSuccess: (expense) => {
       const tenant = requireTenant(tenantId);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tenant) });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.expenses(tenant, expense.branch_id),
-      });
-      if (expense.cash_session_id !== null) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.cashSessions(tenant) });
-      }
+      invalidatePrefixes(queryClient, tenant, 'expenses');
+      if (expense.cash_session_id !== null) invalidatePrefixes(queryClient, tenant, 'cash-sessions');
     },
   });
 }
@@ -1455,6 +1474,10 @@ function invalidateAfterTicketTransition(
     orgScoped(tenant, 'payment-tickets'),
     orgScoped(tenant, 'daily-revenue-summary'),
     orgScoped(tenant, 'product-stock-levels'),
+    // `complete_ticket` writes the sale movement; ticket state gates dispatch and trip sales.
+    orgScoped(tenant, 'stock-movements'),
+    orgScoped(tenant, 'deliveries'),
+    orgScoped(tenant, 'driver-trip-tickets'),
   ]) {
     void queryClient.invalidateQueries({ queryKey: key });
   }

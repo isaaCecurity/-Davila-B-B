@@ -227,6 +227,16 @@ export const duration = {
   toastVisible: 4000,
   undoWindow: 5000,
   skeleton: 340,
+  /** `animateFigure()` — the dominant number counting up (easeOutCubic). */
+  countUp: 620,
+  /** Chart entrance: line draws, area fades up (charts.js splines, 520–620ms). */
+  chartDraw: 620,
+  /** `.fab` `fab-in`. */
+  fabIn: 420,
+  /** `.dock` `dock-in`. */
+  dockIn: 340,
+  /** `.confirm-panel .cp-ring` `pop` keyframes (not the navigation pop above). */
+  confirmPop: 460,
 } as const;
 
 /** Distances and scales the prototype's keyframes animate through. */
@@ -239,6 +249,10 @@ export const motion = {
   toastInScale: 0.97,
   pressScale: 0.985,
   scrimOpacity: 0.38,
+  fabInY: 12,
+  fabInScale: 0.9,
+  popFrom: 0.6,
+  popOvershoot: 1.04,
 } as const;
 
 export const tokens = {

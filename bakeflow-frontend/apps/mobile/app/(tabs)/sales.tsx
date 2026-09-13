@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Chips,
+  CountUp,
   Icon,
   ScreenScroll,
   Skeleton,
@@ -107,9 +108,7 @@ export default function SalesScreen(): React.JSX.Element {
                 {today === undefined ? (
                   <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
                 ) : (
-                  <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">
-                    {formatNaira(today.net_revenue)}
-                  </Text>
+                  <CountUp to={Number(today.net_revenue)} text={formatNaira(today.net_revenue)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
                 )}
                 <Text className="mt-1.5 text-foot text-white/60">
                   {today === undefined ? ' ' : `Collected ${formatNaira(today.net_collected)} · ${today.timezone}`}

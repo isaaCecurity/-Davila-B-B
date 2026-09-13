@@ -1,9 +1,12 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { View, useWindowDimensions } from 'react-native';
+import { ReduceMotion, useDerivedValue, useSharedValue, withTiming } from 'react-native-reanimated';
+
+import { curve } from './motion';
 
 import { skia } from './skia';
 import { Text } from './Text';
-import { fixed } from './tokens';
+import { duration, fixed } from './tokens';
 
 export interface TrendPoint {
   /** Plot height only — never displayed or summed. See `TrendChart`. */
@@ -46,6 +49,13 @@ function flowPath(pts: readonly { x: number; y: number }[], tension = 0.42): str
  * person reads is formatted from the original string elsewhere on the screen. A chart cannot
  * be drawn without converting to a coordinate, and this is the only place that conversion is
  * allowed to happen.
+ *
+ * ## Entrance only
+ *
+ * The line draws left to right while the area fades up behind it (Skia `end` and `opacity`
+ * driven by a Reanimated shared value, 620ms on the out curve), then holds still — the
+ * prototype's rule that data which keeps moving is data you cannot read. It redraws when the
+ * data changes, and appears instantly under Reduce Motion.
  *
  * One Skia canvas per chart (charts are few per screen), created through the lazy `skia()`
  * accessor so it is safe on web.
@@ -90,11 +100,19 @@ export function TrendChart({
 
   const active = geometry.pts[activeIndex];
 
+  const drawn = useSharedValue(0);
+  useEffect(() => {
+    drawn.value = 0;
+    drawn.value = withTiming(1, { duration: duration.chartDraw, easing: curve('out'), reduceMotion: ReduceMotion.System });
+  }, [geometry.line, drawn]);
+  const areaOpacity = useDerivedValue(() => drawn.value);
+  const dotOpacity = useDerivedValue(() => (drawn.value > 0.92 ? (drawn.value - 0.92) / 0.08 : 0));
+
   return (
     <View accessible accessibilityRole="image" accessibilityLabel={accessibilityLabel}>
       <Canvas style={{ width, height }}>
         {geometry.area !== '' && (
-          <Path path={geometry.area}>
+          <Path path={geometry.area} opacity={areaOpacity}>
             <LinearGradient
               start={vec(0, 0)}
               end={vec(0, height)}
@@ -103,10 +121,10 @@ export function TrendChart({
           </Path>
         )}
         {geometry.line !== '' && (
-          <Path path={geometry.line} style="stroke" strokeWidth={2.6} strokeCap="round" strokeJoin="round" color={fixed.apricot} />
+          <Path path={geometry.line} start={0} end={drawn} style="stroke" strokeWidth={2.6} strokeCap="round" strokeJoin="round" color={fixed.apricot} />
         )}
         {active !== undefined && (
-          <Group>
+          <Group opacity={dotOpacity}>
             <Circle cx={active.x} cy={active.y} r={6} color={onDark ? fixed.ink : '#FFFFFF'} />
             <Circle cx={active.x} cy={active.y} r={4} color={fixed.apricot} />
           </Group>

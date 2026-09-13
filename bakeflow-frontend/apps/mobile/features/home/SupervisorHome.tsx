@@ -1,7 +1,7 @@
 import { getSupabaseClient } from '@bakeflow/auth';
 import { useDeliveries, useProductStockLevels, useWarehouses } from '@bakeflow/hooks';
 import { isNegativeDecimalString, isZeroDecimalString } from '@bakeflow/types';
-import { Card, Icon, IconTile, List, ListRow, Text } from '@bakeflow/ui';
+import { Card, CountUp, Icon, IconTile, List, ListRow, Text } from '@bakeflow/ui';
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { View } from 'react-native';
@@ -57,7 +57,7 @@ export function SupervisorHome(): React.JSX.Element {
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
             <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">Today&apos;s operation</Text>
-            <Text tabular className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white">{ordersToday.label}</Text>
+            <CountUp format="integer" to={ordersToday.count} text={ordersToday.label} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
             <Text className="mt-1 text-foot text-white/60">
               orders · {kitchen.label} in the kitchen · {deliveries.isLoading ? '—' : active} deliveries out
             </Text>

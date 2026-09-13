@@ -6669,3 +6669,63 @@ mcp__supabase__execute_sql (stock_movements GROUP BY reason, count(unit_cost))
                                                           -> 0 of 166 rows across all 6 reasons
                                                              carry a unit_cost
 ```
+
+
+---
+
+## 2026-09-13 · Prototype → React Native port completed (Phases 3–6): finance through invitations, home, motion, data integrity
+
+Continuation of the prototype port recorded in `bakeflow-frontend/docs/PROTOTYPE-PORT.md` (the
+living record — full per-domain reports, PORT-NOTEs and the final status table live there).
+
+### Delivered
+
+- **Finance:** Cash / My cash / Expenses / Add expense, Finance overview, Reports.
+- **Inventory:** Stock screen with adjust sheet; `useStockMovementPages`.
+- **Production:** rebuilt as the order queue (`scheduled → in_production → ready`) after confirming
+  live that AD-022 revoked every client grant on `production_batches`/`recipes`/`ingredients` and the
+  batch RPCs' EXECUTE.
+- **Delivery:** board, driver detail, delivery detail with a single action sheet.
+- **Driver trips:** Route and Tickets tabs, Trip, Driver trips hub + stage detail (verify / reconcile /
+  settle), New ticket (roadside sale + trip payment) with retry-safe completion.
+- **Invitations & staff:** Staff, Invites, invite sheet with a share-link fallback while email delivery
+  is simulated (AD-023), and a new invitee accept screen for `bakeflow://invite?token=…`.
+- **Home & shell:** role-adaptive Home for all seven personas, Alerts, Operations, Settings, Account,
+  Audit log, Search, Bakeries (organization picker) restyle.
+- **Motion (Phase 4):** `CountUp`, `Dock`, `ConfirmRing`, FAB entrance, chart line draw — all
+  Reanimated with `ReduceMotion.System`.
+- **Data integrity (Phase 5):** prefix-based cache invalidation fixing stale till/payment/expense
+  screens; `'driver_trip'` added to `STOCK_REFERENCE_TYPES`; navigation fixes (tab back history,
+  reachable organization switcher, invite token carried through sign-in in memory only).
+- **Manual smoke test:** `bakeflow-frontend/docs/SMOKE-TEST.md`.
+
+### Blockers raised
+
+- **BLOCKER-031** — `accept_organization_invite()` grants the role to any signed-in caller holding the
+  token (no email match), and its expiry `UPDATE` is rolled back by the following `RAISE`. Notification
+  added. Nothing changed server-side.
+- `NOTIFICATIONS.md` header repaired (the BLOCKER-030 entry had been inserted inside the title line).
+
+### Not done / not claimed
+
+- No write was executed against the production project during verification; every mutation path is
+  typechecked against its live contract and must be exercised with `docs/SMOKE-TEST.md` on a test
+  bakery.
+- Native-only paths (CountUp animated props, on-device Skia and gestures) were not run; verification
+  used the Expo web export with Playwright.
+- No new dependencies. Nothing committed.
+
+### Executed evidence
+
+```
+mcp__supabase__execute_sql  stock_movements reference_type CHECK  -> includes 'driver_trip'
+mcp__supabase__execute_sql  role grants / function EXECUTE        -> production_batches, recipes, ingredients: no SELECT/INSERT/UPDATE;
+                                                                     complete/fail_production_batch: EXECUTE false
+mcp__supabase__execute_sql  organization_invites, user_roles, profiles, audit_log policies and columns
+mcp__supabase__execute_sql  pg_get_functiondef create_organization_invite / accept_organization_invite
+npm run typecheck --workspace apps/mobile   -> 0 errors
+npm run lint --workspace apps/mobile        -> 0 errors, 0 warnings
+npm test                                    -> 60 passed (adds quantity.test.ts 18, staffDisplay.test.ts 3)
+npx expo export --platform web              -> exported
+Playwright read-only drives (request guard) -> zero mutating requests, zero page errors per domain
+```
