@@ -1,4 +1,4 @@
-import { BakeflowApiError } from '@bakeflow/api';
+import { BakeflowApiError, errorReason } from '@bakeflow/api';
 import { getSupabaseClient, setActiveOrganization } from '@bakeflow/auth';
 import { clearOrganizationScopedCache, useAcceptInvite } from '@bakeflow/hooks';
 import { Button, Callout, Card, ConfirmRing, EmptyState, Icon, ScreenScroll, Text } from '@bakeflow/ui';
@@ -12,6 +12,11 @@ import { useSessionStore } from '../stores/session';
 
 function describe(error: Error): string {
   const code = error instanceof BakeflowApiError ? error.code : 'unexpected_error';
+  const reason = errorReason(error);
+  if (reason === 'email_mismatch') {
+    return 'This invite was sent to a different email address. Sign out, then sign in (or sign up) with the email the invite went to.';
+  }
+  if (reason === 'expired') return 'This invite has expired. Ask whoever invited you to send a new one.';
   if (code === 'invalid_transition') {
     return 'This invite has already been used, was withdrawn, or has expired. Ask whoever invited you for a new one.';
   }
@@ -29,6 +34,9 @@ function describe(error: Error): string {
  * organization and refreshes the token (`setActiveOrganization`) so every read that follows sees
  * it. The navigation gate lets a signed-in user stay here with or without an organization, and
  * carries the token through sign-in when the link was opened signed out.
+ *
+ * AD-025: only the account the invite was sent to can accept it; a different signed-in account is
+ * told to sign in with the invited email, and an expired link says so.
  *
  * PORT-NOTE: the prototype has no invitee screen (its invites are fictional); this one is new,
  * styled after its confirm panel.
@@ -111,7 +119,7 @@ export default function AcceptInviteScreen(): React.JSX.Element {
         </View>
         <Text className="mt-4 text-title-1 font-bold tracking-[-0.6px] text-white">You have been invited</Text>
         <Text className="mt-1.5 text-foot text-white/60">
-          Accepting adds this account{email === '' ? '' : ` (${email})`} to the bakery that invited you, with the role they chose.
+          Accepting adds this account{email === '' ? '' : ` (${email})`} to the bakery that invited you, with the role they chose. It must be the email the invite was sent to.
         </Text>
       </Card>
 

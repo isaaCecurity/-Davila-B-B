@@ -182,8 +182,12 @@ export interface AcceptInviteResult {
  * Only the organization id, its name and the role name are read from the envelope — strings
  * that survive `to_jsonb` intact.
  *
- * @throws {BakeflowApiError} `invalid_transition` for an unknown, used, revoked or expired
- *   token; `insufficient_role` when not signed in.
+ * AD-025: only the account the invite was sent to may accept it — any other account is refused
+ * with `insufficient_role` and detail reason `email_mismatch` (read it with `errorReason`).
+ *
+ * @throws {BakeflowApiError} `invalid_transition` for an unknown, used, revoked or expired token
+ *   (reason `expired` when it lapsed); `insufficient_role` when not signed in or signed in as a
+ *   different email.
  */
 export async function acceptOrganizationInvite(
   client: BakeflowClient,
@@ -201,6 +205,15 @@ export async function acceptOrganizationInvite(
     if (error) throw normalizePostgrestError(error);
 
     const payload = (data ?? {}) as Record<string, unknown>;
+    // AD-025: an expired invite is recorded as expired and reported in the envelope rather than
+    // raised (a RAISE would roll the status change back).
+    if (payload.accepted === false) {
+      throw new BakeflowApiError({
+        code: 'invalid_transition',
+        message: 'acceptOrganizationInvite: the invite could not be accepted',
+        details: JSON.stringify({ code: payload.code, reason: payload.status }),
+      });
+    }
     const org = (payload.organization ?? {}) as Record<string, unknown>;
     const role = (payload.role ?? {}) as Record<string, unknown>;
     if (typeof org.id !== 'string') {

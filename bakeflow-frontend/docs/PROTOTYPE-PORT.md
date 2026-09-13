@@ -424,7 +424,7 @@ zero mutating calls, zero errors. `tsc` ✓ `eslint` ✓.
 | my-sales | `app/(tabs)/my-sales.tsx` | ✅ verified |
 | new-ticket / new-customer-order | `app/new-order.tsx` | ✅ verified to review (create not executed) |
 | created | → navigates to the new order | ✅ replaced |
-| new-sale | — | ⛔ BLOCKER-030 |
+| new-sale | `new-sale` | ✅ AD-024 |
 | tickets (driver) | — | → driver-trips domain |
 
 **API created:** `listTicketItemsForTickets`, `listCustomersByIds`, `TicketFilters.statuses` /
@@ -840,7 +840,7 @@ during the port.
 | 12 | order | `order/[id]` | ✅ |
 | 13 | new-ticket | `driver/sell` (driver), `new-order` | ✅ |
 | 14 | created | confirm panel in `driver/sell`; order detail | ✅ |
-| 15 | new-sale | — | ⛔ BLOCKER-030 |
+| 15 | new-sale | `new-sale` | ✅ AD-024 (counter sale, one atomic RPC) |
 | 16 | new-customer-order | `new-order` | ✅ |
 | 17 | record-production | — | ⏸ AD-022 (batches out of MVP) |
 | 18 | tickets | `(tabs)/tickets` | ✅ |
@@ -881,8 +881,8 @@ during the port.
 | 53 | ds | — | prototype-only showcase |
 | 54–57 | admin-org / admin-staff / admin-records / admin-settings | Admin home links | ⏸ Web workspace (`ROLES-AND-PERMISSIONS.md`) |
 
-**Totals:** 43 of the 57 rows are live on mobile, one more (`my-activity`) is covered by other screens;
-of the rest, 4 wait on something outside the port (3 endpoints, BLOCKER-030), 2 are out of MVP scope
+**Totals:** 44 of the 57 rows are live on mobile, one more (`my-activity`) is covered by other screens;
+of the rest, 3 wait on report endpoints, 2 are out of MVP scope
 (AD-022), 4 belong to the Web workspace and 3 are prototype-only (`splash`, `states`, `ds`). No
 placeholder screen remains.
 
@@ -932,8 +932,9 @@ hands.
 
 ### Known gaps
 
-- **Blockers awaiting a decision:** BLOCKER-030 (one-step counter sale); BLOCKER-031 (invite acceptance
-  is not bound to the invited email, and expired invites are never marked expired). Still open from
+- **Decided since the report:** BLOCKER-030 resolved as AD-024 (counter sale built, backend live);
+  BLOCKER-031 decided as AD-025 (invite acceptance bound to the invited email, expiry persisted) —
+  migration written, **not yet applied**; the client handles both server versions. Still open from
   before: BLOCKER-016 (returned deliveries restore no stock), BLOCKER-017 (production status writable
   directly).
 - **Writes not executed against production:** every create, transition, payment, trip and invite path is
@@ -965,8 +966,41 @@ hands.
    (archiving), admin-settings, audit detail with safe before/after diffs, and the report screens once
    their endpoints exist (product and branch performance, sales by staff and method; P&L if AD-022 is
    lifted).
-4. **Resolve BLOCKER-030 and BLOCKER-031** before either app offers counter sales or relies on shared
-   invite links.
+4. **Apply AD-025's migration** (BLOCKER-031) before relying on shared invite links; the counter sale
+   (AD-024) is live.
 5. **Choose the framework with the shared packages in mind** — a React-based framework keeps the hooks
    and TanStack Query cache reusable. Expo's web export already renders the mobile screens and can serve
    as a preview, but it is not a desktop-grade management UI.
+
+---
+
+## Addendum 2026-09-14 — counter sale (AD-024) and invite binding (AD-025)
+
+**Counter sale — `app/new-sale.tsx`, following the prototype's `new-sale` step for step.**
+- Step 1 (products): customer row (walk-in by default, sheet to pick a saved customer), search,
+  category chips, two-column `SaleTile` grid (category code, "N in bag" badge that opens a quantity
+  sheet, price or "Out of stock", deck where `−1` slides open to 36% on the navigation curve).
+- Step 2 (payment): items with line totals and total (Edit returns to step 1), Cash / Transfer / POS
+  tiles; cash with no open till shows a callout and disables Confirm.
+- Step 3 (done): `ConfirmRing`, "Sale recorded", ticket number · customer, `CountUp` of the **server**
+  total, recap, payment method; New sale / Today's sales / Back to home.
+- Dock: Total and Continue / Confirm sale, "N items · tap to review" opening the basket sheet; leaving
+  with items asks to discard.
+- Data: `completeCounterSale` (`packages/api/mutations/counter-sale.ts`) → `useCompleteCounterSale`
+  (invalidates tickets, payment tickets, stock levels, stock movements, daily revenue, cash sessions).
+  Basket is the in-memory `stores/ui/counterSale.store.ts`, so Cashier home shows "Continue sale · N
+  items". Device totals are an exact BigInt preview (`features/sales/saleMath.ts`, 3 tests).
+- Errors mapped by `errorReason()`: `no_open_till`, `insufficient_stock`, role refusal, unavailable
+  product.
+
+**Verified (web export, read-only drive — Confirm never pressed, zero `complete_counter_sale` calls,
+no mutating requests):** 35 tiles (3 out of stock), two adds → badge + dock total ₦1,700.00 + "2 items ·
+tap to review"; payment step shows 1 line + total and 3 methods; Cash with no till → callout and
+Confirm disabled; Transfer → Confirm enabled; discard sheet on close. The drive found the "N in bag"
+badge text invisible (the default `text-cocoa` beat `text-apricot` on stylesheet order, same shade as
+the pill) — fixed with an inline token colour. The backend path itself was exercised in rolled-back
+SQL (AD-024).
+
+**Invites (AD-025, client side):** `acceptOrganizationInvite` maps `{accepted:false, status:'expired'}`
+to an `invalid_transition` error; `app/invite.tsx` explains `email_mismatch` and expired links; the
+invite sheet warns the link only works for the invited email. Server migration pending application.

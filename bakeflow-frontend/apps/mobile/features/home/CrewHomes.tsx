@@ -7,6 +7,7 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 
 import { useSessionStore } from '../../stores/session';
+import { useCounterSaleStore } from '../../stores/ui/counterSale.store';
 import { useBranchOptions } from '../branch/hooks/useBranchOptions';
 import { DELIVERY_META } from '../delivery/deliveryDisplay';
 import { useDeliveryBoard } from '../delivery/hooks/useDeliveryBoard';
@@ -20,9 +21,11 @@ import { useTicketCount } from './hooks/useHomeData';
  * Cashier home — the prototype's `HOME.staff`: task-led, no financial complexity they do not
  * need. Today's branch sales, the one action, and their recent tickets.
  *
- * PORT-NOTE: "Record sale" (the one-tap counter sale) waits on BLOCKER-030; "New customer order"
- * is the working path. The hero is the branch's net revenue from the server — the prototype's
- * "my sales" total is a sum, so the cashier's own count sits beneath it.
+ * "Record sale" opens the one-step counter sale (AD-024); "Continue sale" appears while a basket is
+ * in progress, as in the prototype.
+ *
+ * PORT-NOTE: the hero is the branch's net revenue from the server — the prototype's "my sales"
+ * total is a sum over sales, so the cashier's own count sits beneath it.
  */
 export function CashierHome(): React.JSX.Element {
   const router = useRouter();
@@ -32,6 +35,8 @@ export function CashierHome(): React.JSX.Element {
   const week = useRevenueWeek(branch?.branchId ?? null);
   const mine = useTicketCount({ since: startOfToday(), ...(userId === null ? {} : { createdBy: userId }) });
   const today = week.today?.data;
+  // The prototype's "Continue sale · N items": a basket left mid-sale.
+  const continuing = useCounterSaleStore((s) => Object.keys(s.counts).length);
 
   return (
     <HomeScaffold context={branch?.label} refreshing={mine.isRefetching} onRefresh={() => { week.refetch(); void mine.refetch(); }}>
@@ -48,8 +53,16 @@ export function CashierHome(): React.JSX.Element {
       </Card>
 
       <View className="mt-6 gap-3">
-        <Button label="New customer order" onPress={() => router.push('/new-order')} block />
-        <Button label="Cash session" tone="secondary" onPress={() => router.push('/my-cash')} block />
+        {continuing > 0 && (
+          <Button
+            label={`Continue sale · ${continuing} item${continuing === 1 ? '' : 's'}`}
+            tone="secondary"
+            onPress={() => router.push('/new-sale')}
+            block
+          />
+        )}
+        <Button label="Record sale" onPress={() => router.push('/new-sale')} block />
+        <Button label="New customer order" tone="secondary" onPress={() => router.push('/new-order')} block />
       </View>
 
       <SectionHead title="Recent sales" link={{ label: 'All', href: '/my-sales' }} />

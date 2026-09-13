@@ -1,5 +1,39 @@
 # BakeFlow — Current Task
 
+## ⏭ NEXT (queued 2026-09-14): backend endpoints for the deferred prototype screens
+
+Owner's instruction: queue the "waiting on backend" items and tackle them after the counter sale.
+The list, with what each unblocks and which need a business decision first, is
+`BACKEND_ROADMAP.md` **P9.9** (Q1 ranged revenue report · Q2 product performance · Q3 branch
+performance · Q4 sales by staff/method · Q5 notification events · Q6 full-text search · Q7 invite
+revoke/resend · Q8 profile update · Q9 file upload). Not started. Per the standing preference, the
+first item will be proposed and confirmed before work begins.
+
+**Waiting on the owner first:** approval to apply `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql`
+(AD-025 / BLOCKER-031) to the live database.
+
+---
+
+## ✅ BLOCKER-030 RESOLVED — counter sale built exactly as the prototype's `new-sale` (2026-09-14)
+
+Owner decisions: counter sale follows the prototype's format and workflow (AD-024); invite
+acceptance is bound to the invited email with expiry persisted (AD-025).
+
+- **Live:** `complete_counter_sale()` + widened `guard_ticket_status_transition()` (migration
+  `counter_sale_shortcut`), verified in rolled-back SQL and after application.
+- **App:** `apps/mobile/app/new-sale.tsx` (products → payment → done), `SaleTile`, exact BigInt
+  `saleMath`, in-memory basket store, `completeCounterSale` API + `useCompleteCounterSale` hook,
+  Cashier home "Record sale" / "Continue sale". Read-only web drive passed; a hidden-badge bug it
+  found was fixed and re-verified.
+- **Written, NOT applied:** AD-025's invite migration — a second production change in this session
+  was stopped by the automated permission check; the client already handles both server versions.
+- Baseline `20260809_live_schema.sql` carries the applied migration in an appended section, header
+  labeled as not re-counted.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-14. **Not committed.**
+
+---
+
 ## ✅ BLOCKER-028 RESOLVED — expense reversal mechanism built (2026-09-05)
 
 User made the design decision this blocker was waiting on (asked a series of clarifying

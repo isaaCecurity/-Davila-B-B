@@ -6729,3 +6729,65 @@ npm test                                    -> 60 passed (adds quantity.test.ts 
 npx expo export --platform web              -> exported
 Playwright read-only drives (request guard) -> zero mutating requests, zero page errors per domain
 ```
+
+---
+
+## 2026-09-14 — Counter sale (AD-024, resolves BLOCKER-030) and invite email binding (AD-025, migration pending)
+
+### Decisions (owner, 2026-09-14)
+
+- Counter sale: "use the exact format and workflow the prototype used" → AD-024.
+- BLOCKER-031: "YES" to binding invite acceptance to the invited email, with judgement calls left to
+  the implementer → AD-025 (no owner override; expiry persisted by returning instead of raising;
+  lapsed invites swept on each new invite; no pg_cron).
+- Queue the "waiting on backend" endpoints next → `BACKEND_ROADMAP.md` P9.9, `CURRENT_TASK.md`.
+
+### Backend
+
+- `supabase/migrations/20260913120000_counter_sale_shortcut.sql` — **applied live** via
+  `mcp__supabase__apply_migration` (`counter_sale_shortcut`). New `complete_counter_sale()`; guard
+  trigger allows `draft → completed` only under the driver flag (AD-020 rules) or the new counter flag
+  (pickup, not trip-linked, owner/admin/branch_manager/cashier).
+- `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql` — **written, NOT applied,
+  NOT tested.** The session's automated permission check stopped a second production database change;
+  owner approval requested (`NOTIFICATIONS.md`).
+- `20260809_live_schema.sql`: counter-sale migration appended verbatim in a new "APPENDED MIGRATIONS"
+  section; header notes the function count has not been re-verified live since.
+
+### App
+
+- `apps/mobile/app/new-sale.tsx`, `features/sales/components/SaleTile.tsx`, `features/sales/saleMath.ts`
+  (+3 tests), `stores/ui/counterSale.store.ts`; `packages/api/mutations/counter-sale.ts`,
+  `errorReason()` in `packages/api/errors`; `useCompleteCounterSale` in `packages/hooks`.
+- Cashier home: "Record sale" and "Continue sale · N items".
+- Invites: `acceptOrganizationInvite` maps `accepted:false`; `app/invite.tsx` explains `email_mismatch`
+  and expired; invite sheet warns the link only works for the invited email.
+- Bug found by the web drive and fixed: "N in bag" badge text invisible (default `text-cocoa` won on
+  stylesheet order against `text-apricot`); now an inline token colour.
+- Docs: `docs/PROTOTYPE-PORT.md` (new-sale ✅, addendum), `docs/SMOKE-TEST.md` (§4b counter sale, §8
+  steps 7–8 for AD-025).
+
+### Executed evidence
+
+```
+Rolled-back SQL (DO block ending in RAISE)  -> transfer sale completed: total 1700, paid 1700, invoice,
+                                               1 sale movement; cash w/o till, empty items, 5-dp qty,
+                                               oversell, raw draft->completed, driver flag w/o trip: refused
+mcp__supabase__apply_migration counter_sale_shortcut -> applied
+Post-apply live checks (rolled back)        -> owner call ok; baker refused; EXECUTE = postgres, authenticated, service_role
+npm run typecheck --workspace apps/mobile   -> 0 errors
+npm run lint --workspace apps/mobile        -> 0 warnings
+npm test                                    -> 63 passed (5 suites)
+.venv pytest -q                             -> 12 passed
+npx expo export --platform web              -> exported
+Playwright read-only drive of /new-sale     -> 35 tiles (3 out of stock); badge "2 in bag" visible after fix;
+  (run twice, before and after the fix)        dock ₦1,700.00; cash w/o till -> Confirm disabled; transfer ->
+                                               enabled (not pressed); discard sheet; complete_counter_sale
+                                               calls 0; mutating requests none; page errors none
+```
+
+### Not done / not claimed
+
+- AD-025 migration not applied or tested. No counter sale was confirmed from the app against
+  production (run `docs/SMOKE-TEST.md` §4b on a test bakery). Native device not exercised. No new
+  dependencies. Nothing committed.

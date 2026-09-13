@@ -424,3 +424,18 @@ export function normalizeThrown(thrown: unknown): BakeflowApiError {
     cause: thrown,
   });
 }
+
+/**
+ * The machine `reason` a BakeFlow function put in its error detail (for example `no_open_till`,
+ * `email_mismatch`), or `undefined`. Lets a screen say something specific without ever reading
+ * the server's message text.
+ */
+export function errorReason(error: unknown): string | undefined {
+  if (!(error instanceof BakeflowApiError) || error.details === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(error.details) as { reason?: unknown };
+    return typeof parsed.reason === 'string' ? parsed.reason : undefined;
+  } catch {
+    return undefined;
+  }
+}

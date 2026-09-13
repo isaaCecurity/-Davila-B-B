@@ -101,7 +101,9 @@ export function InviteStaffSheet({ visible, onClose }: { visible: boolean; onClo
             <Icon name="lock" size={15} color="textMuted" />
             <Text variant="caption" className="flex-1" selectable numberOfLines={3}>{link.url}</Text>
           </View>
-          <Text variant="caption">Anyone with this link can join with this role — share it only with them.</Text>
+          <Text variant="caption">
+            The link only works for someone signed in as {link.email}. Share it with them only.
+          </Text>
         </View>
       ) : (
         <View className="gap-4">

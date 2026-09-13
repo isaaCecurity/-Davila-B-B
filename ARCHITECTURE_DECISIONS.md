@@ -967,3 +967,64 @@ spec document is preserved for the later pass rather than discarded.
 **Not a re-opening of BLOCKER-001** — invitation delivery remains RESOLVED as recorded there;
 this decision is scoped purely to whether the *broader* Resend architecture gets built now
 (no) or later (yes).
+
+
+---
+
+## AD-024 — The counter sale: one atomic `draft → completed` + full payment for cashiers and managers · APPROVED, IMPLEMENTED 2026-09-14
+
+**Decision (product owner, direct instruction 2026-09-14):** "For the cashier's walk-in sale use the
+exact format and workflow the prototype used." Resolves BLOCKER-030.
+
+The prototype's counter sale (`new-sale`) is: pick products from a grid (walk-in by default, or a
+saved customer), review the items with line totals and the total, choose Cash / Transfer / POS,
+**Confirm sale** — recorded, paid in full, stock reduced, receipt shown. That is now the contract:
+
+- **`complete_counter_sale(p_branch_id, p_items jsonb, p_payment_method, p_customer_id DEFAULT NULL,
+  p_warehouse_id DEFAULT NULL)`**, `SECURITY DEFINER`, one transaction: inserts the ticket (`pickup`,
+  `ROADSIDE` for walk-in / `REGISTERED` for a named customer, no driver trip) and its lines (prices
+  set by `guard_order_item_price()`), recomputes the subtotal, completes it through a new guarded
+  shortcut, issues the invoice, writes one `sale` stock movement per variant from the branch default
+  stockroom (or a validated explicit one), and calls `record_payment()` for the full server total.
+  Any refusal — role, branch access, unavailable product, oversold stock, cash with no open till —
+  rolls the entire sale back.
+- **Who:** owner, admin, branch_manager, cashier with branch access (function check + guard trigger).
+- **Guard:** `guard_ticket_status_transition()` keeps `draft → completed` refused everywhere except
+  inside `complete_driver_field_sale()` (flag `bakeflow.driver_field_sale_rpc`, AD-020 rules unchanged)
+  or `complete_counter_sale()` (flag `bakeflow.counter_sale_rpc`: pickup, **not** trip-linked, actors
+  owner/admin/branch_manager/cashier).
+- **Payment:** always in full, as the prototype. Methods offered: cash, transfer, POS (card accepted
+  server-side). A zero-total sale records no payment.
+- **Money on the device:** the running total and line totals are an exact BigInt preview
+  (`apps/mobile/features/sales/saleMath.ts`); the receipt shows the server's total.
+
+Migration: `supabase/migrations/20260913120000_counter_sale_shortcut.sql` (applied live 2026-09-14).
+Verified first in a rolled-back transaction (transfer sale completed with invoice, 1 sale movement,
+payment = total, `completed_at` stamped; cash without a till, empty items, 5-decimal quantity and
+oversell refused; raw `draft → completed` and the driver flag without a trip still refused), then live
+(grants `authenticated`/`service_role` only; owner call succeeds inside a rolled-back block; baker refused).
+
+## AD-025 — Invitations are redeemable only by the invited email; expiry is persisted · APPROVED 2026-09-14 — migration written, NOT YET APPLIED
+
+**Decision (product owner, 2026-09-14):** "YES" to BLOCKER-031 — acceptance must be bound to the
+invited email — "and make the appropriate good judgements and decisions on them."
+
+Judgements taken:
+- `accept_organization_invite()` compares the signed-in account's `auth.users.email` with the
+  invite's email, trimmed and case-insensitive. A mismatch is refused (`insufficient_role`, reason
+  `email_mismatch`) without changing anything and without revealing the invited address. No owner
+  override: the owner can simply send a new invite to the right address.
+- Expiry is **recorded**: the expired branch marks the invite `expired` and *returns*
+  `{ accepted: false, code: 'invalid_transition', status: 'expired' }` instead of raising (a RAISE
+  rolled the update back). Successful acceptance returns `accepted: true` alongside the existing
+  fields.
+- `create_organization_invite()` sweeps the organization's lapsed pending invites to `expired` before
+  inserting a new one. No `pg_cron` job was added (the extension is available but not installed;
+  installing it is a separate decision).
+- The client already handles both old and new server behaviour (`acceptOrganizationInvite` maps
+  `accepted: false`; the accept screen explains `email_mismatch` and `expired`; the share-link
+  warning says the link only works for the invited email).
+
+Migration: `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql`. **Status: not
+applied.** The session's automated permission check stopped further production database changes
+after AD-024 was applied; the owner must approve applying it.

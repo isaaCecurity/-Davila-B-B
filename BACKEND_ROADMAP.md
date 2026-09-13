@@ -1180,6 +1180,28 @@ behaviour → tests → acceptance gate.**
 | P9.7 | Cash session & payments | P5.4, P5.6 | queued | **ONLINE IN PROGRESS 2026-08-28.** Cash-session listing/open/close, till-scoped payment entry, and expense capture are all implemented in `apps/mobile/app/finance/` and `packages/api`/`packages/hooks`. Expense capture surfaced and fixed a real `expenses_insert` authorization gap — see the P5.6 row. Offline queuing and an interactive device click-through remain outstanding. |
 | P9.8 | Reports (mobile-light) | P5.8 | online-only | **REVENUE/CASH HALF DELIVERED 2026-08-28.** `apps/mobile/app/reports/index.tsx` — one card per branch, "today" resolved server-side against the organization's own timezone, showing gross/net revenue and gross/net collected via `useDailyRevenueSummary()`. COGS/gross-profit/margin explicitly not shown (BLOCKER-018, unchanged) — the screen says so rather than omitting silently. Linked from the catalog screen. |
 
+### P9.9 · Backend endpoints for the deferred prototype screens — QUEUED NEXT (2026-09-14)
+
+Queued by the owner on 2026-09-14 ("Queue the waiting-on-the-backend issue … we would tackle that")
+after the prototype port (`bakeflow-frontend/docs/PROTOTYPE-PORT.md`). Each item is a screen or
+control the port left out because no backend exists. **Not started.** Business rules marked *decide*
+need an owner answer before building (CLAUDE.md blocker rule).
+
+| # | Capability | Unblocks (prototype screen / control) | Notes / open questions |
+|---|---|---|---|
+| Q1 | Ranged revenue report (day / week / month / custom range, per branch) | `reports` period switcher, `finance` trend beyond one day | Extends `daily_revenue_summary`; timezone = organization's; money summed server-side only |
+| Q2 | Product performance (units, revenue per product/variant over a range) | `report-products` | Revenue only — COGS/margin stay out (AD-022) |
+| Q3 | Branch performance (revenue, collected, tickets per branch over a range) | `report-branches` | Owner/admin only? *decide* |
+| Q4 | Sales by staff member and by payment method | `sales-monitor`, supervisor/manager homes | Who may see other staff's figures? *decide* |
+| Q5 | Notification events (history table + read state) | `notifications` history, bell badge | Which events notify whom? *decide*; P6.3 is DEFERRED today |
+| Q6 | Full-text search across orders, customers, products | `search` (today: newest 200 orders, client filter) | Postgres FTS / trigram; RLS-safe RPC |
+| Q7 | Invite revoke and resend | `invites` per-row actions | Resend = new token + expire old; audit both |
+| Q8 | Profile update (name, phone, avatar) | `account` edit | Column allowlist; avatar needs Q9 |
+| Q9 | File upload (expense receipts, proof of delivery, avatars) | `add-expense` receipt, delivery proof photo | Buckets and tenant-folder policies already exist; needs row linkage columns + client picker dependency (ask before adding) |
+
+Pending before this queue (not part of it): apply AD-025's invite migration
+(`20260913120100_bind_invite_acceptance_to_email.sql`, BLOCKER-031) once the owner approves.
+
 **State management:** Zustand stores per `FRONTEND-STRUCTURE.md` §3 — `auth`,
 `organization`, `branch`, `permissions`, `settings`, `sync`, `ui`.
 **Rule:** screens never call Supabase directly — Screen → Feature Hook → Feature

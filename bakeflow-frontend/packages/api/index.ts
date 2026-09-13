@@ -33,6 +33,7 @@ export {
 
 export {
   BakeflowApiError,
+  errorReason,
   normalizeFunctionsError,
   normalizePostgrestError,
   normalizeThrown,
@@ -194,6 +195,16 @@ export { listAuditEvents, listDrivers, listOrganizationInvites, listStaffRoles }
 // an RPC *plus* a token refresh, and separating those produces a UI that switched while
 // the database did not.
 export { listMyOrganizationRoles, listMyOrganizations } from './queries/organizations';
+
+// AD-024 — the one-step counter sale (resolves BLOCKER-030).
+export {
+  COUNTER_SALE_METHODS,
+  completeCounterSale,
+  type CompleteCounterSaleInput,
+  type CounterSaleLine,
+  type CounterSaleMethod,
+  type CounterSaleResult,
+} from './mutations/counter-sale';
 
 // P6.2 — invitation creation and delivery.
 export {

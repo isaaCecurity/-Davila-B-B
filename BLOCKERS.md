@@ -1846,8 +1846,10 @@ needed.
 **Needed:** <the specific decision or action>
 ```
 
-## BLOCKER-030 · No single-action counter sale for cashiers and managers
-**Status:** OPEN · **Affects:** prototype port — `new-sale` counter flow (`bakeflow-frontend/docs/PROTOTYPE-PORT.md`, Sales) · **Type:** business rule / architecture
+## ✅ BLOCKER-030 · No single-action counter sale for cashiers and managers — RESOLVED 2026-09-14 (AD-024)
+**Resolution:** owner decided the counter sale follows the prototype's exact format and workflow. Built as `complete_counter_sale()` (one atomic transaction incl. full payment), applied live and verified; screen `apps/mobile/app/new-sale.tsx`. See ARCHITECTURE_DECISIONS.md AD-024.
+
+**Status (original):** OPEN · **Affects:** prototype port — `new-sale` counter flow (`bakeflow-frontend/docs/PROTOTYPE-PORT.md`, Sales) · **Type:** business rule / architecture
 
 The design prototype rings up a walk-in counter sale in one action: pick items, take payment,
 done. The live ticket lifecycle has no such path for non-drivers. `STATE-MACHINES.md` §1 walks a
@@ -1869,8 +1871,10 @@ pickup ticket (mirroring AD-020's driver shortcut), and whether payment is recor
 Until then the port builds customer orders as drafts (a documented, bounded contract) and
 omits the one-tap counter sale.
 
-## BLOCKER-031 · Invite acceptance is not bound to the invited email address
-**Status:** OPEN · **Affects:** invitations — `app/invite.tsx`, `accept_organization_invite()` · **Type:** security / authorization decision
+## BLOCKER-031 · Invite acceptance is not bound to the invited email address — DECIDED 2026-09-14 (AD-025), migration pending application
+**Resolution so far:** owner said YES — bind acceptance to the invited email and persist expiry. Migration `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql` is written and the client is ready for it, but it has **not been applied** to the live database (automated permission check stopped further production changes this session). Closes when applied and verified. See ARCHITECTURE_DECISIONS.md AD-025.
+
+**Status (original):** OPEN · **Affects:** invitations — `app/invite.tsx`, `accept_organization_invite()` · **Type:** security / authorization decision
 
 Read live 2026-09-13 while porting the invite screens. `accept_organization_invite(p_raw_token)`
 looks the invite up by token hash, checks it is `pending` and unexpired, and grants the role to

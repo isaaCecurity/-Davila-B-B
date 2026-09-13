@@ -60,6 +60,26 @@ Each step says what to do, then what you should see. Tick it or note what happen
    → The Cash screen shows it closed **immediately**, with *Short by / Over by* and the note.
 5. Finance tab → the Cash session tile reads *Closed* with the last variance.
 
+### 4b. Counter sale (cashier, manager)
+
+1. Cashier Home → **Record sale**. Leave *Walk-in customer*. Tap **Tap to Add** on a product twice,
+   and once on another. → Badge "2 in bag" on the first; dock total = the sum of the prices; "3 items ·
+   tap to review".
+2. Tap **−1** on the first tile. → Badge "1 in bag", total drops by one price. Tap the badge → set
+   `4` → total updates.
+3. Close (×) with items in the bag. → "Discard this sale?" — cancel it. Go Home. → **Continue sale ·
+   N items** is shown; tap it to come back to the same bag.
+4. **Continue** → Items list with line totals and the total. Choose **Cash** with *no* till open.
+   → Callout says a till must be open; **Confirm sale** is disabled.
+5. Open a till (§4.1), come back, choose Cash → **Confirm sale**.
+   → Ring, "Sale recorded", ticket number, total counts up to the same figure, recap lines.
+6. **Today's sales** → the ticket is *Completed* and *Paid*. Stock for those products dropped by the
+   quantities sold. The till ledger shows the cash payment.
+7. **New sale** → pick a saved customer, **Transfer** → Confirm. → Completed and paid; no till needed.
+8. Try to sell more than is in stock (use the badge to set a large number). → "There is not enough stock for one
+   of these products", and nothing is recorded (no new ticket, stock unchanged).
+9. As a **baker** or **driver**, check that Record sale is not offered.
+
 ## 5. Stock (owner, manager, baker)
 
 1. More → **Stock** → tap a product → set the count to a new number → *Correction* → Save count.
@@ -117,6 +137,11 @@ Needs an order with delivery fulfilment and a driver account.
 4. Owner: Invites → the invite shows **Accepted**; Staff lists the new person with their branch.
 5. Open the same link again. → "already been used" message.
 6. As a **manager**, check that + is not offered (only owners/admins can invite).
+7. *(Once AD-025's migration is applied)* Send an invite to one address, then open the link while
+   signed in as a **different** account. → "This invite was sent to a different email address";
+   Invites still shows it **Pending**.
+8. *(Once AD-025's migration is applied)* Open a link older than 7 days. → "This invite has expired";
+   Invites now shows it **Expired**.
 
 ## 9. Role homes (one pass per role)
 

@@ -79,6 +79,7 @@ import {
   listAuditEvents,
   createAndSendInvite,
   acceptOrganizationInvite,
+  completeCounterSale,
   listStockMovements,
   listProductVariants,
   listProducts,
@@ -101,6 +102,8 @@ import {
   updateDeliveryDetails,
   verifyTripLoading,
   type AcceptInviteResult,
+  type CompleteCounterSaleInput,
+  type CounterSaleResult,
   type AdjustStockInput,
   type CreateInviteInput,
   type CreateInviteResult,
@@ -1680,5 +1683,39 @@ export function useAuditEvents(
     queryKey: queryKeys.auditEvents(tenantId ?? 'none'),
     queryFn: () => listAuditEvents(client),
     enabled: tenantId !== null && (options.enabled ?? true),
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Counter sale (AD-024)                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Ring up a counter sale in one atomic step. No retry: a replay after an unseen success would
+ * sell the goods twice. Everything the sale touches is refreshed afterwards.
+ */
+export function useCompleteCounterSale(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<CounterSaleResult, Error, CompleteCounterSaleInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CompleteCounterSaleInput) => {
+      requireTenant(tenantId);
+      return completeCounterSale(client, input);
+    },
+    onSuccess: () => {
+      const tenant = requireTenant(tenantId);
+      invalidatePrefixes(
+        queryClient,
+        tenant,
+        'tickets',
+        'payment-tickets',
+        'product-stock-levels',
+        'stock-movements',
+        'daily-revenue-summary',
+        'cash-sessions',
+      );
+    },
   });
 }
