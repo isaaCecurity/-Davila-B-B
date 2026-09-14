@@ -934,7 +934,7 @@ hands.
 
 - **Decided since the report:** BLOCKER-030 resolved as AD-024 (counter sale built, backend live);
   BLOCKER-031 decided as AD-025 (invite acceptance bound to the invited email, expiry persisted) —
-  migration written, **not yet applied**; the client handles both server versions. Still open from
+  applied live; extended by AD-026 (invites by role to email or phone, manager invites, SMS sign-in). Still open from
   before: BLOCKER-016 (returned deliveries restore no stock), BLOCKER-017 (production status writable
   directly).
 - **Writes not executed against production:** every create, transition, payment, trip and invite path is
@@ -966,8 +966,8 @@ hands.
    (archiving), admin-settings, audit detail with safe before/after diffs, and the report screens once
    their endpoints exist (product and branch performance, sales by staff and method; P&L if AD-022 is
    lifted).
-4. **Apply AD-025's migration** (BLOCKER-031) before relying on shared invite links; the counter sale
-   (AD-024) is live.
+4. **Switch on Supabase phone sign-in** (an SMS provider) before relying on phone invites; the counter
+   sale (AD-024) and invite binding (AD-025/026) are live.
 5. **Choose the framework with the shared packages in mind** — a React-based framework keeps the hooks
    and TanStack Query cache reusable. Expo's web export already renders the mobile screens and can serve
    as a preview, but it is not a desktop-grade management UI.
@@ -1004,3 +1004,26 @@ SQL (AD-024).
 **Invites (AD-025, client side):** `acceptOrganizationInvite` maps `{accepted:false, status:'expired'}`
 to an `invalid_transition` error; `app/invite.tsx` explains `email_mismatch` and expired links; the
 invite sheet warns the link only works for the invited email. Server migration pending application.
+
+### Addendum 2026-09-14 (later) — invites by role, email or phone (AD-026)
+
+- `InviteStaffSheet`: **Send to** Email | Phone number; phone field normalises Nigerian numbers and shows
+  "Invite goes to +234 …"; **Role** chips start with nothing selected (Send disabled until chosen), filtered
+  by inviter (`invitableRolesFor`: owner all, admin below admin, manager crew); **Works at** for branch
+  roles. Phone invites skip `send-invite-email` and open the share sheet ("Send by WhatsApp or SMS").
+- `(tabs)/staff` and `invites`: branch managers may invite (`canInvite`); rows show email or grouped phone
+  (`inviteRecipient`); unnamed phone sign-ups show by phone.
+- `sign-in`: Email | Phone number. Phone → Send code → 6-digit code → Sign in (`requestPhoneCode` /
+  `verifyPhoneCode` in `@bakeflow/auth`); asks for a name when an invite link is waiting; maps Supabase's
+  provider-disabled, bad-code and rate-limit errors to plain words.
+- `invite`: explains `phone_mismatch`; shows the signed-in email or phone.
+- `@bakeflow/validation`: `toE164Phone`, `formatPhone` (+7 tests); invite schema/type carry `phone`.
+
+**Verified (web export, read-only — no code requested, no invite sent; zero OTP/invite calls, no
+mutating requests, no page errors):** sign-in phone mode (partial number → error + Send disabled; full
+number → Send enabled; password hidden); invite sheet (Send disabled at start; phone hint; no role
+preselected; owner offered Cashier…Admin; choosing Cashier shows Works at and enables Send; Admin hides
+Works at); Invites list loads with the new `phone` column. The drive caught the sign-in method switch
+stretching to fill the screen (horizontal ScrollView in a centred column) — wrapped and re-verified.
+Manager-only role list covered by unit tests (no manager account on the smoke tenant).
+

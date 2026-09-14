@@ -33,7 +33,9 @@ export const staffRoleSchema = z.object({
 
 export const organizationInviteSchema = z.object({
   id: uuidSchema,
-  email: z.string().min(3),
+  // AD-026: exactly one of email / phone (live CHECK organization_invites_one_contact).
+  email: z.string().min(3).nullable(),
+  phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/).nullable(),
   status: z.enum(INVITE_STATUSES),
   role_key: z.string().min(1),
   role_name: z.string().min(1),

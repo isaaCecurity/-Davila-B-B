@@ -9,8 +9,25 @@ performance · Q4 sales by staff/method · Q5 notification events · Q6 full-tex
 revoke/resend · Q8 profile update · Q9 file upload). Not started. Per the standing preference, the
 first item will be proposed and confirmed before work begins.
 
-**Waiting on the owner first:** approval to apply `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql`
-(AD-025 / BLOCKER-031) to the live database.
+**Owner setup pending (not blocking the queue):** enable Supabase phone sign-in with an SMS provider so
+phone invites (AD-026) can be accepted — see `NOTIFICATIONS.md`.
+
+---
+
+## ✅ Invites by role, to email or phone; manager invites; SMS sign-in — AD-025 applied + AD-026 (2026-09-14)
+
+Owner approved applying the invite-binding migration and asked that invites be by role, with the
+sender entering an email or phone number, and managers able to invite. Decisions asked and answered:
+phone invites bound to an SMS-verified phone; managers invite crew into their own branch only.
+
+- **Live:** `bind_invite_acceptance_to_email` (10/10 rolled-back checks) and
+  `invite_by_role_email_or_phone` (26/26 rolled-back checks), both applied and re-checked live.
+- **App:** invite sheet (Send to Email/Phone, role required, role list by inviter), staff/invites gates
+  for managers, phone-aware invites list and accept screen, sign-in with SMS code.
+- **Checks:** typecheck 0, lint 0, 72 unit tests, read-only web drive clean.
+- **Owner action:** turn on Supabase phone sign-in + SMS provider.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-14 (invites entry). **Not committed.**
 
 ---
 

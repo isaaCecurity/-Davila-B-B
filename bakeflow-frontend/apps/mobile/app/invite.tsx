@@ -2,6 +2,7 @@ import { BakeflowApiError, errorReason } from '@bakeflow/api';
 import { getSupabaseClient, setActiveOrganization } from '@bakeflow/auth';
 import { clearOrganizationScopedCache, useAcceptInvite } from '@bakeflow/hooks';
 import { Button, Callout, Card, ConfirmRing, EmptyState, Icon, ScreenScroll, Text } from '@bakeflow/ui';
+import { formatPhone } from '@bakeflow/validation';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -14,7 +15,10 @@ function describe(error: Error): string {
   const code = error instanceof BakeflowApiError ? error.code : 'unexpected_error';
   const reason = errorReason(error);
   if (reason === 'email_mismatch') {
-    return 'This invite was sent to a different email address. Sign out, then sign in (or sign up) with the email the invite went to.';
+    return 'This invite was sent to a different email address. Sign out, then sign in with the email the invite went to.';
+  }
+  if (reason === 'phone_mismatch') {
+    return 'This invite was sent to a different phone number. Sign out, then sign in with a code sent to the phone number the invite went to.';
   }
   if (reason === 'expired') return 'This invite has expired. Ask whoever invited you to send a new one.';
   if (code === 'invalid_transition') {
@@ -35,8 +39,9 @@ function describe(error: Error): string {
  * it. The navigation gate lets a signed-in user stay here with or without an organization, and
  * carries the token through sign-in when the link was opened signed out.
  *
- * AD-025: only the account the invite was sent to can accept it; a different signed-in account is
- * told to sign in with the invited email, and an expired link says so.
+ * AD-025 / AD-026: only the account the invite was sent to can accept it — its email, or the phone
+ * number it signed in with by SMS code. A different signed-in account is told which to use, and an
+ * expired link says so.
  *
  * PORT-NOTE: the prototype has no invitee screen (its invites are fictional); this one is new,
  * styled after its confirm panel.
@@ -48,6 +53,8 @@ export default function AcceptInviteScreen(): React.JSX.Element {
   const pending = usePendingInviteStore((s) => s.token);
   const clearPending = usePendingInviteStore((s) => s.clear);
   const email = useSessionStore((s) => s.session?.user.email ?? '');
+  const phone = useSessionStore((s) => s.session?.user.phone ?? '');
+  const account = email !== '' ? email : phone !== '' ? formatPhone(`+${phone.replace(/^\+/, '')}`) : '';
   const accept = useAcceptInvite(getSupabaseClient());
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -119,7 +126,7 @@ export default function AcceptInviteScreen(): React.JSX.Element {
         </View>
         <Text className="mt-4 text-title-1 font-bold tracking-[-0.6px] text-white">You have been invited</Text>
         <Text className="mt-1.5 text-foot text-white/60">
-          Accepting adds this account{email === '' ? '' : ` (${email})`} to the bakery that invited you, with the role they chose. It must be the email the invite was sent to.
+          Accepting adds this account{account === '' ? '' : ` (${account})`} to the bakery that invited you, with the role they chose. It must be the email or phone number the invite was sent to.
         </Text>
       </Card>
 

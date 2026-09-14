@@ -125,6 +125,35 @@ export async function signInWithPassword(email: string, password: string): Promi
   return data.session;
 }
 
+/**
+ * Phone sign-in, step 1 (AD-026): text a one-time code to `phone` (E.164, e.g. +2348031234567).
+ *
+ * Creates the account on first use — that is how someone invited by phone gets one. `fullName`
+ * is stored only when the account is created (Supabase applies `options.data` at sign-up only;
+ * `handle_new_user()` copies it and the phone into `profiles`).
+ *
+ * Needs the Phone provider and an SMS provider enabled in the Supabase project; until then
+ * Supabase refuses with an "unsupported phone provider" / "phone signups disabled" error.
+ */
+export async function requestPhoneCode(phone: string, fullName?: string): Promise<void> {
+  const name = fullName?.trim() ?? '';
+  const { error } = await getSupabaseClient().auth.signInWithOtp({
+    phone,
+    options: { shouldCreateUser: true, ...(name !== '' ? { data: { full_name: name } } : {}) },
+  });
+  if (error !== null) throw error;
+}
+
+/** Phone sign-in, step 2: exchange the texted code for a session (confirms the phone). */
+export async function verifyPhoneCode(phone: string, code: string): Promise<Session> {
+  const { data, error } = await getSupabaseClient().auth.verifyOtp({ phone, token: code.trim(), type: 'sms' });
+  if (error !== null) throw error;
+  if (data.session === null) {
+    throw new Error('The code was accepted but no session was returned.');
+  }
+  return data.session;
+}
+
 export async function signOut(): Promise<void> {
   const { error } = await getSupabaseClient().auth.signOut();
   if (error !== null) throw error;

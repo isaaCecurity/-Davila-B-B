@@ -1004,7 +1004,7 @@ payment = total, `completed_at` stamped; cash without a till, empty items, 5-dec
 oversell refused; raw `draft → completed` and the driver flag without a trip still refused), then live
 (grants `authenticated`/`service_role` only; owner call succeeds inside a rolled-back block; baker refused).
 
-## AD-025 — Invitations are redeemable only by the invited email; expiry is persisted · APPROVED 2026-09-14 — migration written, NOT YET APPLIED
+## AD-025 — Invitations are redeemable only by the invited email; expiry is persisted · APPROVED, IMPLEMENTED 2026-09-14
 
 **Decision (product owner, 2026-09-14):** "YES" to BLOCKER-031 — acceptance must be bound to the
 invited email — "and make the appropriate good judgements and decisions on them."
@@ -1025,6 +1025,46 @@ Judgements taken:
   `accepted: false`; the accept screen explains `email_mismatch` and `expired`; the share-link
   warning says the link only works for the invited email).
 
-Migration: `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql`. **Status: not
-applied.** The session's automated permission check stopped further production database changes
-after AD-024 was applied; the owner must approve applying it.
+Migration: `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql` — applied live
+2026-09-14 after the owner's approval. Verified first in a rolled-back transaction (10/10: wrong
+account refused and the invite left pending; expired invite returns `accepted:false` and is stored
+`expired`; matching email with different case/whitespace accepted; reuse refused; a new invite sweeps
+a lapsed one; unknown token refused), then live (both functions carry the change; EXECUTE unchanged —
+`authenticated`, `service_role`; no rows left behind). Extended the same day by AD-026.
+
+## AD-026 — Invitations are by role, to an email or a phone number; branch managers invite crew; phone sign-in by SMS code · APPROVED, IMPLEMENTED 2026-09-14
+
+**Decision (product owner, 2026-09-14):** "the invite link is by role only so when the manager or owner
+wants to invite people into the organization the role needs to be selected … and the person sending
+the invite link has to input the email or number of the user they want to invite." Two follow-up
+questions were asked; answers: phone invites are bound to a phone **verified by SMS sign-in** (not a
+bearer link), and a branch manager invites **crew only, into their own branch**.
+
+- **By role.** The invite sheet never pre-selects a role; Send stays disabled until one is chosen. The
+  RPC refuses an unknown role (`invalid_request` / `role_required`).
+- **Email or phone.** `organization_invites.email` is nullable, new `phone` (E.164); a CHECK requires
+  exactly one; one pending invite per phone per organization. The app normalises Nigerian local numbers
+  (`0803 123 4567` → `+2348031234567`, `toE164Phone` in `@bakeflow/validation`); the server strips
+  separators and validates E.164.
+- **Who may invite.** Owner: any role. Admin: any role below admin. Branch manager: cashier, baker,
+  driver, supervisor, only into a branch where they hold `branch_manager` (`private.manages_branch`) —
+  never another manager, never organization-wide. Branch managers can read the invites for those
+  branches (`organization_invites_select`).
+- **Acceptance is bound to the addressee.** Email invite: the account's email must match **and be
+  confirmed**. Phone invite: `auth.users.phone` must match **and be confirmed** (`phone_confirmed_at`),
+  which only SMS-code sign-in sets. Otherwise `insufficient_role` / `phone_mismatch` (or
+  `email_mismatch`).
+- **Phone sign-in.** The sign-in screen offers Email or Phone number; phone sends a 6-digit code
+  (`signInWithOtp`) and verifies it (`verifyOtp`, type `sms`). The first code creates the account — how
+  a phone invitee gets one — and, when an invite link is waiting, the screen asks for their name.
+  `handle_new_user()` now copies a phone sign-up's number into `profiles.phone`.
+- **Delivery.** Email invites still go through `send-invite-email` (simulated until an email provider is
+  set — AD-023). Phone invites are not texted by the system: the inviter shares the link by WhatsApp or
+  SMS from the share sheet. The Edge Function is unchanged and is not called for phone invites.
+- **External setup needed (owner):** Supabase Dashboard → Authentication → Providers → **Phone** must be
+  enabled with an SMS provider (e.g. Termii, Twilio). Until then Supabase refuses to send codes and the
+  app says phone sign-in is not switched on. Everything else works now.
+
+Migration: `supabase/migrations/20260914100000_invite_by_role_email_or_phone.sql`, applied live
+2026-09-14. Verified first in a rolled-back transaction (26/26 — see IMPLEMENTATION_LOG.md), then live.
+

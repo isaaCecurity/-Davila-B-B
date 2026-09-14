@@ -1641,14 +1641,15 @@ export function useOrganizationInvites(
 }
 
 /**
- * Create an invitation and hand it to `send-invite-email`. The result's `delivery.status` says
- * whether an email actually went out (`simulated` while no email provider is configured —
- * AD-023), so the screen can offer the link instead of claiming it was sent.
+ * Create an invitation and, for an email invite, hand it to `send-invite-email`. The result's
+ * `delivery.status` says whether an email actually went out (`simulated` while no email provider
+ * is configured — AD-023), so the screen can offer the link instead of claiming it was sent.
+ * A phone invite (AD-026) comes back with `delivery: null`: the inviter shares the link.
  */
 export function useCreateAndSendInvite(
   client: BakeflowClient,
   tenantId: string | null,
-): UseMutationResult<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] }, Error, CreateInviteInput> {
+): UseMutationResult<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] | null }, Error, CreateInviteInput> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreateInviteInput) => {

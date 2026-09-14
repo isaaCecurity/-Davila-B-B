@@ -43,6 +43,7 @@ export { deliverySchema } from './delivery';
 export { organizationMembershipSchema, organizationRoleSchema } from './organization';
 
 export { auditEventSchema, driverSchema, inviteEmailSchema, organizationInviteSchema, staffRoleSchema } from './staff';
+export { DEFAULT_COUNTRY_CODE, formatPhone, toE164Phone } from './phone';
 
 export { driverTripSchema } from './driver-trip';
 

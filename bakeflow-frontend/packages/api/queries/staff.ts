@@ -117,7 +117,8 @@ export async function listStaffRoles(client: BakeflowClient): Promise<StaffRole[
 
 interface InviteEmbedRow {
   id: Uuid;
-  email: string;
+  email: string | null;
+  phone: string | null;
   status: string;
   branch_id: Uuid | null;
   expires_at: string;
@@ -128,14 +129,14 @@ interface InviteEmbedRow {
 
 /**
  * The active organization's invitations, newest first. `token_hash` is deliberately not in
- * the projection. Owner/admin only (`organization_invites_select`); anyone else gets an empty
- * list from RLS, not an error.
+ * the projection. Owner/admin see all; a branch manager sees invites for the branches they manage
+ * (`organization_invites_select`, AD-026); anyone else gets an empty list from RLS, not an error.
  */
 export async function listOrganizationInvites(client: BakeflowClient): Promise<OrganizationInvite[]> {
   const data = await run(
     client
       .from('organization_invites')
-      .select('id,email,status,branch_id,expires_at,accepted_at,created_at,roles!inner(key,name)')
+      .select('id,email,phone,status,branch_id,expires_at,accepted_at,created_at,roles!inner(key,name)')
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(200),
@@ -145,6 +146,7 @@ export async function listOrganizationInvites(client: BakeflowClient): Promise<O
   const flattened = rows.map((r) => ({
     id: r.id,
     email: r.email,
+    phone: r.phone,
     status: r.status,
     role_key: r.roles?.key,
     role_name: r.roles?.name,

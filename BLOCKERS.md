@@ -1871,8 +1871,8 @@ pickup ticket (mirroring AD-020's driver shortcut), and whether payment is recor
 Until then the port builds customer orders as drafts (a documented, bounded contract) and
 omits the one-tap counter sale.
 
-## BLOCKER-031 · Invite acceptance is not bound to the invited email address — DECIDED 2026-09-14 (AD-025), migration pending application
-**Resolution so far:** owner said YES — bind acceptance to the invited email and persist expiry. Migration `supabase/migrations/20260913120100_bind_invite_acceptance_to_email.sql` is written and the client is ready for it, but it has **not been applied** to the live database (automated permission check stopped further production changes this session). Closes when applied and verified. See ARCHITECTURE_DECISIONS.md AD-025.
+## ✅ BLOCKER-031 · Invite acceptance is not bound to the invited email address — RESOLVED 2026-09-14 (AD-025, extended by AD-026)
+**Resolution:** owner said YES — acceptance is bound to the addressee and expiry is persisted. Migration `20260913120100_bind_invite_acceptance_to_email.sql` applied live after the owner's approval and verified (10/10 rolled-back checks + live check). Extended the same day: invites go to an email **or** a phone number, and acceptance requires a confirmed email or an SMS-confirmed phone (`20260914100000_invite_by_role_email_or_phone.sql`, AD-026). See ARCHITECTURE_DECISIONS.md AD-025/AD-026.
 
 **Status (original):** OPEN · **Affects:** invitations — `app/invite.tsx`, `accept_organization_invite()` · **Type:** security / authorization decision
 

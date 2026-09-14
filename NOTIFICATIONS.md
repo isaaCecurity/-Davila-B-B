@@ -4,17 +4,31 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION NEEDED: approve applying the invite-link fix to the live database (2026-09-14)
+## ACTION NEEDED: switch on phone sign-in in Supabase (2026-09-14)
 
-You said YES to binding invite links to the invited email. The fix is written and the app is ready
-for it: only the person the invite was sent to can accept it, and expired invites are now properly
-marked "expired". It has **not been applied to the live database yet** — the session's safety check
-paused before a second production database change, so it needs your go-ahead.
+Invites can now go to a **phone number**, and the invited person signs in with a code sent by SMS.
+The app side is done, but Supabase will not send those codes until phone sign-in is switched on.
 
-**What to do:** reply "apply the invite migration" (or allow Supabase migrations in the permission
-settings) and it will be tested in a rolled-back transaction, applied, and verified.
+**What to do:** Supabase Dashboard → your project → **Authentication → Sign In / Providers → Phone** →
+enable it and connect an SMS provider (Termii is common in Nigeria; Twilio also works). Each code
+costs one SMS from that provider. Until this is done, choosing "Phone number" on the sign-in screen
+shows "Signing in by phone is not switched on yet" — email sign-in and email invites are unaffected.
 
-See `BLOCKERS.md` BLOCKER-031 and `ARCHITECTURE_DECISIONS.md` AD-025.
+See `ARCHITECTURE_DECISIONS.md` AD-026.
+
+---
+
+## DONE: invites are by role, to an email or phone number, and only the right person can use them (2026-09-14)
+
+- Owners, admins **and branch managers** can invite. The sender must pick the role, then enter an
+  email **or** a phone number (and the branch, for branch roles).
+- Branch managers can invite cashiers, bakers, drivers and supervisors — only into their own branch.
+- An invite link only works for the person it was sent to: the same email, or the same phone number
+  signed in by SMS code. Expired invites now show as **Expired**.
+- Email invites are emailed (once email delivery is set up); phone invites are shared by the sender
+  over WhatsApp or SMS from the app.
+
+See `BLOCKERS.md` BLOCKER-031 (resolved) and `ARCHITECTURE_DECISIONS.md` AD-025/AD-026.
 
 ---
 

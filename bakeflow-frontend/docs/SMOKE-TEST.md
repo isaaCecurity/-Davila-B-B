@@ -125,23 +125,35 @@ Needs an order with delivery fulfilment and a driver account.
     time; optional). → "Ticket saved, sale not completed" → reconnect → **Try again** completes the
     *same* ticket (check Tickets: only one new ticket).
 
-## 8. Staff and invitations (owner or admin)
+## 8. Staff and invitations (owner, admin, branch manager)
 
-1. More → Staff & activity → **+** → an email you can open on a phone → role *Cashier* → branch →
-   **Send invite**.
+Invites are **by role**, to an **email or a phone number**, and only the invited person can use the
+link (AD-025/AD-026). Phone steps need phone sign-in switched on in Supabase (see `NOTIFICATIONS.md`).
+
+1. Owner: More → Staff & activity → **+**. → *Send invite* is disabled; no role is selected.
+2. Choose **Email**, enter an address you can open on a phone, pick role *Cashier* → a branch appears
+   under *Works at* → **Send invite**.
    → While email delivery is not configured you see **"No email was sent"** with the link and a
    **Share link** button. (Once a Resend key is set, it says "Invite sent" instead.)
-2. Open the link on the invitee's phone **while signed out**. → Sign-in appears; after signing in
-   you land on **You have been invited** automatically.
-3. **Accept invitation**. → "Welcome to …", then the invitee's Home for their role.
+3. Open the link on the invitee's phone **while signed out** → sign in **with that email** → you land on
+   **You have been invited** → **Accept invitation**. → "Welcome to …", then the Cashier home.
 4. Owner: Invites → the invite shows **Accepted**; Staff lists the new person with their branch.
 5. Open the same link again. → "already been used" message.
-6. As a **manager**, check that + is not offered (only owners/admins can invite).
-7. *(Once AD-025's migration is applied)* Send an invite to one address, then open the link while
-   signed in as a **different** account. → "This invite was sent to a different email address";
-   Invites still shows it **Pending**.
-8. *(Once AD-025's migration is applied)* Open a link older than 7 days. → "This invite has expired";
-   Invites now shows it **Expired**.
+6. Send an invite to one email, then open its link signed in as a **different** account.
+   → "This invite was sent to a different email address"; Invites still shows it **Pending**.
+7. **Phone invite:** + → **Phone number** → type `0803 123 4567` → hint "Invite goes to +234 803 123 4567"
+   → role *Driver* → branch → **Send invite**. → "Send the invite" with **Send by WhatsApp or SMS**.
+   Invites lists it by the phone number.
+8. On the invitee's phone, open that link signed out → **Phone number** → the number → the *Your name*
+   field shows → **Send code** → enter the texted code → **Sign in** → **Accept invitation**.
+   → Welcome, Driver home. Staff shows them by name (or by phone if no name was given).
+9. Open a phone invite while signed in with a different phone or an email account.
+   → "This invite was sent to a different phone number".
+10. **Branch manager:** sign in as a manager → Staff → **+**. → Roles offered are only Cashier, Baker,
+    Driver, Supervisor; *Works at* lists their branch. Send one. → Invites shows only their branch's
+    invites.
+11. As a **cashier**, check that + is not offered and Invites explains who sends invites.
+12. Open a link older than 7 days. → "This invite has expired"; Invites now shows it **Expired**.
 
 ## 9. Role homes (one pass per role)
 

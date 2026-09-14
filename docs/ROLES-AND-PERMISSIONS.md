@@ -160,3 +160,17 @@ A Branch Manager can raise, lower, or fully reconfigure this for any individual 
 | Drivers "create walk-in tickets"; Ticket is the core sales entity | **Correct — not outdated.** A previous revision of this table said the opposite (that the canonical entity was Order and no `tickets` table existed). The live database has `tickets` and `ticket_items`, `tickets.*` permission keys, and grants `tickets.create` to `driver`. Normalize "order" to "ticket", not the other way round. |
 
 If any other document (including other EB chapters) references "Manager" as a standalone role or describes Web as operationally primary, treat this document as authoritative and flag the conflict rather than silently following the older text. References to "Ticket" as an entity are correct and should be left alone.
+
+## Inviting staff (AD-026, 2026-09-14)
+
+Invitations are **by role**: the inviter chooses the role explicitly and enters the invitee's email
+**or** phone number. `create_organization_invite()` enforces who may invite whom:
+
+| Inviter | May invite | Branch |
+|---|---|---|
+| Owner | any role | organization-wide for owner/admin; a branch (or organization-wide) otherwise |
+| Admin | any role except owner and admin | as above |
+| Branch Manager | cashier, baker, driver, supervisor — never another branch manager | only a branch they manage |
+
+Branch managers see the invites for the branches they manage. Acceptance is bound to the addressee:
+the confirmed email for an email invite, the phone number verified by SMS sign-in for a phone invite.

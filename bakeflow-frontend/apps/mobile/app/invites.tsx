@@ -9,7 +9,7 @@ import { View } from 'react-native';
 import { ErrorState, NoOrganizationState } from '../components/ScreenState';
 import { useActivePersona } from '../features/auth/hooks/useActivePersona';
 import { InviteStaffSheet } from '../features/staff/components/InviteStaffSheet';
-import { inviteView } from '../features/staff/staffDisplay';
+import { canInvite, inviteRecipient, inviteView } from '../features/staff/staffDisplay';
 import { useSessionStore } from '../stores/session';
 
 const stamp = new Intl.DateTimeFormat('en-NG', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
@@ -17,8 +17,9 @@ const stamp = new Intl.DateTimeFormat('en-NG', { day: 'numeric', month: 'short',
 /**
  * Invites — the prototype's `invites` list: everyone invited, and where each invite stands.
  *
- * Owner/admin only by RLS (`organization_invites_select`); another role sees an explanation
- * rather than an empty list that looks like "nobody was invited".
+ * Owner/admin see every invite; a branch manager sees invites for the branches they manage
+ * (`organization_invites_select`, AD-026). Another role sees an explanation rather than an empty
+ * list that looks like "nobody was invited". Each invite is addressed to an email or a phone.
  *
  * PORT-NOTE: the prototype's per-invite "Copy invite link", "Resend" and "Revoke" have no
  * backend: only a hash of the token is stored (the link cannot be shown again), and the client
@@ -28,7 +29,7 @@ export default function InvitesScreen(): React.JSX.Element {
   const router = useRouter();
   const persona = useActivePersona();
   const tenantId = useSessionStore((s) => s.activeTenantId);
-  const allowed = persona === 'owner' || persona === 'admin';
+  const allowed = canInvite(persona);
   const invites = useOrganizationInvites(getSupabaseClient(), tenantId, { enabled: allowed });
   const [inviting, setInviting] = useState(false);
   const [open, setOpen] = useState<OrganizationInvite | null>(null);
@@ -53,7 +54,7 @@ export default function InvitesScreen(): React.JSX.Element {
         onRefresh={() => void invites.refetch()}
       >
         {!allowed ? (
-          <EmptyState icon="lock" title="Owners and admins manage invites" text="Ask an owner or admin to invite someone to the bakery." />
+          <EmptyState icon="lock" title="Owners and managers send invites" text="Ask an owner or your branch manager to invite someone to the bakery." />
         ) : invites.isLoading ? (
           <View className="mt-2 gap-2"><Skeleton variant="row" /><Skeleton variant="row" /></View>
         ) : invites.isError ? (
@@ -74,7 +75,7 @@ export default function InvitesScreen(): React.JSX.Element {
                   <ListRow
                     key={iv.id}
                     leading={<IconTile icon={v.icon} tone={v.tile} size="sm" />}
-                    title={iv.email}
+                    title={inviteRecipient(iv)}
                     sub={`${iv.role_name} · sent ${stamp.format(new Date(iv.created_at))}`}
                     trailing={<Badge label={v.label} tone={v.tone} />}
                     onPress={() => setOpen(iv)}
@@ -91,7 +92,7 @@ export default function InvitesScreen(): React.JSX.Element {
       <Sheet
         visible={open !== null}
         onClose={() => setOpen(null)}
-        title={shown?.email ?? ''}
+        title={shown === null ? '' : inviteRecipient(shown)}
         foot={
           <View className="gap-2.5">
             {shown !== null && inviteView(shown).label !== 'Accepted' && (

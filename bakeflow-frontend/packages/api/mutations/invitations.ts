@@ -1,9 +1,11 @@
 /**
- * Invitation mutations — P6.2 (Email & Invitation Delivery).
+ * Invitation mutations — P6.2 (Email & Invitation Delivery), AD-025, AD-026.
  *
  * Exposes client methods to:
- * 1. Create an organization invite via the `create_organization_invite` RPC.
- * 2. Dispatch the invitation email via the `send-invite-email` Supabase Edge Function.
+ * 1. Create an organization invite via the `create_organization_invite` RPC — by role, to an
+ *    email OR a phone number (AD-026).
+ * 2. Dispatch the invitation email via the `send-invite-email` Supabase Edge Function. A phone
+ *    invite has no email to send; its link is shared by the inviter (WhatsApp, SMS).
  */
 
 import type { Uuid } from '@bakeflow/types';
@@ -15,8 +17,16 @@ import {
   normalizeThrown,
 } from '../errors';
 
+/**
+ * Exactly one of `email` / `phone`. `phone` must already be E.164 (`toE164Phone` in
+ * `@bakeflow/validation`).
+ *
+ * Who may invite (enforced by the RPC, AD-026): owner — any role; admin — any role below admin;
+ * branch manager — cashier, baker, driver or supervisor, into a branch they manage.
+ */
 export interface CreateInviteInput {
-  email: string;
+  email?: string | null;
+  phone?: string | null;
   roleKey: string;
   branchId?: Uuid | null;
   validDays?: number;
@@ -52,9 +62,21 @@ export async function createOrganizationInvite(
   client: BakeflowClient,
   input: CreateInviteInput
 ): Promise<CreateInviteResult> {
+  const email = input.email?.trim().toLowerCase() || null;
+  const phone = input.phone?.trim() || null;
+  if ((email === null) === (phone === null)) {
+    throw new BakeflowApiError({
+      code: 'invalid_request',
+      message: 'createOrganizationInvite: give exactly one of email or phone',
+    });
+  }
+  if (input.roleKey.trim() === '') {
+    throw new BakeflowApiError({ code: 'invalid_request', message: 'createOrganizationInvite: a role must be chosen' });
+  }
   try {
     const { data, error } = await client.rpc('create_organization_invite', {
-      p_email: input.email.trim().toLowerCase(),
+      p_email: email,
+      p_phone: phone,
       p_role_key: input.roleKey,
       p_branch_id: input.branchId ?? null,
       p_valid_days: input.validDays ?? 7,
@@ -141,18 +163,19 @@ export async function sendInviteEmail(
 }
 
 /**
- * Convenience orchestrator: creates an invitation record and immediately delivers the invite email.
+ * Convenience orchestrator: creates an invitation record and, for an email invite, immediately
+ * delivers the invite email. A phone invite returns `delivery: null` — no SMS provider sends
+ * invites, so the inviter shares the link themselves.
  */
 export async function createAndSendInvite(
   client: BakeflowClient,
   input: CreateInviteInput
-): Promise<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] }> {
-  const invite = await createOrganizationInvite(client, {
-    email: input.email,
-    roleKey: input.roleKey,
-    branchId: input.branchId,
-    validDays: input.validDays,
-  });
+): Promise<CreateInviteResult & { delivery: SendInviteEmailResult['delivery'] | null }> {
+  const invite = await createOrganizationInvite(client, input);
+
+  if (input.email == null || input.email.trim() === '') {
+    return { ...invite, delivery: null };
+  }
 
   const emailResult = await sendInviteEmail(client, {
     inviteId: invite.inviteId,
@@ -182,8 +205,10 @@ export interface AcceptInviteResult {
  * Only the organization id, its name and the role name are read from the envelope — strings
  * that survive `to_jsonb` intact.
  *
- * AD-025: only the account the invite was sent to may accept it — any other account is refused
- * with `insufficient_role` and detail reason `email_mismatch` (read it with `errorReason`).
+ * AD-025 / AD-026: only the account the invite was sent to may accept it — its confirmed email,
+ * or for a phone invite its phone verified by SMS sign-in. Any other account is refused with
+ * `insufficient_role` and detail reason `email_mismatch` or `phone_mismatch` (read it with
+ * `errorReason`).
  *
  * @throws {BakeflowApiError} `invalid_transition` for an unknown, used, revoked or expired token
  *   (reason `expired` when it lapsed); `insufficient_role` when not signed in or signed in as a

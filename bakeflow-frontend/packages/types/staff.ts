@@ -82,12 +82,16 @@ export type InviteStatus = (typeof INVITE_STATUSES)[number];
 /**
  * An invitation to the active organization. `token_hash` is never selected.
  *
- * Readable by owner/admin only (`organization_invites_select`). No client grant can update a
- * row — there is no revoke or resend path; a new invite is a new row.
+ * Readable by owner/admin, and by a branch manager for the branches they manage
+ * (`organization_invites_select`, AD-026). No client grant can update a row — there is no revoke
+ * or resend path; a new invite is a new row.
+ *
+ * AD-026: an invite is addressed to exactly one of `email` or `phone` (E.164).
  */
 export interface OrganizationInvite {
   id: Uuid;
-  email: string;
+  email: string | null;
+  phone: string | null;
   status: InviteStatus;
   role_key: string;
   role_name: string;

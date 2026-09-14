@@ -6791,3 +6791,83 @@ Playwright read-only drive of /new-sale     -> 35 tiles (3 out of stock); badge 
 - AD-025 migration not applied or tested. No counter sale was confirmed from the app against
   production (run `docs/SMOKE-TEST.md` §4b on a test bakery). Native device not exercised. No new
   dependencies. Nothing committed.
+
+---
+
+## 2026-09-14 — Invite binding applied (AD-025) and invites by role to email or phone, manager invites, SMS sign-in (AD-026)
+
+### Decisions (owner, 2026-09-14)
+
+- "i give you the approval for the invite links" → AD-025's migration applied.
+- "the invite link is by role only … the role needs to be selected … the person sending the invite link
+  has to input the email or number of the user they want to invite"; the prototype lets owner **and**
+  manager invite (`screens-manage.js` `canInvite = ['owner','manager']`, email + role select).
+- Asked (AskUserQuestion) and answered: phone invites → **add phone sign-in**, invite bound to the
+  SMS-verified phone; branch manager → **crew, own branch only**.
+
+### Backend (applied live via `mcp__supabase__apply_migration`)
+
+1. `bind_invite_acceptance_to_email` (`20260913120100_…`) — as written earlier today (AD-025).
+2. `invite_by_role_email_or_phone` (`20260914100000_…`) — `organization_invites.email` nullable + `phone`
+   (E.164 CHECK, exactly-one CHECK, pending-per-phone unique index); `private.manages_branch(uuid)`;
+   `create_organization_invite` dropped and recreated with `p_phone` (single overload, EXECUTE
+   authenticated/service_role); manager rules; `accept_organization_invite` requires confirmed email or
+   confirmed phone (`phone_mismatch`); `organization_invites_select` adds managed branches;
+   `handle_new_user` copies a phone sign-up's number into `profiles.phone`.
+   A branch requirement for crew invites was drafted and removed before testing: owner/admin
+   organization-wide crew invites stay allowed (tests/sql/rate_limit_enforcement.sql calls
+   `create_organization_invite(email, 'cashier')` without a branch).
+3. Edge Function `send-invite-email` unchanged; the app does not call it for phone invites.
+
+### App
+
+- `packages/validation/phone.ts` (`toE164Phone`, `formatPhone`) + `__tests__/phone.test.ts`.
+- Types/schema/query: `OrganizationInvite.email` nullable, `phone`; invites select includes `phone`.
+- `packages/api/mutations/invitations.ts`: `CreateInviteInput` email|phone, client-side exactly-one and
+  role checks; `createAndSendInvite` returns `delivery: null` for phone; hook type updated.
+- `packages/auth`: `requestPhoneCode`, `verifyPhoneCode`.
+- `features/staff/staffDisplay.ts`: `invitableRolesFor`, `canInvite`, `inviteRecipient`, `CREW_ROLE_KEYS`
+  (+4 tests). `InviteStaffSheet` rewritten (Send to, required role, filtered roles, phone share).
+- `app/(tabs)/staff.tsx`, `app/invites.tsx`: manager gate, recipient display, phone name fallback.
+- `app/invite.tsx`: `phone_mismatch`, shows email or phone. `app/sign-in.tsx`: Email | Phone number, SMS code.
+- Docs: AD-025 status, AD-026, BLOCKER-031 resolved, NOTIFICATIONS (action: enable phone provider),
+  API-CONTRACT rows, ROLES-AND-PERMISSIONS "Inviting staff", SMOKE-TEST §8 rewritten, PROTOTYPE-PORT
+  addendum, baseline `20260809_live_schema.sql` appended with both invite migrations (counts labeled
+  not re-verified), CURRENT_TASK.
+
+### Executed evidence
+
+```
+Rolled-back SQL, AD-025 (migration + DO block ending in RAISE) -> 10/10 ok
+  T1 wrong email refused (email_mismatch) · T1b invite still pending · T2 expired returns accepted:false
+  · T2b stored expired · T3 matching email (case/whitespace) accepted · T3b accepted · T4 reuse refused
+  · T5 create ok · T5b lapsed invite swept to expired · T6 unknown token refused
+apply_migration bind_invite_acceptance_to_email -> success; live check: binding + sweep present,
+  EXECUTE {authenticated, postgres, service_role}, invites rows 0
+Rolled-back SQL, AD-026 (temp auth users created inside the transaction) -> 26/26 ok
+  H1 phone sign-up copied to profile · A1 owner email org-wide · A2 phone normalised (+234 803-123 4567)
+  · A3 both refused · A4 none refused · A5 local 0803… refused server-side · A6 duplicate pending phone
+  · A7 unknown role · M1 manager cashier own branch · M1b manager phone supervisor · M2 no peer manager
+  · M3 no admin · M4 no org-wide from manager · M5 manager sees 3 own-branch invites, not the org-wide one
+  · C1 cashier refused · C2 cashier sees none · P1 other phone refused · P2 email account refused
+  · P3 unconfirmed phone refused · P4 right phone accepted · P5 driver role at branch granted
+  · E1 unconfirmed email refused · E2 confirmed email accepted · K1 one-contact CHECK
+  · G1 grants {authenticated,postgres,service_role} · G2 single overload
+apply_migration invite_by_role_email_or_phone -> success; live check: email nullable, phone column,
+  1 overload, grants as above, manages_branch EXECUTE authenticated/service_role, new select policy,
+  accept has phone_mismatch, invite rows 0, auth users 1 (no test rows persisted)
+npm run typecheck --workspace apps/mobile -> 0 errors
+npm run lint --workspace apps/mobile      -> 0 warnings
+npm test                                  -> 72 passed (6 suites)
+Playwright read-only drive (verify_invites.py, run twice: before/after the sign-in layout fix)
+  -> OTP/verify/create_invite/send-invite calls 0; mutating requests none; errors none on the final run
+     (first run: one 401 console line during automated sign-in, the known harness noise)
+```
+
+### Not done / not claimed
+
+- No real SMS code was requested and no invite was created from the app against production; phone
+  sign-in cannot work until the Supabase Phone provider + SMS provider are enabled (owner action).
+- Manager invite flow exercised in SQL and unit tests only (no manager account on the smoke tenant).
+- Email invitees still need an existing email account; the app has no email sign-up screen (unchanged).
+- No new dependencies. Nothing committed.

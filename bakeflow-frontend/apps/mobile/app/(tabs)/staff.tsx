@@ -18,6 +18,7 @@ import {
   Skeleton,
   Text,
 } from '@bakeflow/ui';
+import { formatPhone } from '@bakeflow/validation';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Linking, View } from 'react-native';
@@ -25,7 +26,7 @@ import { Linking, View } from 'react-native';
 import { ErrorState, NoOrganizationState } from '../../components/ScreenState';
 import { useActivePersona } from '../../features/auth/hooks/useActivePersona';
 import { InviteStaffSheet } from '../../features/staff/components/InviteStaffSheet';
-import { inviteView } from '../../features/staff/staffDisplay';
+import { canInvite, inviteView } from '../../features/staff/staffDisplay';
 import { useOffBarBack } from '../../navigation/useOffBarBack';
 import { useSessionStore } from '../../stores/session';
 
@@ -52,8 +53,8 @@ const joined = new Intl.DateTimeFormat('en-NG', { day: 'numeric', month: 'short'
  * timeline and "Sales by staff" need shift records and per-staff aggregates that have no read
  * endpoint (and money sums the device does not do) — not ported. The per-person permissions
  * list is read-only "set by role" in the prototype; it is replaced by the roles the person
- * actually holds. Invite is offered to owners and admins only, the roles
- * `create_organization_invite()` accepts (advisory; the RPC decides).
+ * actually holds. Invite is offered to owners, admins and branch managers — the callers
+ * `create_organization_invite()` accepts (AD-026; advisory, the RPC decides).
  */
 export default function StaffScreen(): React.JSX.Element {
   const router = useRouter();
@@ -63,10 +64,10 @@ export default function StaffScreen(): React.JSX.Element {
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const userId = useSessionStore((s) => s.userId);
   const myEmail = useSessionStore((s) => s.session?.user.email ?? '');
-  const canInvite = persona === 'owner' || persona === 'admin';
+  const mayInvite = canInvite(persona);
 
   const staff = useStaffRoles(client, tenantId);
-  const invites = useOrganizationInvites(client, tenantId, { enabled: canInvite });
+  const invites = useOrganizationInvites(client, tenantId, { enabled: mayInvite });
   const warehouses = useWarehouses(client, tenantId);
   const [query, setQuery] = useState('');
   const [inviting, setInviting] = useState(false);
@@ -86,8 +87,16 @@ export default function StaffScreen(): React.JSX.Element {
     for (const r of staff.data ?? []) {
       const p = by.get(r.profile_id) ?? {
         profileId: r.profile_id,
-        // An unnamed profile is shown by email when it is your own; others' emails are not readable.
-        name: r.full_name !== '' ? r.full_name : r.profile_id === userId && myEmail !== '' ? myEmail : 'Unnamed',
+        // An unnamed profile (e.g. a phone sign-up, AD-026) is shown by its phone, or by email when it
+        // is your own; others' emails are not readable.
+        name:
+          r.full_name !== ''
+            ? r.full_name
+            : r.phone !== null && r.phone !== ''
+              ? formatPhone(r.phone)
+              : r.profile_id === userId && myEmail !== ''
+                ? myEmail
+                : 'Unnamed',
         phone: r.phone,
         suspended: r.status === 'suspended',
         roles: [],
@@ -118,11 +127,11 @@ export default function StaffScreen(): React.JSX.Element {
         title="Staff & activity"
         sub={staff.isLoading ? undefined : `${people.length} ${people.length === 1 ? 'person' : 'people'}`}
         onBack={onBack}
-        right={canInvite ? <IconButton icon="plus" label="Invite staff" tinted onPress={() => setInviting(true)} /> : undefined}
+        right={mayInvite ? <IconButton icon="plus" label="Invite staff" tinted onPress={() => setInviting(true)} /> : undefined}
         refreshing={staff.isRefetching || invites.isRefetching}
         onRefresh={() => {
           void staff.refetch();
-          if (canInvite) void invites.refetch();
+          if (mayInvite) void invites.refetch();
         }}
       >
         <View className="mt-2">
@@ -150,11 +159,11 @@ export default function StaffScreen(): React.JSX.Element {
             ))}
           </List>
         )}
-        {onlyMe && !canInvite && (
+        {onlyMe && !mayInvite && (
           <Text variant="caption" className="mt-3">Your role shows your own record here; managers see the whole team.</Text>
         )}
 
-        {canInvite && (
+        {mayInvite && (
           <>
             <GroupLabel>Invitations</GroupLabel>
             <Menu>
