@@ -11,6 +11,23 @@ BakeFlow is a mobile-first operational management platform for independent baker
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, Row-Level Security) — shared by both apps, no duplicated logic
 - **State:** Zustand (client state), TanStack Query (server state) — see `docs/FRONTEND-STRUCTURE.md` for store/hook boundaries between the two apps
 
+## Prototype fidelity — mandatory frontend rule
+
+The runnable prototype at `# BakeFlow frontend design/export/bakeflow-frontend/` is the visual and interaction source of truth for the mobile workspace. The prototype is not inspiration, a loose mood board, or a feature list. When porting a screen, preserve its information hierarchy, layout, spacing, typography, colors, radii, elevation, icons, motion, empty/loading/error states, copy, and role-specific navigation as closely as the target platform allows.
+
+Use `bakeflow-frontend/docs/PROTOTYPE-PORT.md` as the port log, not as permission to redesign. If the RN implementation differs from the prototype, record the exact difference and its reason. Do not call a screen complete merely because its data and actions work.
+
+### Required parity workflow
+
+1. Identify the exact prototype screen, role, theme, viewport, and data state before editing.
+2. Reproduce the screen with fixture data first when backend data would obscure visual comparison. Connect live Supabase data without changing the approved composition.
+3. Preserve the prototype's 390 × 844 phone viewport and desktop studio presentation when validating the web rendering. On native, validate the equivalent device dimensions and safe-area behavior.
+4. Compare screenshots of the same state after every meaningful visual change. Check shell/chrome, type, geometry, content density, icons, colors, shadows, motion, and responsive behavior.
+5. A screen is ported only when behavior tests pass and the screenshot comparison has no unexplained visual mismatch. “Functionally equivalent” is not visual parity.
+6. If the prototype and a derived design document disagree on visual values, the prototype wins. Backend contracts, authorization, financial correctness, accessibility, and platform conventions still govern behavior and safety.
+
+When starting frontend work, read the prototype's relevant HTML/JS/CSS before writing the RN screen, then read the nearest existing RN implementation to follow repository patterns. Do not replace the prototype's distinctive design with generic cards, default fonts, new colors, or a redesigned navigation structure without explicit owner approval.
+
 ## Non-negotiable rules
 
 These override anything ambiguous or contradictory found elsewhere. If an EB document appears to conflict with this file, this file and `docs/PROJECT-OVERVIEW.md` win — flag the conflict rather than silently following the EB document.

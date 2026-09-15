@@ -3,10 +3,36 @@
 Living record of porting the design prototype into `apps/mobile`. Phase reports,
 decisions, PORT-NOTEs and the final status table all land here.
 
-- **Visual/UX spec (read-only):** `# BakeFlow frontend design/export/bakeflow-frontend/`
+- **Visual/UX source of truth (read-only):** `# BakeFlow frontend design/export/bakeflow-frontend/`
 - **Write target:** `bakeflow-frontend/apps/mobile` + `bakeflow-frontend/packages/*`
-- **Rule:** the prototype is a reference. Nothing is transliterated — every screen is
-  rebuilt with RN primitives, NativeWind, Reanimated and the existing hooks.
+- **Rule:** the prototype is the approved visual and interaction target. Nothing is
+  transliterated mechanically — every screen is rebuilt with RN primitives, NativeWind,
+  Reanimated and the existing hooks while preserving the prototype's composition and
+  behavior as closely as the target platform allows.
+
+## Fidelity gate
+
+Every port entry must identify the prototype screen, canonical role, theme, viewport, and
+data state being compared. Validate the same state in both implementations. Use fixture
+data first when live data prevents a meaningful visual comparison, then connect the live
+hooks without changing the approved layout.
+
+The prototype's 390 × 844 phone viewport, desktop studio presentation, app chrome, type,
+spacing, colors, radii, elevation, icons, motion, copy, and loading/empty/error states are
+part of the acceptance target. A screen is not complete because it has the same route or
+backend behavior. It is complete only when its behavior is verified and every remaining
+visual difference is either fixed or explicitly recorded with a platform/backend reason.
+
+For each screen, attach or record a screenshot comparison at the target viewport and check:
+
+- shell, safe areas, app bar, tab bar, and phone/studio frame
+- layout geometry, spacing, content density, cards, rows, sheets, and controls
+- typography, weights, line heights, copy, icons, colors, borders, shadows, and gradients
+- loading, empty, error, success, dark-theme, reduced-motion, and role-specific states
+- responsive behavior at phone width and the supported desktop preview width
+
+Do not introduce a redesign, generic replacement component, new palette, default typography,
+or navigation change while porting a prototype screen without explicit owner approval.
 
 ---
 

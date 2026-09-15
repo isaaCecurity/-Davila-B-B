@@ -1,0 +1,77 @@
+- generic [active] [ref=e1]:
+  - link "Skip to main content" [ref=e2] [cursor=pointer]:
+    - /url: "#screens"
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - img "BakeFlow" [ref=e6]
+      - heading "The operating system for running the bakery." [level=1] [ref=e7]
+      - paragraph [ref=e8]: "BakeFlow turns the daily chaos of a bakery — orders, tickets, cash, expenses — into one clear picture of the business. This is an interactive prototype: everything below responds."
+      - generic [ref=e9]:
+        - generic [ref=e10]: Open as
+        - generic [ref=e11]:
+          - button "Owner" [pressed] [ref=e12] [cursor=pointer]
+          - button "Manager" [ref=e13] [cursor=pointer]
+          - button "Salesperson" [ref=e14] [cursor=pointer]
+          - button "Supervisor" [ref=e15] [cursor=pointer]
+          - button "Baker" [ref=e16] [cursor=pointer]
+          - button "Driver" [ref=e17] [cursor=pointer]
+      - link "View the design system" [ref=e18] [cursor=pointer]:
+        - /url: design-system.html
+        - text: View the design system
+        - generic [aria-hidden] [ref=e19]: →
+    - application "BakeFlow mobile application prototype" [ref=e20]:
+      - generic [ref=e21]:
+        - generic [aria-hidden]:
+          - generic: 9:41
+        - main [ref=e22]:
+          - iframe [ref=e24]:
+            - main [ref=f1e3]:
+              - region "Loading BakeFlow":
+                - generic:
+                  - generic:
+                    - img "BakeFlow logo"
+                  - paragraph:
+                    - generic: B
+                    - generic: a
+                    - generic: k
+                    - generic: e
+                    - generic: F
+                    - generic: l
+                    - generic: o
+                    - generic: w
+                  - paragraph: Bakery business, handled.
+              - region "Get started" [ref=f1e6]:
+                - generic [ref=f1e7]:
+                  - generic [ref=f1e8]: BakeFlow
+                  - button "Skip" [ref=f1e11] [cursor=pointer]
+                - group "What BakeFlow does" [ref=f1e12]:
+                  - generic [ref=f1e13]:
+                    - article "Slide 1 of 3" [ref=f1e14]:
+                      - figure [ref=f1e15]:
+                        - img "New bakery orders arriving in a list" [ref=f1e16]:
+                          - generic [ref=f1e42]: "3"
+                      - generic [ref=f1e45]:
+                        - heading "Every order, never missed." [level=2] [ref=f1e46]
+                        - paragraph [ref=f1e47]: Take orders from WhatsApp, calls or walk-ins and watch them land in one tidy list.
+                    - article "Slide 2 of 3" [ref=f1e48]:
+                      - figure [ref=f1e49]:
+                        - img "Weekly sales chart trending upward" [ref=f1e50]:
+                          - generic [ref=f1e55]: 0% up
+                      - generic [ref=f1e62]:
+                        - heading "See what actually sells." [level=2] [ref=f1e63]
+                        - paragraph [ref=f1e64]: Daily sales, best-selling items and slow days — in charts you can read in seconds.
+                    - article "Slide 3 of 3" [ref=f1e65]:
+                      - figure [ref=f1e66]:
+                        - img "Profit ring filling as coins drop into a wallet" [ref=f1e67]:
+                          - generic [ref=f1e70]: PROFIT
+                          - generic [ref=f1e71]: 0%
+                      - generic [ref=f1e88]:
+                        - heading "Know your real profit." [level=2] [ref=f1e89]
+                        - paragraph [ref=f1e90]: Log flour, sugar, gas and staff costs — BakeFlow does the maths for you.
+                - generic [ref=f1e91]:
+                  - tablist "Choose slide" [ref=f1e92]:
+                    - tab "Slide 1" [ref=f1e93] [cursor=pointer]
+                    - tab "Slide 2" [ref=f1e94] [cursor=pointer]
+                    - tab "Slide 3" [ref=f1e95] [cursor=pointer]
+                  - button "Next" [ref=f1e97] [cursor=pointer]
+                  - paragraph [ref=f1e102]: Swipe to explore, or tap Get started.
