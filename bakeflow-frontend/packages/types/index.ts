@@ -135,4 +135,14 @@ export type {
 } from './finance';
 export { CASH_SESSION_STATUSES, EXPENSE_CATEGORIES, EXPENSE_PAID_METHODS } from './finance';
 
-export type { DailyRevenueSummary } from './reporting';
+export type {
+  DailyRevenueSummary,
+  ProductPerformance,
+  ProductPerformanceOrder,
+  ProductPerformanceRow,
+  ReportPeriod,
+  RevenueFigures,
+  RevenueReport,
+  RevenueReportDay,
+} from './reporting';
+export { REPORT_PERIODS } from './reporting';

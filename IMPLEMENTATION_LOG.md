@@ -6871,3 +6871,79 @@ Playwright read-only drive (verify_invites.py, run twice: before/after the sign-
 - Manager invite flow exercised in SQL and unit tests only (no manager account on the smoke tenant).
 - Email invitees still need an existing email account; the app has no email sign-up screen (unchanged).
 - No new dependencies. Nothing committed.
+
+---
+
+## 2026-09-14 — P9.9 Q1 revenue report over a period, Q2 product performance
+
+### Request
+
+Owner: "do the first 2 (Q1, Q2)" from the queued backend list.
+
+### Backend (applied live via `mcp__supabase__apply_migration` `revenue_report_and_product_performance`)
+
+- `private.resolve_report_window(branch, period, start, end)` — the daily summary's authorization
+  (active organization, `has_branch_access`, owner/admin/branch_manager/cashier/accountant), period
+  presets `today`/`7d`/`30d`/`90d`/`month`/`last_month` resolved in `organizations.timezone`, or explicit
+  inclusive dates (not both), start ≤ end, ≤ 366 days (REPORTING-MODEL.md §53), half-open UTC bounds.
+  EXECUTE revoked from PUBLIC/anon/authenticated (only the two SECURITY DEFINER reports call it).
+- `get_revenue_report()` — totals + one row per local day via `generate_series`; tickets by
+  `completed_at` (completed is terminal in `guard_ticket_status_transition`), refunds by `refunded_at`,
+  payments by `received_at`, soft-deleted rows excluded; money `numeric(19,4)::text`.
+- `get_product_performance()` — completed tickets' `ticket_items` per variant: units, line value,
+  distinct orders, server-computed share; ranked by value or units; limit 1–200; includes soft-deleted
+  products for history; category name.
+- `idx_tickets_branch_completed_at (tenant_id, branch_id, completed_at) WHERE completed_at IS NOT NULL
+  AND deleted_at IS NULL` — no index covered this filter before.
+
+### App
+
+- Types/schemas: `ReportPeriod`, `RevenueReport`, `RevenueFigures`, `ProductPerformance(Row)`;
+  `revenueReportSchema`, `productPerformanceSchema`.
+- `@bakeflow/api`: `getRevenueReport`, `getProductPerformance`. `@bakeflow/hooks`: `useRevenueReport`,
+  `useProductPerformance`, query keys; every mutation that refreshed `daily-revenue-summary` (trip payment,
+  field sale, ticket transitions, record payment, counter sale) now also refreshes `revenue-report` and
+  `product-performance`.
+- `features/reports/hooks/useRevenueWeek.ts` rebuilt on the ranged report (one request, organization
+  timezone) keeping its return shape for Finance, Sales, Reports, Owner/Manager/Crew homes.
+- `features/reports/reportDisplay.ts` + 4 tests. `(tabs)/finance.tsx` period switch; `reports/index.tsx`
+  month hero + period statement + Product performance entry; new `reports/products.tsx`.
+- Docs: API-CONTRACT rows, BACKEND_ROADMAP P9.9 Q1/Q2 done, CURRENT_TASK, PROTOTYPE-PORT addendum and
+  screen rows, SMOKE-TEST §4c, baseline appended.
+
+### Executed evidence
+
+```
+Rolled-back SQL (migration + DO block; two real counter sales inside the transaction) -> 31/32
+  R1 today gross +3900 · R1b tickets +2 · R1c collected +3900 · R1d 4dp text · R1e equals daily summary
+  · R2 7d shape/dates · R2b totals = sum of days · R2c today row = today report · R3 month to date
+  · R4 last month bounds · R4b explicit dates · R5 range_too_long · R6 invalid_range · R7 period+dates
+  · R8 invalid_period · R9 other tenant's branch returns zeros · R9b and no products · P1 units +4
+  · P2 total = sum of rows · P2b shares ≈ 100 · P3 ranked by value · P4 ranked by units · P5 limit keeps
+  count · P6 names · P7 invalid_order · P8 invalid_limit · A1/A2 baker refused · A3 supervisor refused
+  · A5 helper not client-callable · A6 anon cannot execute
+  A4 FAILED as written: it switched the smoke owner's claim to cashier, but that account has no
+  branch_assignments row (owner access comes from the role), so has_branch_access refused — a test
+  setup gap, identical to the daily summary's behaviour.
+apply_migration revenue_report_and_product_performance -> success
+Follow-up rolled-back SQL with a temporary cashier assigned to the branch -> 3/3
+  A4 assigned cashier reads revenue · A4b reads products · A4c unassigned cashier refused
+Live check -> 3 functions; get_revenue_report / get_product_performance EXECUTE {authenticated, postgres,
+  service_role}; resolve_report_window EXECUTE {postgres}; index present
+npm run typecheck --workspace apps/mobile -> 0 errors (typed routes regenerated for /reports/products)
+npm run lint --workspace apps/mobile      -> 0 warnings
+npm test                                  -> 76 passed
+Playwright verify_reports.py (live, read-only) -> finance 7d/30d ranges, reports month hero, statement
+  today/last month, product report empty states; get_revenue_report x6, get_product_performance x4;
+  mutating requests none; errors none
+Playwright verify_reports_filled.py (the two report RPCs intercepted with sample payloads) -> finance 7d
+  and 90d render with sparse labels, product bars + list + shares, units ordering; mutating none; errors none
+```
+
+### Not done / not claimed
+
+- The smoke branch has no completed sales in the last 90 days, so live populated states were not seen;
+  they were rendered from sample payloads and the figures were proven in SQL. SMOKE-TEST §4c covers a
+  real walk-through.
+- Custom date ranges: the API accepts them; no picker in the app (it would need a date-picker dependency).
+- No new dependencies. Nothing committed.

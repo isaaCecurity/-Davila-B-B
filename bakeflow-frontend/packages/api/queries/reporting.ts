@@ -8,8 +8,15 @@
  * here, keeping `queries/` meaning "no side effects" rather than "no RPC".
  */
 
-import type { DailyRevenueSummary, Uuid } from '@bakeflow/types';
-import { dailyRevenueSummarySchema } from '@bakeflow/validation';
+import type {
+  DailyRevenueSummary,
+  ProductPerformance,
+  ProductPerformanceOrder,
+  ReportPeriod,
+  RevenueReport,
+  Uuid,
+} from '@bakeflow/types';
+import { dailyRevenueSummarySchema, productPerformanceSchema, revenueReportSchema } from '@bakeflow/validation';
 
 import type { BakeflowClient } from '../client';
 import { BakeflowApiError } from '../errors';
@@ -43,6 +50,61 @@ export async function getDailyRevenueSummary(
       code: 'response_shape_invalid',
       message: 'getDailyRevenueSummary: the RPC returned no envelope',
     });
+  }
+  return parsed;
+}
+
+/**
+ * Revenue and cash for one branch over a period — `get_revenue_report()` (P9.9 Q1).
+ *
+ * The server resolves `period` in the organization's timezone and returns the totals plus one row
+ * per organization-local day (oldest first), each identical to that day's
+ * `get_daily_revenue_summary()`. Totals are summed server-side; nothing is added up here.
+ *
+ * @throws {BakeflowApiError} `insufficient_role` without branch access or an authorized role
+ *   (owner/admin/branch_manager/cashier/accountant); `invalid_request` for an unknown period or
+ *   when there is no active organization.
+ */
+export async function getRevenueReport(
+  client: BakeflowClient,
+  branchId: Uuid,
+  period: ReportPeriod,
+): Promise<RevenueReport> {
+  const payload = await run(client.rpc('get_revenue_report', { p_branch_id: branchId, p_period: period }));
+  const parsed = parseRow(revenueReportSchema, payload, 'getRevenueReport');
+  if (parsed === null) {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'getRevenueReport: the RPC returned no envelope' });
+  }
+  return parsed;
+}
+
+/**
+ * Which products sold, for one branch over a period — `get_product_performance()` (P9.9 Q2).
+ *
+ * Ranked by line value (`value`) or by quantity (`units`). Line value is quantity × unit price
+ * before order-level discounts and tax, so its total can differ from gross revenue. Shares are
+ * computed server-side. At most `limit` rows (1–200); `products_sold` counts them all.
+ *
+ * @throws {BakeflowApiError} as `getRevenueReport`.
+ */
+export async function getProductPerformance(
+  client: BakeflowClient,
+  branchId: Uuid,
+  period: ReportPeriod,
+  order: ProductPerformanceOrder = 'value',
+  limit = 100,
+): Promise<ProductPerformance> {
+  const payload = await run(
+    client.rpc('get_product_performance', {
+      p_branch_id: branchId,
+      p_period: period,
+      p_order: order,
+      p_limit: Math.min(Math.max(Math.trunc(limit), 1), 200),
+    }),
+  );
+  const parsed = parseRow(productPerformanceSchema, payload, 'getProductPerformance');
+  if (parsed === null) {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'getProductPerformance: the RPC returned no envelope' });
   }
   return parsed;
 }

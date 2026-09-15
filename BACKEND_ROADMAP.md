@@ -1189,8 +1189,8 @@ need an owner answer before building (CLAUDE.md blocker rule).
 
 | # | Capability | Unblocks (prototype screen / control) | Notes / open questions |
 |---|---|---|---|
-| Q1 | Ranged revenue report (day / week / month / custom range, per branch) | `reports` period switcher, `finance` trend beyond one day | Extends `daily_revenue_summary`; timezone = organization's; money summed server-side only |
-| Q2 | Product performance (units, revenue per product/variant over a range) | `report-products` | Revenue only — COGS/margin stay out (AD-022) |
+| Q1 | ✅ **DONE 2026-09-14** — Ranged revenue report (`get_revenue_report`) | `reports` hero + statement periods, `finance` 7/30/90-day switch | Migration `20260914130000_revenue_report_and_product_performance.sql`; custom-date UI not built (API accepts dates; no date-picker dependency) |
+| Q2 | ✅ **DONE 2026-09-14** — Product performance (`get_product_performance`) | `reports/products` | Sales value before order discounts; no margin (AD-022) |
 | Q3 | Branch performance (revenue, collected, tickets per branch over a range) | `report-branches` | Owner/admin only? *decide* |
 | Q4 | Sales by staff member and by payment method | `sales-monitor`, supervisor/manager homes | Who may see other staff's figures? *decide* |
 | Q5 | Notification events (history table + read state) | `notifications` history, bell badge | Which events notify whom? *decide*; P6.3 is DEFERRED today |

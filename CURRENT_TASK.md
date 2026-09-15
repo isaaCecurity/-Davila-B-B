@@ -1,5 +1,25 @@
 # BakeFlow — Current Task
 
+## ✅ Q1 revenue report over a period + Q2 product performance DELIVERED (2026-09-14)
+
+Owner picked Q1 and Q2 from the P9.9 queue.
+
+- **Live:** `get_revenue_report()` and `get_product_performance()` with a shared, non-client-callable
+  `private.resolve_report_window()` (same callers and day rules as `get_daily_revenue_summary()`,
+  organization timezone, ≤ 366 days) and `idx_tickets_branch_completed_at`. Rolled-back tests 31/32 +
+  3/3 (the one miss was test setup — see the log), then applied and checked live.
+- **App:** Finance 7/30/90-day switch; Reports "This month so far" hero and a Today/7 days/This
+  month/Last month statement; new `reports/products` (sales value or units, bars, full list with
+  share); the 7-day hook used by six screens now makes one ranged request resolved in the
+  organization's timezone instead of seven device-dated ones.
+- **Checks:** typecheck 0, lint 0, 76 unit tests, read-only web drives (live data + sample-data render).
+- **Next in the queue:** Q3 branch performance, Q4 sales by staff/method, Q5 notifications need a
+  decision; Q6 search, Q7 invite revoke/resend, Q8 profile edit are ready.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-14 (reports entry). **Not committed.**
+
+---
+
 ## ⏭ NEXT (queued 2026-09-14): backend endpoints for the deferred prototype screens
 
 Owner's instruction: queue the "waiting on backend" items and tackle them after the counter sale.
@@ -9,8 +29,8 @@ performance · Q4 sales by staff/method · Q5 notification events · Q6 full-tex
 revoke/resend · Q8 profile update · Q9 file upload). Not started. Per the standing preference, the
 first item will be proposed and confirmed before work begins.
 
-**Owner setup pending (not blocking the queue):** enable Supabase phone sign-in with an SMS provider so
-phone invites (AD-026) can be accepted — see `NOTIFICATIONS.md`.
+**Parked by owner (2026-09-14):** Supabase phone sign-in / SMS provider for phone invites (AD-026) —
+left for later; see `NOTIFICATIONS.md`.
 
 ---
 

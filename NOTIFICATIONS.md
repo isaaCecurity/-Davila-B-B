@@ -4,7 +4,11 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
-## ACTION NEEDED: switch on phone sign-in in Supabase (2026-09-14)
+## PARKED by owner (2026-09-14): switch on phone sign-in in Supabase
+
+Owner said to leave the phone SMS setup for now. Nothing to do until it is picked up again; the note
+below is kept for when it is.
+
 
 Invites can now go to a **phone number**, and the invited person signs in with a code sent by SMS.
 The app side is done, but Supabase will not send those codes until phone sign-in is switched on.

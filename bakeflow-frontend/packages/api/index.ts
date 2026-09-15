@@ -16,7 +16,7 @@ export { getExpenseById, listCashSessions, listExpenses, type ExpenseFilters } f
 // P9.8 -- reporting, revenue/cash half only (COGS/gross-profit stay out, BLOCKER-018).
 // Read-only RPC; see queries/reporting.ts's header for why it lives in queries/ rather
 // than mutations/.
-export { getDailyRevenueSummary } from './queries/reporting';
+export { getDailyRevenueSummary, getProductPerformance, getRevenueReport } from './queries/reporting';
 export {
   closeCashSession,
   createExpense,

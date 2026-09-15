@@ -506,7 +506,7 @@ to Sat shows 2026-09-12 with 0 new RPCs; menu Sales/Expenses/Cash sessions for o
 | add-expense | `app/add-expense.tsx` | ✅ verified to validation (save not executed) |
 | reports / supervisor-reports | `app/reports/index.tsx` | ✅ verified |
 | pnl | — | ⏸ out of MVP scope (AD-022) |
-| report-products / report-branches | — | ⛔ need report endpoints |
+| report-products / report-branches | `reports/products` / — | ✅ products (Q2); branches ⛔ needs an endpoint |
 
 **API created:** none. **Hooks created:** none (feature hooks reused: `useBranchOptions`,
 `useRevenueWeek`). **Files changed:** `app/(tabs)/finance.tsx`, `app/(tabs)/cash.tsx`,
@@ -859,7 +859,7 @@ during the port.
 | 31 | my-cash | `(tabs)/my-cash` | ✅ |
 | 32 | add-my-expense | `add-expense` | ✅ same screen |
 | 33 | reports | `reports` | ✅ |
-| 34 | report-products | — | ⛔ needs a report endpoint |
+| 34 | report-products | `reports/products` | ✅ P9.9 Q2 (no margin — AD-022) |
 | 35 | report-branches | — | ⛔ needs a report endpoint |
 | 36 | products | `products` | ✅ |
 | 37 | product-detail | `product/[id]` | ✅ |
@@ -881,8 +881,8 @@ during the port.
 | 53 | ds | — | prototype-only showcase |
 | 54–57 | admin-org / admin-staff / admin-records / admin-settings | Admin home links | ⏸ Web workspace (`ROLES-AND-PERMISSIONS.md`) |
 
-**Totals:** 44 of the 57 rows are live on mobile, one more (`my-activity`) is covered by other screens;
-of the rest, 3 wait on report endpoints, 2 are out of MVP scope
+**Totals:** 45 of the 57 rows are live on mobile, one more (`my-activity`) is covered by other screens;
+of the rest, 2 wait on report endpoints, 2 are out of MVP scope
 (AD-022), 4 belong to the Web workspace and 3 are prototype-only (`splash`, `states`, `ds`). No
 placeholder screen remains.
 
@@ -1026,4 +1026,26 @@ preselected; owner offered Cashier…Admin; choosing Cashier shows Works at and 
 Works at); Invites list loads with the new `phone` column. The drive caught the sign-in method switch
 stretching to fill the screen (horizontal ScrollView in a centred column) — wrapped and re-verified.
 Manager-only role list covered by unit tests (no manager account on the smoke tenant).
+
+### Addendum 2026-09-14 (reports) — revenue over a period and product performance (P9.9 Q1/Q2)
+
+- `(tabs)/finance`: the prototype's 7 / 30 / 90-day switch now drives the hero ("Money in · last N
+  days", with range and order count), the chart, the foot stats and the Revenue tile.
+- `reports`: "This month so far" hero (net revenue, orders, range) over a month chart; the daily
+  statement became a period statement (Today · 7 days · This month · Last month); Product performance
+  is in Available reports for owner, admin, manager and cashier.
+- `reports/products` (new): Sales value | Units sold, period chips, a total card, the prototype's
+  `.hbar` "Which products make the money?" (top 8) and the full list with units, orders, category and
+  server-computed share; rows open the product. Margin switch, margin leaders and the sell-out insight
+  are omitted (AD-022 / no data).
+- `features/reports/hooks/useRevenueWeek` now wraps one `get_revenue_report()` call (it made seven
+  daily calls dated by the device's calendar); every consumer kept its shape.
+  `features/reports/reportDisplay.ts` (+4 tests): period labels, sparse chart labels, range labels.
+
+**Verified (web export, read-only):** live data — Finance 7d/30d ranges (8 Sept – 14 Sept, 16 Aug – 14
+Sept), Reports month hero and statement for Today and Last month (1 Aug – 31 Aug), product report
+periods and ordering requested correctly (`get_revenue_report` ×6, `get_product_performance` ×4); the
+smoke branch has no completed sales in 90 days, so the populated states were rendered with the two
+RPCs intercepted in the browser and sample payloads of the same shape (bars, list, shares, 90-day chart
+labels, units ordering). No mutating requests, no page errors.
 

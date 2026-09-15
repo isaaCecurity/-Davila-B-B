@@ -61,6 +61,8 @@ import {
   failProductionBatch,
   getCurrentDriverTrip,
   getDailyRevenueSummary,
+  getProductPerformance,
+  getRevenueReport,
   getDeliveryById,
   getDriverTripById,
   getProductById,
@@ -159,6 +161,10 @@ import type {
   CashSession,
   DailyRevenueSummary,
   Expense,
+  ProductPerformance,
+  ProductPerformanceOrder,
+  ReportPeriod,
+  RevenueReport,
   Recipe,
   Ticket,
   TicketWithItems,
@@ -283,6 +289,10 @@ export const queryKeys = {
     orgScoped(tenantId, 'expenses', branchId ?? 'all'),
   dailyRevenueSummary: (tenantId: string, branchId: string, date?: string): unknown[] =>
     orgScoped(tenantId, 'daily-revenue-summary', branchId, date ?? 'today'),
+  revenueReport: (tenantId: string, branchId: string, period: string): unknown[] =>
+    orgScoped(tenantId, 'revenue-report', branchId, period),
+  productPerformance: (tenantId: string, branchId: string, period: string, order: string): unknown[] =>
+    orgScoped(tenantId, 'product-performance', branchId, period, order),
   /** Every ticket list shares the `tickets` prefix, so one invalidation refreshes all filters. */
   tickets: (tenantId: string, filters?: TicketFilters, options?: PageOptions): unknown[] =>
     orgScoped(tenantId, 'tickets', filters ?? {}, options ?? {}),
@@ -1166,7 +1176,7 @@ export function useRecordDriverTripPayment(
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenant, variables.tripId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTripTickets(tenant, variables.tripId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
-      invalidatePrefixes(queryClient, tenant, 'tickets', 'daily-revenue-summary');
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'daily-revenue-summary', 'revenue-report', 'product-performance');
     },
   });
 }
@@ -1251,7 +1261,7 @@ export function useCompleteDriverFieldSale(
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.ticketId) });
       // Completion writes the sale movement out of the vehicle and recognises revenue.
-      invalidatePrefixes(queryClient, tenant, 'tickets', 'product-stock-levels', 'stock-movements', 'daily-revenue-summary');
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'product-stock-levels', 'stock-movements', 'daily-revenue-summary', 'revenue-report', 'product-performance');
     },
   });
 }
@@ -1329,7 +1339,7 @@ export function useRecordPayment(
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
       // amount_paid changes every ticket list and the day's collected figure; a cash payment
       // lands in a till's expected amount.
-      invalidatePrefixes(queryClient, tenant, 'payment-tickets', 'tickets', 'cash-sessions', 'daily-revenue-summary');
+      invalidatePrefixes(queryClient, tenant, 'payment-tickets', 'tickets', 'cash-sessions', 'daily-revenue-summary', 'revenue-report', 'product-performance');
     },
   });
 }
@@ -1390,6 +1400,44 @@ export function useDailyRevenueSummary(
       const branch = branchId;
       if (branch === null) throw new Error('No branch selected for this report.');
       return getDailyRevenueSummary(client, branch, date);
+    },
+    enabled: tenantId !== null && branchId !== null,
+  });
+}
+
+/**
+ * Revenue and cash over a period for one branch — `get_revenue_report()` (P9.9 Q1). One request
+ * for the whole range; the server resolves the period in the organization's timezone.
+ */
+export function useRevenueReport(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId: string | null,
+  period: ReportPeriod,
+): UseQueryResult<RevenueReport, Error> {
+  return useQuery({
+    queryKey: queryKeys.revenueReport(tenantId ?? 'none', branchId ?? 'none', period),
+    queryFn: () => {
+      if (branchId === null) throw new Error('No branch selected for this report.');
+      return getRevenueReport(client, branchId, period);
+    },
+    enabled: tenantId !== null && branchId !== null,
+  });
+}
+
+/** Product performance over a period for one branch — `get_product_performance()` (P9.9 Q2). */
+export function useProductPerformance(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId: string | null,
+  period: ReportPeriod,
+  order: ProductPerformanceOrder = 'value',
+): UseQueryResult<ProductPerformance, Error> {
+  return useQuery({
+    queryKey: queryKeys.productPerformance(tenantId ?? 'none', branchId ?? 'none', period, order),
+    queryFn: () => {
+      if (branchId === null) throw new Error('No branch selected for this report.');
+      return getProductPerformance(client, branchId, period, order);
     },
     enabled: tenantId !== null && branchId !== null,
   });
@@ -1476,6 +1524,8 @@ function invalidateAfterTicketTransition(
     queryKeys.ticket(tenant, ticketId),
     orgScoped(tenant, 'payment-tickets'),
     orgScoped(tenant, 'daily-revenue-summary'),
+    orgScoped(tenant, 'revenue-report'),
+    orgScoped(tenant, 'product-performance'),
     orgScoped(tenant, 'product-stock-levels'),
     // `complete_ticket` writes the sale movement; ticket state gates dispatch and trip sales.
     orgScoped(tenant, 'stock-movements'),
@@ -1715,6 +1765,8 @@ export function useCompleteCounterSale(
         'product-stock-levels',
         'stock-movements',
         'daily-revenue-summary',
+        'revenue-report',
+        'product-performance',
         'cash-sessions',
       );
     },

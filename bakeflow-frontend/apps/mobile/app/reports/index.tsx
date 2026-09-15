@@ -1,4 +1,6 @@
-import { isZeroDecimalString } from '@bakeflow/types';
+import { getSupabaseClient } from '@bakeflow/auth';
+import { useRevenueReport } from '@bakeflow/hooks';
+import { isZeroDecimalString, type ReportPeriod } from '@bakeflow/types';
 import {
   Card,
   Chips,
@@ -18,7 +20,7 @@ import { View } from 'react-native';
 import { EmptyState, ErrorState, NoOrganizationState } from '../../components/ScreenState';
 import { useActivePersona } from '../../features/auth/hooks/useActivePersona';
 import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
-import { useRevenueWeek } from '../../features/reports/hooks/useRevenueWeek';
+import { PERIOD_LABEL, rangeLabel, revenueChartPoints } from '../../features/reports/reportDisplay';
 import { useSessionStore } from '../../stores/session';
 
 /** One ledger line: label left, exact figure right. */
@@ -48,53 +50,56 @@ function Line({
   );
 }
 
+const STATEMENT_PERIODS: readonly ReportPeriod[] = ['today', '7d', 'month', 'last_month'];
+
 /**
- * Reports — the prototype's `reports` (and supervisor `supervisor-reports`) screen: a hero over
- * the week, the day's statement, then the reports you can open.
+ * Reports — the prototype's `reports` (and supervisor `supervisor-reports`) screen: a hero over the
+ * month so far, a statement for a chosen period, then the reports you can open.
  *
- * The statement is `get_daily_revenue_summary()` for the chosen day, shown line by line from
- * its exact strings. The week's days are one cached query each (`useRevenueWeek`), so switching
- * day costs no request.
+ * Both the hero and the statement are `get_revenue_report()` (P9.9 Q1): the server resolves each
+ * period in the organization's timezone and sums every figure; the screen shows the exact strings.
  *
- * PORT-NOTE: the prototype's "This month so far" hero, monthly delta and net-profit line need a
- * ranged report, and cost of goods is out of MVP scope (AD-022); the Profit & Loss, Product performance and
- * Branch performance reports have no endpoint yet; PDF/spreadsheet export and scheduled e-mail
- * have no backend. None are shown as if available — the menu lists only screens that exist.
- * Whether a role may read the summary is the RPC's decision (supervisors are refused
- * server-side today); a refusal is shown as returned.
+ * PORT-NOTE: the prototype's hero also shows net profit and a month-on-month delta. Profit and cost
+ * of goods are out of MVP scope (AD-022), and a delta would be arithmetic on money done here, so the
+ * hero is net revenue with the order count. Profit & Loss and Branch performance have no endpoint
+ * yet; PDF/spreadsheet export and scheduled e-mail have no backend. None are shown as if available.
+ * Whether a role may read reports is the RPC's decision (supervisors are refused today, as for the
+ * daily summary); a refusal is shown as returned.
  */
 export default function ReportsScreen(): React.JSX.Element {
   const router = useRouter();
+  const client = getSupabaseClient();
   const persona = useActivePersona();
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const branches = useBranchOptions();
   const [branchIndex, setBranchIndex] = useState(0);
-  const [dayIndex, setDayIndex] = useState(6);
+  const [statementPeriod, setStatementPeriod] = useState<ReportPeriod>('today');
   const branch = branches.options[branchIndex] ?? branches.options[0] ?? null;
-  const week = useRevenueWeek(branch?.branchId ?? null);
+
+  const month = useRevenueReport(client, tenantId, branch?.branchId ?? null, 'month');
+  const statement = useRevenueReport(client, tenantId, branch?.branchId ?? null, statementPeriod);
 
   if (tenantId === null) {
     return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
   }
 
-  const day = week.days[dayIndex];
-  const summary = day?.summary;
-  const points = week.days.map((d) => ({
-    value: d.summary === undefined ? 0 : Number(d.summary.net_revenue),
-    label: d.label,
-  }));
+  const hero = month.data;
   // Judged on the exact strings, not the plot numbers.
-  const quietWeek =
-    !week.isLoading && week.days.every((d) => d.summary !== undefined && isZeroDecimalString(d.summary.net_revenue));
+  const quietMonth = hero !== undefined && hero.days.every((d) => isZeroDecimalString(d.net_revenue));
+  const figures = statement.data?.totals;
   const moneyRoles = persona === 'owner' || persona === 'manager' || persona === 'admin';
+  const reportRoles = moneyRoles || persona === 'cashier';
 
   return (
     <ScreenScroll
       title="Reports"
       sub={branch?.label}
       onBack={() => router.back()}
-      refreshing={week.isRefetching}
-      onRefresh={week.refetch}
+      refreshing={month.isRefetching || statement.isRefetching}
+      onRefresh={() => {
+        void month.refetch();
+        void statement.refetch();
+      }}
     >
       {branches.isLoading ? (
         <Skeleton variant="chart" className="mt-5 h-[240px]" />
@@ -112,79 +117,95 @@ export default function ReportsScreen(): React.JSX.Element {
             />
           )}
 
-          {week.isError ? (
+          {month.isError ? (
             <View className="mt-5">
-              <ErrorState error={week.error ?? new Error('Could not load reports.')} onRetry={week.refetch} />
+              <ErrorState error={month.error} onRetry={() => void month.refetch()} />
             </View>
           ) : (
-            <>
-              <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-3 pt-5">
-                <View className="px-5">
-                  <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
-                    Net revenue today
-                  </Text>
-                  {week.today?.data === undefined ? (
-                    <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
-                  ) : (
-                    <Text tabular className="mt-1.5 text-title-1 font-bold tracking-[-0.8px] text-white">
-                      {formatNaira(week.today.data.net_revenue)}
-                    </Text>
-                  )}
-                  <Text className="mt-1 text-foot text-white/60">Last 7 days below · {week.today?.data?.timezone ?? ' '}</Text>
-                </View>
-                <View className="mt-3">
-                  <TrendChart
-                    points={points}
-                    onDark
-                    accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
-                  />
-                  {quietWeek && (
-                    <View pointerEvents="none" className="absolute left-0 right-0 top-8 items-center">
-                      <Text className="text-foot text-white/45">No revenue recorded in the last 7 days</Text>
-                    </View>
-                  )}
-                </View>
-              </Card>
-
-              <GroupLabel>Daily statement</GroupLabel>
-              <Chips
-                accessibilityLabel="Day"
-                options={week.days.map((d, i) => ({ key: String(i), label: i === 6 ? 'Today' : d.label }))}
-                value={String(dayIndex)}
-                onChange={(k) => setDayIndex(Number(k))}
-              />
-              <Card className="mt-3 px-4 py-2">
-                {summary === undefined ? (
-                  <View className="gap-2 py-2">
-                    <Skeleton variant="row" className="h-6" />
-                    <Skeleton variant="row" className="h-6" />
-                    <Skeleton variant="row" className="h-6" />
-                  </View>
+            <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-3 pt-5">
+              <View className="px-5">
+                <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
+                  This month so far
+                </Text>
+                {hero === undefined ? (
+                  <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
                 ) : (
-                  <>
-                    <Text variant="caption" className="pb-1 pt-2">
-                      {summary.reporting_date} · {summary.timezone}
-                    </Text>
-                    <Text variant="label" className="pt-2">Revenue</Text>
-                    <Line label="Gross revenue" value={formatNaira(summary.gross_revenue)} />
-                    <Line label="Refunds" value={formatNaira(summary.recognized_refunds)} minus />
-                    <Line label="Net revenue" value={formatNaira(summary.net_revenue)} total />
-                    <Text variant="label" className="pt-4">Cash collected</Text>
-                    <Line label="Gross collected" value={formatNaira(summary.gross_collected)} />
-                    <Line label="Refunds paid" value={formatNaira(summary.refunds_paid)} minus />
-                    <Line label="Net collected" value={formatNaira(summary.net_collected)} total />
-                    {isZeroDecimalString(summary.gross_revenue) && isZeroDecimalString(summary.gross_collected) && (
-                      <Text variant="meta" className="pb-2 pt-1">Nothing was sold or collected on this day.</Text>
-                    )}
-                  </>
+                  <Text tabular className="mt-1.5 text-title-1 font-bold tracking-[-0.8px] text-white">
+                    {formatNaira(hero.totals.net_revenue)}
+                  </Text>
                 )}
-              </Card>
-            </>
+                <Text className="mt-1 text-foot text-white/60">
+                  {hero === undefined
+                    ? ' '
+                    : `Net revenue · ${hero.totals.completed_tickets} ${hero.totals.completed_tickets === 1 ? 'order' : 'orders'} · ${rangeLabel(hero.start_date, hero.end_date)}`}
+                </Text>
+              </View>
+              <View className="mt-3">
+                <TrendChart
+                  points={revenueChartPoints(hero?.days ?? [])}
+                  onDark
+                  accessibilityLabel={`Net revenue by day this month at ${branch.label}`}
+                />
+                {quietMonth && (
+                  <View pointerEvents="none" className="absolute left-0 right-0 top-8 items-center">
+                    <Text className="text-foot text-white/45">No revenue recorded this month</Text>
+                  </View>
+                )}
+              </View>
+            </Card>
           )}
+
+          <GroupLabel>Statement</GroupLabel>
+          <Chips
+            accessibilityLabel="Statement period"
+            options={STATEMENT_PERIODS.map((k) => ({ key: k, label: PERIOD_LABEL[k].chip }))}
+            value={statementPeriod}
+            onChange={setStatementPeriod}
+          />
+          <Card className="mt-3 px-4 py-2">
+            {statement.isError ? (
+              <View className="py-2">
+                <ErrorState error={statement.error} onRetry={() => void statement.refetch()} />
+              </View>
+            ) : figures === undefined || statement.data === undefined ? (
+              <View className="gap-2 py-2">
+                <Skeleton variant="row" className="h-6" />
+                <Skeleton variant="row" className="h-6" />
+                <Skeleton variant="row" className="h-6" />
+              </View>
+            ) : (
+              <>
+                <Text variant="caption" className="pb-1 pt-2">
+                  {rangeLabel(statement.data.start_date, statement.data.end_date)} · {statement.data.timezone} ·{' '}
+                  {figures.completed_tickets} {figures.completed_tickets === 1 ? 'order' : 'orders'} completed
+                </Text>
+                <Text variant="label" className="pt-2">Revenue</Text>
+                <Line label="Gross revenue" value={formatNaira(figures.gross_revenue)} />
+                <Line label="Refunds" value={formatNaira(figures.recognized_refunds)} minus />
+                <Line label="Net revenue" value={formatNaira(figures.net_revenue)} total />
+                <Text variant="label" className="pt-4">Cash collected</Text>
+                <Line label="Gross collected" value={formatNaira(figures.gross_collected)} />
+                <Line label="Refunds paid" value={formatNaira(figures.refunds_paid)} minus />
+                <Line label="Net collected" value={formatNaira(figures.net_collected)} total />
+                {isZeroDecimalString(figures.gross_revenue) && isZeroDecimalString(figures.gross_collected) && (
+                  <Text variant="meta" className="pb-2 pt-1">Nothing was sold or collected in this period.</Text>
+                )}
+              </>
+            )}
+          </Card>
 
           <GroupLabel>Available reports</GroupLabel>
           <Menu>
-            <MenuItem icon="sales" tone="accent" title="Sales" sub="Today's take and orders" onPress={() => router.push('/sales')} />
+            {reportRoles && (
+              <MenuItem
+                icon="box"
+                tone="accent"
+                title="Product performance"
+                sub="Best and worst sellers"
+                onPress={() => router.push('/reports/products')}
+              />
+            )}
+            <MenuItem icon="sales" title="Sales" sub="Today's take and orders" onPress={() => router.push('/sales')} />
             {moneyRoles && (
               <MenuItem icon="receipt" title="Expenses" sub="What was spent, by day" onPress={() => router.push('/expenses')} />
             )}
@@ -197,7 +218,7 @@ export default function ReportsScreen(): React.JSX.Element {
           </Menu>
 
           <Text variant="meta" className="mt-4">
-            Profit & loss, product and branch performance arrive in a later version.
+            Profit & loss and branch performance arrive in a later version.
           </Text>
         </>
       )}

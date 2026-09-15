@@ -1,59 +1,70 @@
-import { getDailyRevenueSummary } from '@bakeflow/api';
 import { getSupabaseClient } from '@bakeflow/auth';
-import { queryKeys } from '@bakeflow/hooks';
-import type { DailyRevenueSummary } from '@bakeflow/types';
-import { useQueries } from '@tanstack/react-query';
+import { useRevenueReport } from '@bakeflow/hooks';
+import type { DailyRevenueSummary, ReportPeriod, RevenueReport } from '@bakeflow/types';
 import { useMemo } from 'react';
 
 import { useSessionStore } from '../../../stores/session';
 
-const dayLabel = new Intl.DateTimeFormat('en-NG', { weekday: 'short' });
+const weekday = new Intl.DateTimeFormat('en-NG', { weekday: 'short', timeZone: 'UTC' });
+const dayMonth = new Intl.DateTimeFormat('en-NG', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-/** `YYYY-MM-DD` for the device's local calendar day `offset` days before today. */
-function isoDay(offset: number): { date: string; label: string } {
-  const d = new Date();
-  d.setDate(d.getDate() - offset);
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return { date, label: dayLabel.format(d) };
+/** A server `YYYY-MM-DD` as a calendar label. Read as UTC so the device's zone never shifts the day. */
+export function dayLabel(date: string, style: 'weekday' | 'dayMonth' = 'weekday'): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  return (style === 'weekday' ? weekday : dayMonth).format(d);
 }
 
 export interface RevenueDay {
   date: string;
   label: string;
+  /** The day in `get_daily_revenue_summary()`'s shape — the ranged report's row for that day. */
   summary: DailyRevenueSummary | undefined;
 }
 
+function toSummary(report: RevenueReport, index: number): DailyRevenueSummary | undefined {
+  const day = report.days[index];
+  if (day === undefined) return undefined;
+  return {
+    branch_id: report.branch_id,
+    reporting_date: day.date,
+    timezone: report.timezone,
+    gross_revenue: day.gross_revenue,
+    recognized_refunds: day.recognized_refunds,
+    net_revenue: day.net_revenue,
+    gross_collected: day.gross_collected,
+    refunds_paid: day.refunds_paid,
+    net_collected: day.net_collected,
+  };
+}
+
 /**
- * The last seven days of the server's daily revenue summary for one branch, oldest first.
+ * Revenue by day for one branch over a period, oldest first — one `get_revenue_report()` request.
  *
- * Each day is its own cached query under the same key `useDailyRevenueSummary` uses, so the
- * hero's "today" and the chart's last point are one request, not two. The server resolves
- * each date in the organization's own timezone.
+ * Previously seven `get_daily_revenue_summary()` calls whose dates came from the device's calendar;
+ * the ranged report resolves the days in the organization's timezone (REPORTING-MODEL.md §13) and
+ * each row equals that day's daily summary, so screens keep the same shape. `today` is the last day
+ * of the period (every period used here ends today).
  */
-export function useRevenueWeek(branchId: string | null) {
+export function useRevenueWeek(branchId: string | null, period: ReportPeriod = '7d') {
   const client = getSupabaseClient();
   const tenantId = useSessionStore((s) => s.activeTenantId);
-  const days = useMemo(() => [6, 5, 4, 3, 2, 1, 0].map(isoDay), []);
+  const { data, isLoading, isError, error, refetch, isRefetching } = useRevenueReport(client, tenantId, branchId, period);
 
-  const results = useQueries({
-    queries: days.map(({ date }, i) => ({
-      // The last entry is "today": keyed exactly like `useDailyRevenueSummary(…, undefined)`.
-      queryKey: queryKeys.dailyRevenueSummary(tenantId ?? 'none', branchId ?? 'none', i === 6 ? undefined : date),
-      queryFn: () => {
-        if (branchId === null) throw new Error('No branch selected for this report.');
-        return getDailyRevenueSummary(client, branchId, i === 6 ? undefined : date);
-      },
-      enabled: tenantId !== null && branchId !== null,
-    })),
-  });
-
-  return {
-    days: days.map((d, i): RevenueDay => ({ ...d, summary: results[i]?.data })),
-    today: results[6],
-    isLoading: results.some((r) => r.isLoading),
-    isError: results[6]?.isError === true,
-    error: results[6]?.error ?? null,
-    refetch: () => results.forEach((r) => void r.refetch()),
-    isRefetching: results.some((r) => r.isRefetching),
-  };
+  return useMemo(() => {
+    const days: RevenueDay[] =
+      data === undefined
+        ? []
+        : data.days.map((d, i) => ({ date: d.date, label: dayLabel(d.date), summary: toSummary(data, i) }));
+    const last = data === undefined ? undefined : toSummary(data, data.days.length - 1);
+    return {
+      report: data,
+      days,
+      today: { data: last },
+      isLoading,
+      isError,
+      error,
+      refetch: () => void refetch(),
+      isRefetching,
+    };
+  }, [data, isLoading, isError, error, isRefetching, refetch]);
 }

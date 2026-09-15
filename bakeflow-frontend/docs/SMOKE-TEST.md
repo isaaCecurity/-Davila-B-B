@@ -80,6 +80,19 @@ Each step says what to do, then what you should see. Tick it or note what happen
    of these products", and nothing is recorded (no new ticket, stock unchanged).
 9. As a **baker** or **driver**, check that Record sale is not offered.
 
+### 4c. Reports over a period (owner, manager)
+
+1. Record two counter sales today (§4b) for different products. Finance → **7 days**. → "Money in ·
+   last 7 days" includes both; the order count went up by 2; today's point on the chart rose.
+2. **30 days** and **90 days**. → The range under the hero changes (e.g. "16 Aug – 14 Sept"); the
+   Revenue tile says "Gross, last 30 days".
+3. Reports → the hero reads "This month so far" with the month's net revenue and orders. Statement →
+   **Today** matches Finance's figures for today; **Last month** shows 1st–last day of last month.
+4. Reports → **Product performance** → *This month*. → Both products appear; the first bar is apricot;
+   each row shows units, orders and "% of sales"; tap a row → its product page.
+5. Switch to **Units sold**. → The product with the most units is first.
+6. As a **baker** or **supervisor**, open Reports. → The figures are refused, not shown as zero.
+
 ## 5. Stock (owner, manager, baker)
 
 1. More → **Stock** → tap a product → set the count to a new number → *Correction* → Save count.

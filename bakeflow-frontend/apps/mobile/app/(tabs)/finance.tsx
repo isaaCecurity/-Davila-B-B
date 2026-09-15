@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '@bakeflow/auth';
 import { useCashSessions, useExpenses } from '@bakeflow/hooks';
-import { isZeroDecimalString } from '@bakeflow/types';
+import { isZeroDecimalString, type ReportPeriod } from '@bakeflow/types';
 import {
   Badge,
   type BadgeTone,
@@ -29,6 +29,7 @@ import { EmptyState, ErrorState, NoOrganizationState } from '../../components/Sc
 import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
 import { CATEGORY_META, METHOD_LABEL, varianceView, when } from '../../features/finance/financeDisplay';
 import { useRevenueWeek } from '../../features/reports/hooks/useRevenueWeek';
+import { PERIOD_LABEL, rangeLabel, revenueChartPoints } from '../../features/reports/reportDisplay';
 import { useSessionStore } from '../../stores/session';
 import { useOffBarBack } from '../../navigation/useOffBarBack';
 
@@ -90,9 +91,10 @@ function DrillTile({
  * Finance — the prototype's owner `finance` tab: the money that came in, where it went, and a
  * way into each ledger.
  *
- * Every figure is an exact string from the server: today's summary from
- * `get_daily_revenue_summary()`, the till state from `cash_sessions`, and individual expenses.
- * Nothing is added, subtracted or divided on the device.
+ * Every figure is an exact string from the server: the period's totals and days from
+ * `get_revenue_report()` (7, 30 or 90 days, resolved in the organization's timezone), the till
+ * state from `cash_sessions`, and individual expenses. Nothing is added, subtracted or divided on
+ * the device.
  *
  * The record-payment, open/close-till and add-expense forms this tab used to carry now live
  * where the prototype puts them: payment on the order, the till on Cash sessions, and Add
@@ -104,8 +106,8 @@ function DrillTile({
  * resolved BLOCKER-018 by descope: revenue and cash only for v1); the fixed ratios are invented;
  * and period and category totals are sums over money that belong to a server report. So the
  * hero is money collected today, the chart is the server's net revenue by day, and expense
- * composition becomes the latest expenses themselves. The 7/30/90-day switch waits for a ranged
- * report — the daily summary is the only aggregate endpoint.
+ * composition becomes the latest expenses themselves. The prototype's 7/30/90-day switch drives the
+ * hero, chart and revenue tile from the ranged report (P9.9 Q1); the hero is money collected.
  */
 export default function FinanceScreen(): React.JSX.Element {
   const router = useRouter();
@@ -114,9 +116,10 @@ export default function FinanceScreen(): React.JSX.Element {
   const tenantId = useSessionStore((s) => s.activeTenantId);
   const branches = useBranchOptions();
   const [branchIndex, setBranchIndex] = useState(0);
+  const [period, setPeriod] = useState<ReportPeriod>('7d');
   const branch = branches.options[branchIndex] ?? branches.options[0] ?? null;
 
-  const week = useRevenueWeek(branch?.branchId ?? null);
+  const week = useRevenueWeek(branch?.branchId ?? null, period);
   const sessions = useCashSessions(client, tenantId, branch?.branchId);
   const expenses = useExpenses(client, tenantId, branch?.branchId);
 
@@ -142,15 +145,13 @@ export default function FinanceScreen(): React.JSX.Element {
     return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
   }
 
-  const today = week.today?.data;
-  const points = week.days.map((d) => ({
-    value: d.summary === undefined ? 0 : Number(d.summary.net_revenue),
-    label: d.label,
-  }));
+  const report = week.report;
+  const totals = report?.totals;
+  const points = revenueChartPoints(report?.days ?? []);
   const lastVariance = varianceView(cash.lastClosed?.variance_amount ?? null);
   // Judged on the exact strings, not the plot numbers.
   const quietWeek =
-    !week.isLoading && week.days.every((d) => d.summary !== undefined && isZeroDecimalString(d.summary.net_revenue));
+    report !== undefined && report.days.every((d) => isZeroDecimalString(d.net_revenue));
 
   return (
     <ScreenScroll
@@ -181,6 +182,15 @@ export default function FinanceScreen(): React.JSX.Element {
             />
           )}
 
+          <View className="mt-3">
+            <Chips
+              accessibilityLabel="Period"
+              options={(['7d', '30d', '90d'] as const).map((k) => ({ key: k, label: PERIOD_LABEL[k].chip }))}
+              value={period}
+              onChange={setPeriod}
+            />
+          </View>
+
           {week.isError ? (
             <View className="mt-5">
               <ErrorState error={week.error ?? new Error('Could not load finance figures.')} onRetry={week.refetch} />
@@ -189,15 +199,17 @@ export default function FinanceScreen(): React.JSX.Element {
             <Card tone="ink" className="mt-5 overflow-hidden rounded-lg px-0 pb-4 pt-5">
               <View className="px-5">
                 <Text className="text-caption font-semibold uppercase tracking-[1.2px] text-white/50">
-                  Money in today
+                  Money in · {PERIOD_LABEL[period].phrase}
                 </Text>
-                {today === undefined ? (
+                {totals === undefined ? (
                   <Skeleton variant="figure" className="mt-2 w-44 bg-white/10" />
                 ) : (
-                  <CountUp to={Number(today.net_collected)} text={formatNaira(today.net_collected)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
+                  <CountUp to={Number(totals.net_collected)} text={formatNaira(totals.net_collected)} className="mt-1.5 text-display font-bold tracking-[-1.2px] text-white" />
                 )}
                 <Text className="mt-1.5 text-foot text-white/60">
-                  {today === undefined ? ' ' : `Collected after refunds · ${today.reporting_date}`}
+                  {report === undefined
+                    ? ' '
+                    : `Collected after refunds · ${rangeLabel(report.start_date, report.end_date)} · ${report.totals.completed_tickets} ${report.totals.completed_tickets === 1 ? 'order' : 'orders'}`}
                 </Text>
               </View>
 
@@ -205,20 +217,20 @@ export default function FinanceScreen(): React.JSX.Element {
                 <TrendChart
                   points={points}
                   onDark
-                  accessibilityLabel={`Net revenue over the last seven days at ${branch.label}`}
+                  accessibilityLabel={`Net revenue by day, ${PERIOD_LABEL[period].phrase}, at ${branch.label}`}
                 />
                 {quietWeek && (
                   <View pointerEvents="none" className="absolute left-0 right-0 top-8 items-center">
-                    <Text className="text-foot text-white/45">No revenue recorded in the last 7 days</Text>
+                    <Text className="text-foot text-white/45">No revenue recorded in the {PERIOD_LABEL[period].phrase}</Text>
                   </View>
                 )}
               </View>
 
-              {today !== undefined && (
+              {totals !== undefined && (
                 <View className="mx-5 mt-3 flex-row gap-5 border-t border-white/10 pt-3">
-                  <FootStat value={formatNaira(today.net_revenue)} label="Net revenue" />
+                  <FootStat value={formatNaira(totals.net_revenue)} label="Net revenue" />
                   <View className="w-px bg-white/10" />
-                  <FootStat value={formatNaira(today.refunds_paid)} label="Refunds paid" />
+                  <FootStat value={formatNaira(totals.refunds_paid)} label="Refunds paid" />
                 </View>
               )}
             </Card>
@@ -228,8 +240,8 @@ export default function FinanceScreen(): React.JSX.Element {
             <DrillTile
               icon="sales"
               label="Revenue"
-              value={today === undefined ? '—' : formatNaira(today.gross_revenue)}
-              sub="Gross, today"
+              value={totals === undefined ? '—' : formatNaira(totals.gross_revenue)}
+              sub={`Gross, ${PERIOD_LABEL[period].phrase}`}
               href="/sales"
             />
             <DrillTile
@@ -257,7 +269,7 @@ export default function FinanceScreen(): React.JSX.Element {
               }
               href="/cash"
             />
-            <DrillTile icon="chart" label="Reports" value="Daily" sub="Revenue & cash" href="/reports" />
+            <DrillTile icon="chart" label="Reports" value="Revenue" sub="Periods & products" href="/reports" />
           </View>
 
           <Callout
@@ -310,9 +322,9 @@ export default function FinanceScreen(): React.JSX.Element {
             )}
           </View>
 
-          {today !== undefined && !isZeroDecimalString(today.recognized_refunds) && (
+          {totals !== undefined && !isZeroDecimalString(totals.recognized_refunds) && (
             <Text variant="caption" className="mt-4">
-              Refunds recognised today: {formatNaira(today.recognized_refunds)}
+              Refunds recognised, {PERIOD_LABEL[period].phrase}: {formatNaira(totals.recognized_refunds)}
             </Text>
           )}
         </>
