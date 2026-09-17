@@ -25,6 +25,19 @@
         {
           "useSQLCipher": true
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "BakeFlow uses a photo you choose as your profile picture.",
+          "cameraPermission": "BakeFlow uses the camera to take your profile picture."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#E58A5B"
+        }
       ]
     ],
     "experiments": {

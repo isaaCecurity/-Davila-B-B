@@ -61,8 +61,10 @@ import {
   failProductionBatch,
   getCurrentDriverTrip,
   getDailyRevenueSummary,
+  getBranchPerformance,
   getProductPerformance,
   getRevenueReport,
+  getSalesBreakdown,
   getDeliveryById,
   getDriverTripById,
   getProductById,
@@ -81,6 +83,17 @@ import {
   listAuditEvents,
   createAndSendInvite,
   acceptOrganizationInvite,
+  getMyProfile,
+  resendAndDeliverInvite,
+  revokeOrganizationInvite,
+  searchWorkspace,
+  countUnreadNotifications,
+  listMyNotifications,
+  markNotificationsRead,
+  updateMyProfile,
+  uploadMyAvatar,
+  removeMyAvatar,
+  getAvatarUrl,
   completeCounterSale,
   listStockMovements,
   listProductVariants,
@@ -104,6 +117,9 @@ import {
   updateDeliveryDetails,
   verifyTripLoading,
   type AcceptInviteResult,
+  type ResendInviteResult,
+  type UpdateMyProfileInput,
+  type UploadMyAvatarInput,
   type CompleteCounterSaleInput,
   type CounterSaleResult,
   type AdjustStockInput,
@@ -155,6 +171,9 @@ import type {
   ProductionBatch,
   ProductionBatchWithIngredients,
   OrganizationInvite,
+  MyProfile,
+  WorkspaceSearchResults,
+  AppNotification,
   StaffRole,
   AuditEvent,
   StockMovement,
@@ -163,8 +182,10 @@ import type {
   Expense,
   ProductPerformance,
   ProductPerformanceOrder,
+  BranchPerformance,
   ReportPeriod,
   RevenueReport,
+  SalesBreakdown,
   Recipe,
   Ticket,
   TicketWithItems,
@@ -264,6 +285,14 @@ export const queryKeys = {
   drivers: (tenantId: string): unknown[] => orgScoped(tenantId, 'drivers'),
   staffRoles: (tenantId: string): unknown[] => orgScoped(tenantId, 'staff-roles'),
   invites: (tenantId: string): unknown[] => orgScoped(tenantId, 'invites'),
+  notifications: (tenantId: string): unknown[] => orgScoped(tenantId, 'notifications'),
+  unreadNotifications: (tenantId: string): unknown[] => orgScoped(tenantId, 'notifications-unread'),
+  workspaceSearch: (tenantId: string, query: string, onlyMyOrders: boolean): unknown[] =>
+    orgScoped(tenantId, 'workspace-search', query, onlyMyOrders),
+  /** Not organization-scoped: your profile is the same row in every bakery. */
+  myProfile: (userId: string): unknown[] => ['my-profile', userId],
+  /** Keyed by organization: a photo is readable only from the organization it was uploaded under. */
+  avatarUrl: (tenantId: string, objectPath: string): unknown[] => orgScoped(tenantId, 'avatar-url', objectPath),
   auditEvents: (tenantId: string): unknown[] => orgScoped(tenantId, 'audit-events'),
 
   /* ADR-001 — driver trips. */
@@ -293,6 +322,9 @@ export const queryKeys = {
     orgScoped(tenantId, 'revenue-report', branchId, period),
   productPerformance: (tenantId: string, branchId: string, period: string, order: string): unknown[] =>
     orgScoped(tenantId, 'product-performance', branchId, period, order),
+  salesBreakdown: (tenantId: string, branchId: string, period: string): unknown[] =>
+    orgScoped(tenantId, 'sales-breakdown', branchId, period),
+  branchPerformance: (tenantId: string, period: string): unknown[] => orgScoped(tenantId, 'branch-performance', period),
   /** Every ticket list shares the `tickets` prefix, so one invalidation refreshes all filters. */
   tickets: (tenantId: string, filters?: TicketFilters, options?: PageOptions): unknown[] =>
     orgScoped(tenantId, 'tickets', filters ?? {}, options ?? {}),
@@ -1176,7 +1208,7 @@ export function useRecordDriverTripPayment(
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTrip(tenant, variables.tripId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.driverTripTickets(tenant, variables.tripId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
-      invalidatePrefixes(queryClient, tenant, 'tickets', 'daily-revenue-summary', 'revenue-report', 'product-performance');
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'daily-revenue-summary', 'revenue-report', 'product-performance', 'sales-breakdown', 'branch-performance');
     },
   });
 }
@@ -1261,7 +1293,7 @@ export function useCompleteDriverFieldSale(
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.ticketId) });
       // Completion writes the sale movement out of the vehicle and recognises revenue.
-      invalidatePrefixes(queryClient, tenant, 'tickets', 'product-stock-levels', 'stock-movements', 'daily-revenue-summary', 'revenue-report', 'product-performance');
+      invalidatePrefixes(queryClient, tenant, 'tickets', 'product-stock-levels', 'stock-movements', 'daily-revenue-summary', 'revenue-report', 'product-performance', 'sales-breakdown', 'branch-performance');
     },
   });
 }
@@ -1339,7 +1371,7 @@ export function useRecordPayment(
       void queryClient.invalidateQueries({ queryKey: queryKeys.ticket(tenant, variables.input.ticketId) });
       // amount_paid changes every ticket list and the day's collected figure; a cash payment
       // lands in a till's expected amount.
-      invalidatePrefixes(queryClient, tenant, 'payment-tickets', 'tickets', 'cash-sessions', 'daily-revenue-summary', 'revenue-report', 'product-performance');
+      invalidatePrefixes(queryClient, tenant, 'payment-tickets', 'tickets', 'cash-sessions', 'daily-revenue-summary', 'revenue-report', 'product-performance', 'sales-breakdown', 'branch-performance');
     },
   });
 }
@@ -1422,6 +1454,37 @@ export function useRevenueReport(
       return getRevenueReport(client, branchId, period);
     },
     enabled: tenantId !== null && branchId !== null,
+  });
+}
+
+/** Sales by method and staff for one branch — `get_sales_breakdown()` (P9.9 Q4); the scope follows the caller. */
+export function useSalesBreakdown(
+  client: BakeflowClient,
+  tenantId: string | null,
+  branchId: string | null,
+  period: ReportPeriod = 'today',
+): UseQueryResult<SalesBreakdown, Error> {
+  return useQuery({
+    queryKey: queryKeys.salesBreakdown(tenantId ?? 'none', branchId ?? 'none', period),
+    queryFn: () => {
+      if (branchId === null) throw new Error('No branch selected for this report.');
+      return getSalesBreakdown(client, branchId, period);
+    },
+    enabled: tenantId !== null && branchId !== null,
+  });
+}
+
+/** Branches side by side — `get_branch_performance()` (P9.9 Q3). */
+export function useBranchPerformance(
+  client: BakeflowClient,
+  tenantId: string | null,
+  period: ReportPeriod = 'today',
+  options: { enabled?: boolean } = {},
+): UseQueryResult<BranchPerformance, Error> {
+  return useQuery({
+    queryKey: queryKeys.branchPerformance(tenantId ?? 'none', period),
+    queryFn: () => getBranchPerformance(client, period),
+    enabled: tenantId !== null && (options.enabled ?? true),
   });
 }
 
@@ -1526,6 +1589,8 @@ function invalidateAfterTicketTransition(
     orgScoped(tenant, 'daily-revenue-summary'),
     orgScoped(tenant, 'revenue-report'),
     orgScoped(tenant, 'product-performance'),
+    orgScoped(tenant, 'sales-breakdown'),
+    orgScoped(tenant, 'branch-performance'),
     orgScoped(tenant, 'product-stock-levels'),
     // `complete_ticket` writes the sale movement; ticket state gates dispatch and trip sales.
     orgScoped(tenant, 'stock-movements'),
@@ -1724,6 +1789,173 @@ export function useAcceptInvite(client: BakeflowClient): UseMutationResult<Accep
   });
 }
 
+/**
+ * Revoke an invite (P9.9 Q7). Refreshes the invites list either way — a refusal can mean the list
+ * was stale.
+ */
+export function useRevokeInvite(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<void, Error, { inviteId: string }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ inviteId }) => {
+      requireTenant(tenantId);
+      return revokeOrganizationInvite(client, inviteId);
+    },
+    onSettled: () => {
+      if (tenantId !== null) void queryClient.invalidateQueries({ queryKey: queryKeys.invites(tenantId) });
+    },
+  });
+}
+
+/**
+ * Resend an invite with a new link (P9.9 Q7); an email invite is also handed to `send-invite-email`.
+ * No retry: a replay would rotate the link again and invalidate the one just shown.
+ */
+export function useResendInvite(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<ResendInviteResult & { delivery: SendInviteEmailResult['delivery'] | null }, Error, { inviteId: string }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ inviteId }) => {
+      requireTenant(tenantId);
+      return resendAndDeliverInvite(client, inviteId);
+    },
+    onSettled: () => {
+      if (tenantId !== null) void queryClient.invalidateQueries({ queryKey: queryKeys.invites(tenantId) });
+    },
+  });
+}
+
+/** Your notification history in the active organization, newest first (P9.9 Q5). */
+export function useMyNotifications(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseQueryResult<AppNotification[], Error> {
+  return useQuery({
+    queryKey: queryKeys.notifications(tenantId ?? 'none'),
+    queryFn: () => listMyNotifications(client),
+    enabled: tenantId !== null,
+    refetchInterval: 60_000,
+  });
+}
+
+/** Unread count for the bell badge; refreshed every minute while the app is open (P9.9 Q5). */
+export function useUnreadNotificationCount(client: BakeflowClient, tenantId: string | null): UseQueryResult<number, Error> {
+  return useQuery({
+    queryKey: queryKeys.unreadNotifications(tenantId ?? 'none'),
+    queryFn: () => countUnreadNotifications(client),
+    enabled: tenantId !== null,
+    refetchInterval: 60_000,
+  });
+}
+
+/** Mark some (or, with no ids, all) notifications read and refresh the list and badge. */
+export function useMarkNotificationsRead(
+  client: BakeflowClient,
+  tenantId: string | null,
+): UseMutationResult<number, Error, { ids?: readonly string[] }> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ids }) => markNotificationsRead(client, ids),
+    onSettled: () => {
+      if (tenantId !== null) invalidatePrefixes(queryClient, tenantId, 'notifications', 'notifications-unread');
+    },
+  });
+}
+
+/**
+ * Search customers, orders and products (P9.9 Q6). Pass an already-debounced query; fewer than two
+ * characters does not ask the server.
+ */
+export function useWorkspaceSearch(
+  client: BakeflowClient,
+  tenantId: string | null,
+  query: string,
+  options: { onlyMyOrders?: boolean } = {},
+): UseQueryResult<WorkspaceSearchResults, Error> {
+  const q = query.trim();
+  const onlyMine = options.onlyMyOrders ?? false;
+  return useQuery({
+    queryKey: queryKeys.workspaceSearch(tenantId ?? 'none', q.toLowerCase(), onlyMine),
+    queryFn: () => searchWorkspace(client, q, { onlyMyOrders: onlyMine }),
+    enabled: tenantId !== null && q.length >= 2,
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** The signed-in person's own profile (P9.9 Q8). */
+export function useMyProfile(client: BakeflowClient, userId: string | null): UseQueryResult<MyProfile | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.myProfile(userId ?? 'none'),
+    queryFn: () => {
+      if (userId === null) throw new Error('Not signed in.');
+      return getMyProfile(client, userId);
+    },
+    enabled: userId !== null,
+  });
+}
+
+/** Upload and set a new profile photo (P9.9 Q9). No retry: each attempt uploads a new file. */
+export function useUploadMyAvatar(
+  client: BakeflowClient,
+  userId: string | null,
+): UseMutationResult<MyProfile, Error, UploadMyAvatarInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input) => uploadMyAvatar(client, input),
+    onSuccess: (profile) => {
+      if (userId !== null) queryClient.setQueryData(queryKeys.myProfile(userId), profile);
+    },
+  });
+}
+
+/** Remove your profile photo (P9.9 Q9). */
+export function useRemoveMyAvatar(client: BakeflowClient, userId: string | null): UseMutationResult<MyProfile, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => removeMyAvatar(client),
+    onSuccess: (profile) => {
+      if (userId !== null) queryClient.setQueryData(queryKeys.myProfile(userId), profile);
+    },
+  });
+}
+
+/** A signed URL for a stored profile photo, refreshed well before its hour runs out. Null → initials. */
+export function useAvatarUrl(
+  client: BakeflowClient,
+  tenantId: string | null,
+  objectPath: string | null | undefined,
+): UseQueryResult<string | null, Error> {
+  return useQuery({
+    queryKey: queryKeys.avatarUrl(tenantId ?? 'none', objectPath ?? 'none'),
+    queryFn: () => (objectPath ? getAvatarUrl(client, objectPath) : Promise.resolve(null)),
+    enabled: tenantId !== null && typeof objectPath === 'string' && objectPath !== '',
+    staleTime: 45 * 60_000,
+  });
+}
+
+/** Save your own name and contact phone (P9.9 Q8); refreshes your profile and the staff directory. */
+export function useUpdateMyProfile(
+  client: BakeflowClient,
+  userId: string | null,
+  tenantId: string | null,
+): UseMutationResult<MyProfile, Error, UpdateMyProfileInput> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input) => updateMyProfile(client, input),
+    onSuccess: (profile) => {
+      if (userId !== null) queryClient.setQueryData(queryKeys.myProfile(userId), profile);
+      if (tenantId !== null) {
+        invalidatePrefixes(queryClient, tenantId, 'staff-roles', 'drivers');
+      }
+    },
+  });
+}
+
 /** The newest audit entries (owner/admin/accountant; RLS returns none to anyone else). */
 export function useAuditEvents(
   client: BakeflowClient,
@@ -1767,6 +1999,8 @@ export function useCompleteCounterSale(
         'daily-revenue-summary',
         'revenue-report',
         'product-performance',
+        'sales-breakdown',
+        'branch-performance',
         'cash-sessions',
       );
     },

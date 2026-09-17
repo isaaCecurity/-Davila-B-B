@@ -9,14 +9,22 @@
  */
 
 import type {
+  BranchPerformance,
   DailyRevenueSummary,
   ProductPerformance,
   ProductPerformanceOrder,
   ReportPeriod,
   RevenueReport,
+  SalesBreakdown,
   Uuid,
 } from '@bakeflow/types';
-import { dailyRevenueSummarySchema, productPerformanceSchema, revenueReportSchema } from '@bakeflow/validation';
+import {
+  branchPerformanceSchema,
+  dailyRevenueSummarySchema,
+  productPerformanceSchema,
+  revenueReportSchema,
+  salesBreakdownSchema,
+} from '@bakeflow/validation';
 
 import type { BakeflowClient } from '../client';
 import { BakeflowApiError } from '../errors';
@@ -105,6 +113,41 @@ export async function getProductPerformance(
   const parsed = parseRow(productPerformanceSchema, payload, 'getProductPerformance');
   if (parsed === null) {
     throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'getProductPerformance: the RPC returned no envelope' });
+  }
+  return parsed;
+}
+
+/**
+ * Sales by payment method and by staff member for one branch — `get_sales_breakdown()` (P9.9 Q4).
+ * What comes back depends on the caller (`scope`): owner/admin/the branch's manager everything,
+ * supervisors no per-person figures, cashiers and drivers only their own sales.
+ *
+ * @throws {BakeflowApiError} `insufficient_role` without branch access or for a role with no view.
+ */
+export async function getSalesBreakdown(
+  client: BakeflowClient,
+  branchId: Uuid,
+  period: ReportPeriod = 'today',
+): Promise<SalesBreakdown> {
+  const payload = await run(client.rpc('get_sales_breakdown', { p_branch_id: branchId, p_period: period }));
+  const parsed = parseRow(salesBreakdownSchema, payload, 'getSalesBreakdown');
+  if (parsed === null) {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'getSalesBreakdown: the RPC returned no envelope' });
+  }
+  return parsed;
+}
+
+/**
+ * Branches side by side — `get_branch_performance()` (P9.9 Q3). Owner/admin: every branch; branch
+ * manager: the branches they manage. Each branch carries a 7-day net revenue trend.
+ *
+ * @throws {BakeflowApiError} `insufficient_role` for any other role.
+ */
+export async function getBranchPerformance(client: BakeflowClient, period: ReportPeriod = 'today'): Promise<BranchPerformance> {
+  const payload = await run(client.rpc('get_branch_performance', { p_period: period }));
+  const parsed = parseRow(branchPerformanceSchema, payload, 'getBranchPerformance');
+  if (parsed === null) {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'getBranchPerformance: the RPC returned no envelope' });
   }
   return parsed;
 }

@@ -60,3 +60,11 @@ export const auditEventSchema = z.object({
   action: z.string(),
   occurred_at: timestamptzSchema,
 });
+
+/** The signed-in person's own profile (`profiles` read, `update_my_profile()` result). */
+export const myProfileSchema = z.object({
+  id: uuidSchema,
+  full_name: z.string(),
+  phone: z.string().nullable(),
+  avatar_url: z.string().nullable(),
+});

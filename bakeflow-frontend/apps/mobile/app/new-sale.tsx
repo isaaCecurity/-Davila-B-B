@@ -297,7 +297,7 @@ export default function NewSaleScreen(): React.JSX.Element {
                 <Icon name="chevRight" size={15} color="textMuted" />
               </PressableScale>
 
-              <SearchBar value={query} onChangeText={setQuery} placeholder="Search products" />
+              <SearchBar value={query} onChangeText={setQuery} placeholder="Search products" iconPosition="end" />
               <Chips
                 className="my-3"
                 accessibilityLabel="Category"

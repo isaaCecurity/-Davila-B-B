@@ -4,9 +4,10 @@ import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 
 import { useActivePersona } from '../../features/auth/hooks/useActivePersona';
+import { useDisplayName } from '../../features/auth/hooks/useDisplayName';
+import { unregisterCurrentPushToken } from '../../features/notifications/PushBridge';
 import { useActiveOrganization } from '../../features/organization/hooks/useActiveOrganization';
 import { PERSONA_LABEL } from '../../navigation/tabs';
-import { useSessionStore } from '../../stores/session';
 import { toast } from '../../stores/ui/toast.store';
 
 /**
@@ -25,12 +26,7 @@ export default function MoreScreen(): React.JSX.Element {
   const router = useRouter();
   const persona = useActivePersona();
   const org = useActiveOrganization();
-  const email = useSessionStore((s) => s.session?.user.email ?? '');
-  const fullName = useSessionStore(
-    (s) => (s.session?.user.user_metadata?.['full_name'] as string | undefined) ?? ''
-  );
-
-  const displayName = fullName !== '' ? fullName : email;
+  const { name: displayName, contact, photo } = useDisplayName();
   const isOwner = persona === 'owner';
   const isManager = persona === 'manager';
   const isDriver = persona === 'driver';
@@ -39,6 +35,7 @@ export default function MoreScreen(): React.JSX.Element {
 
   async function onSignOut(): Promise<void> {
     try {
+      await unregisterCurrentPushToken();
       await signOut();
     } catch (e) {
       toast({
@@ -53,7 +50,7 @@ export default function MoreScreen(): React.JSX.Element {
     <ScreenScroll title="More">
       <Card accessibilityLabel={`${displayName}, ${PERSONA_LABEL[persona]}`}>
         <View className="flex-row items-center gap-[13px]">
-          <Avatar name={displayName} size="lg" />
+          <Avatar name={displayName} uri={photo} size="lg" />
           <View className="min-w-0 flex-1">
             <Text variant="subtitle" numberOfLines={1}>
               {displayName}
@@ -133,7 +130,7 @@ export default function MoreScreen(): React.JSX.Element {
 
       <View className="mt-4 flex-row items-center gap-2 px-0.5">
         <Icon name="shield" size={14} color="textMuted" />
-        <Text variant="caption">BakeFlow · signed in as {email}</Text>
+        <Text variant="caption">BakeFlow · signed in as {contact}</Text>
       </View>
     </ScreenScroll>
   );

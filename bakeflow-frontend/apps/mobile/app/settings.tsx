@@ -7,9 +7,10 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useActivePersona } from '../features/auth/hooks/useActivePersona';
+import { useDisplayName } from '../features/auth/hooks/useDisplayName';
+import { unregisterCurrentPushToken } from '../features/notifications/PushBridge';
 import { useActiveOrganization } from '../features/organization/hooks/useActiveOrganization';
 import { PERSONA_LABEL } from '../navigation/tabs';
-import { useSessionStore } from '../stores/session';
 import { useSettingsStore } from '../stores/settings/settings.store';
 import { toast } from '../stores/ui/toast.store';
 
@@ -32,18 +33,17 @@ export default function SettingsScreen(): React.JSX.Element {
   const router = useRouter();
   const persona = useActivePersona();
   const org = useActiveOrganization();
-  const email = useSessionStore((s) => s.session?.user.email ?? '');
-  const fullName = useSessionStore((s) => (s.session?.user.user_metadata?.['full_name'] as string | undefined) ?? '');
+  const { name, contact, photo } = useDisplayName();
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const [picking, setPicking] = useState(false);
 
   const orgAdmin = persona === 'owner' || persona === 'manager' || persona === 'admin';
-  const name = fullName !== '' ? fullName : email;
   const version = Constants.expoConfig?.version ?? '—';
 
   async function onSignOut(): Promise<void> {
     try {
+      await unregisterCurrentPushToken();
       await signOut();
     } catch (e) {
       toast({ tone: 'error', title: 'Could not sign out', text: e instanceof Error ? e.message : 'Check your connection and try again.' });
@@ -60,7 +60,7 @@ export default function SettingsScreen(): React.JSX.Element {
           scaleTo={0.98}
           className="mt-2 flex-row items-center gap-[13px] rounded-md bg-white p-4 shadow-e2"
         >
-          <Avatar name={name} size="lg" />
+          <Avatar name={name} uri={photo} size="lg" />
           <View className="min-w-0 flex-1">
             <Text variant="subtitle" numberOfLines={1}>{name}</Text>
             <Text variant="meta" numberOfLines={1}>{PERSONA_LABEL[persona]}{org === undefined ? '' : ` · ${org.name}`}</Text>
@@ -118,7 +118,7 @@ export default function SettingsScreen(): React.JSX.Element {
         </Menu>
 
         <Button className="mt-6" label="Sign out" tone="danger" onPress={() => void onSignOut()} block />
-        <Text variant="caption" className="mt-4 text-center">BakeFlow · signed in as {email}</Text>
+        <Text variant="caption" className="mt-4 text-center">BakeFlow · signed in as {contact}</Text>
         <View className="h-8" />
       </ScreenScroll>
 

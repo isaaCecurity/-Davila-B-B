@@ -127,3 +127,31 @@ export function formatQuantity(
 ): string {
   return formatDecimalString(value, { fractionDigits: 4, groupSeparator: '', ...options });
 }
+
+/**
+ * The prototype's `moneyShort()` for charts, bars and tiles: `₦850`, `₦75k`, `₦1.25M`, `−₦3k`.
+ *
+ * Display only — rounding happens here, at the final presentation step, never before. Worked on the
+ * exact decimal string with integers (no float), rounding half away from zero: thousands to a whole
+ * `k`, millions to two decimals with a trailing `.00` dropped. Values under ₦1,000 show whole naira.
+ */
+export function formatNairaShort(value: Money): string {
+  const { negative, integer, fraction } = split(value);
+  // Whole kobo-free naira, rounded half up on the first fraction digit.
+  let naira = BigInt(integer === '' ? '0' : integer);
+  if ((fraction[0] ?? '0') >= '5') naira += 1n;
+  const sign = negative && naira > 0n ? '−' : '';
+
+  const roundDiv = (n: bigint, d: bigint): bigint => (n + d / 2n) / d;
+
+  if (naira >= 1_000_000n) {
+    const hundredths = roundDiv(naira, 10_000n); // millions, to two decimals
+    const text = `${hundredths / 100n}.${(hundredths % 100n).toString().padStart(2, '0')}`.replace(/\.00$/, '');
+    return `${sign}₦${text}M`;
+  }
+  if (naira >= 1_000n) {
+    const k = roundDiv(naira, 1_000n);
+    return k >= 1_000n ? `${sign}₦1M` : `${sign}₦${k}k`;
+  }
+  return `${sign}₦${naira}`;
+}

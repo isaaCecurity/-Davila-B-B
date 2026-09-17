@@ -20,10 +20,11 @@
  * eviction, with the new tenant id keying a lookup that still had the old entries present.
  */
 
+import { requestPushDispatch } from '@bakeflow/api';
 import { getSupabaseClient, activeTenantIdFromSession } from '@bakeflow/auth';
 import { clearOrganizationScopedCache } from '@bakeflow/hooks';
 import { ThemeProvider } from '@bakeflow/ui';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -44,8 +45,22 @@ import { SkiaReady } from './SkiaReady';
  * `staleTime` is 30s so that navigating back to the catalog does not refetch on every
  * mount, without letting a price edit go unseen for long.
  */
+let lastDispatch = 0;
+
+/**
+ * P9.9 Q5: any successful write may have queued notifications (the database creates them), so ask
+ * `dispatch-push` to send them. At most once every 3 seconds; the function drains the whole queue.
+ */
+function afterWrite(): void {
+  const now = Date.now();
+  if (now - lastDispatch < 3_000) return;
+  lastDispatch = now;
+  requestPushDispatch(getSupabaseClient());
+}
+
 function createQueryClient(): QueryClient {
   return new QueryClient({
+    mutationCache: new MutationCache({ onSuccess: afterWrite }),
     defaultOptions: {
       queries: {
         retry: 1,

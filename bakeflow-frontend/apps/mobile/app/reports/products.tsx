@@ -2,12 +2,13 @@ import { getSupabaseClient } from '@bakeflow/auth';
 import { useProductPerformance } from '@bakeflow/hooks';
 import type { ProductPerformanceOrder, ProductPerformanceRow, ReportPeriod } from '@bakeflow/types';
 import { Card, Chips, GroupLabel, List, ListRow, ScreenScroll, Skeleton, Text } from '@bakeflow/ui';
-import { formatNaira } from '@bakeflow/utils';
+import { formatNaira, formatNairaShort } from '@bakeflow/utils';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
 import { EmptyState, ErrorState, NoOrganizationState } from '../../components/ScreenState';
+import { HBar } from '../../features/reports/components/HBar';
 import { useBranchOptions } from '../../features/branch/hooks/useBranchOptions';
 import { PERIOD_LABEL, rangeLabel } from '../../features/reports/reportDisplay';
 import { trimQuantity } from '../../features/tickets/ticketDisplay';
@@ -21,24 +22,6 @@ const ORDERS: readonly { key: ProductPerformanceOrder; label: string }[] = [
 
 function productLabel(row: ProductPerformanceRow): string {
   return row.variant_name === '' ? row.product_name : `${row.product_name} · ${row.variant_name}`;
-}
-
-/**
- * The prototype's `.hbar`: name, a track filled to this row's share of the leader, and the figure.
- * The width is a plot proportion from the exact strings (display only, like `TrendChart`); the
- * figure beside it is the exact string, formatted.
- */
-function HBar({ label, ratio, value, lead }: { label: string; ratio: number; value: string; lead: boolean }): React.JSX.Element {
-  const pct = Math.max(2, Math.min(100, Math.round(ratio * 100)));
-  return (
-    <View className="flex-row items-center gap-3 py-2" accessible accessibilityLabel={`${label}: ${value}`}>
-      <Text className="w-[34%] text-foot text-cocoa" numberOfLines={1}>{label}</Text>
-      <View className="h-2 flex-1 overflow-hidden rounded-pill bg-cream-deep">
-        <View className={`h-2 rounded-pill ${lead ? 'bg-apricot' : 'bg-cocoa'}`} style={{ width: `${pct}%` }} />
-      </View>
-      <Text tabular className="min-w-[72px] text-right text-foot font-semibold text-cocoa" numberOfLines={1}>{value}</Text>
-    </View>
-  );
 }
 
 /**
@@ -73,7 +56,7 @@ export default function ProductPerformanceScreen(): React.JSX.Element {
   const top = rows.slice(0, 8);
   const metric = (r: ProductPerformanceRow): string => (order === 'units' ? r.units : r.line_value);
   const leader = top[0] === undefined ? 0 : Number(metric(top[0]));
-  const shown = (r: ProductPerformanceRow): string => (order === 'units' ? trimQuantity(r.units) : formatNaira(r.line_value));
+  const shown = (r: ProductPerformanceRow): string => (order === 'units' ? trimQuantity(r.units) : formatNairaShort(r.line_value));
 
   return (
     <ScreenScroll

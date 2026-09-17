@@ -1,3 +1,5 @@
+import { getSupabaseClient } from '@bakeflow/auth';
+import { useUnreadNotificationCount } from '@bakeflow/hooks';
 import { Icon, IconButton, PressableScale, ScreenScroll, Text, type IconName } from '@bakeflow/ui';
 import { useRouter, type Href } from 'expo-router';
 import type { ReactNode } from 'react';
@@ -6,6 +8,7 @@ import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { useActiveOrganization } from '../../organization/hooks/useActiveOrganization';
 import { useSessionStore } from '../../../stores/session';
+import { useDisplayName } from '../../auth/hooks/useDisplayName';
 
 function greeting(now: Date = new Date()): string {
   const h = now.getHours();
@@ -33,8 +36,10 @@ export function HomeScaffold({
 }): React.JSX.Element {
   const router = useRouter();
   const org = useActiveOrganization();
-  const fullName = useSessionStore((s) => (s.session?.user.user_metadata?.['full_name'] as string | undefined) ?? '');
-  const first = fullName.trim().split(/\s+/)[0] ?? '';
+  const display = useDisplayName();
+  const tenantId = useSessionStore((s) => s.activeTenantId);
+  const unread = useUnreadNotificationCount(getSupabaseClient(), tenantId).data ?? 0;
+  const first = display.named ? (display.name.trim().split(/\s+/)[0] ?? '') : '';
 
   return (
     <ScreenScroll
@@ -43,7 +48,12 @@ export function HomeScaffold({
       right={
         <View className="flex-row gap-1.5">
           <IconButton icon="search" label="Search" onPress={() => router.push('/search')} />
-          <IconButton icon="bell" label="Notifications" tinted onPress={() => router.push('/alerts')} />
+          <View>
+            <IconButton icon="bell" label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'} tinted onPress={() => router.push('/alerts')} />
+            {unread > 0 && (
+              <View pointerEvents="none" className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-cream bg-apricot" />
+            )}
+          </View>
         </View>
       }
       refreshing={refreshing}

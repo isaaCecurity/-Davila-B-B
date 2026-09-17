@@ -17,9 +17,11 @@ import { useSessionStore } from '../../stores/session';
  * Operations — the prototype's supervisor `operations` hub: monitoring, not managing. One card
  * per area with a live count, each opening the screen for it.
  *
- * PORT-NOTE: "Sales monitoring" (by salesperson and payment method) needs per-staff and
- * per-method aggregates with no endpoint, so Sales opens the orders list; "Inventory monitoring"
- * and "Production monitoring" are the ported Stock and Production screens.
+ * Sales opens the prototype's "Sales monitoring" (`reports/sales`, P9.9 Q4 — a supervisor sees the
+ * payment-method split without per-person figures).
+ *
+ * PORT-NOTE: "Inventory monitoring" and "Production monitoring" are the ported Stock and Production
+ * screens.
  */
 export default function OperationsScreen(): React.JSX.Element {
   const router = useRouter();
@@ -43,7 +45,7 @@ export default function OperationsScreen(): React.JSX.Element {
   const firstTrip = trips.data?.rows[0];
 
   const tiles: { icon: IconName; tone: TileTone; title: string; sub: string; href: Href }[] = [
-    { icon: 'sales', tone: 'ok', title: 'Sales', sub: `${today.label} orders today`, href: '/orders' },
+    { icon: 'sales', tone: 'ok', title: 'Sales', sub: `${today.label} orders today · by payment method`, href: '/reports/sales' },
     { icon: 'box', tone: 'neutral', title: 'Inventory', sub: 'Stock on the shelf, out and below zero', href: '/inventory' },
     { icon: 'flame', tone: 'accent', title: 'Production', sub: `${kitchen.label} in the kitchen`, href: '/production' },
     { icon: 'truck', tone: 'info', title: 'Delivery', sub: deliveries.isLoading ? '—' : `${active} active`, href: '/delivery' },

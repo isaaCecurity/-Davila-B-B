@@ -6947,3 +6947,75 @@ Playwright verify_reports_filled.py (the two report RPCs intercepted with sample
   real walk-through.
 - Custom date ranges: the API accepts them; no picker in the app (it would need a date-picker dependency).
 - No new dependencies. Nothing committed.
+
+---
+
+## 2026-09-17 — P9.9 Q6 search, Q7 invite revoke/resend, Q8 profile editing (+ prototype parity pass)
+
+### Request
+
+"continue with queue Q6 search, Q7 revoke and resend invites and Q8 profile editing". CLAUDE.md's new
+prototype-fidelity rule applied: prototype screens read first, screenshots compared at 390 × 844.
+
+### Backend (applied live via `mcp__supabase__apply_migration` `search_invite_actions_profile_update`)
+
+- `search_workspace(p_query, p_limit, p_only_my_orders)` — SECURITY INVOKER (RLS decides visibility);
+  ILIKE with escaped wildcards; phone-digit matching with 0/234 prefix folding; starts-with ranking;
+  ≥ 2 chars; limit 1–20. No extension installed (TD-020).
+- `private.can_manage_invite(invite)` — tenant match + the AD-026 creation rules; not client-callable.
+- `revoke_organization_invite(id)` — pending/expired → revoked, audited, uniform refusal for unknown ids.
+- `resend_organization_invite(id, days)` — pending/expired → pending, new token hash + expiry, rate limited,
+  audited with `resent: true`.
+- `update_my_profile(name, phone)` — own row, validated, audited. Live `profiles_update_self` was read
+  first and found to refuse users whose home organization is not the active one → TD-019, not changed.
+
+### App
+
+- API: `searchWorkspace`, `getMyProfile`, `updateMyProfile`, `revokeOrganizationInvite`,
+  `resendOrganizationInvite`, `resendAndDeliverInvite`; types `WorkspaceSearchResults` (+hits), `MyProfile`;
+  schemas `workspaceSearchSchema`, `myProfileSchema`.
+- Hooks: `useWorkspaceSearch`, `useRevokeInvite`, `useResendInvite`, `useMyProfile`, `useUpdateMyProfile`.
+- Screens: `search.tsx` rewritten on the RPC; `invites.tsx` action sheet; `account.tsx` rebuilt to the
+  prototype with an Edit sheet; `features/auth/hooks/useDisplayName.ts` used by Home header, More, Settings.
+- Kit (from the screenshot comparison): `Button` secondary/danger restyled to the prototype CSS; `Sheet`
+  default × close; `SearchBar` focus border, web outline removed, `iconPosition`; counter-sale product
+  search uses the end icon like the prototype.
+- Docs: API-CONTRACT (4 rows), BACKEND_ROADMAP Q6–Q8 done, TECHNICAL_DEBT TD-019/020, CURRENT_TASK,
+  SMOKE-TEST §1b and §8 steps 13–16, PROTOTYPE-PORT addendum with the recorded differences, baseline appended.
+
+### Executed evidence
+
+```
+Rolled-back SQL (migration + DO block, temporary users/customers/invites inside the transaction) -> 40/40
+  S1 name match, walk-in excluded · S1b order by customer name · S2 0803… finds +234… · S2b 234… finds 0803…
+  · S3 starts-with first · S4 product price_from · S4b order-number prefix · S5 1 char empty
+  · S6 wildcards literal · S7 limit ≤ 20 · S8 only-my-orders · S9 RLS still applies (no branch access,
+  no orders) · S10 other tenant sees nothing · S11 anon cannot execute
+  · I1 resend rotates token + extends expiry · I1b old link unknown_token · I2 expired → pending
+  · I3 duplicate pending refused · I4 accepted not resendable · I5 revoke · I5b twice refused
+  · I5c revoked not resendable · I6/I6b audited · I7 manager resends own-branch crew invite
+  · I8 manager cannot touch admin invite · I9 cashier refused · I10 other-tenant owner refused
+  · I10b unknown id same answer · I11 helper not client-callable · I12 anon cannot revoke
+  · P1 trimmed name + normalised phone · P1b audited · P2/P2b bad names · P3 bad phone · P4/P4b clear phone
+  · P5 no organization still updates · P6 anon cannot execute
+apply_migration search_invite_actions_profile_update -> success
+Live check -> 4 public functions EXECUTE {authenticated, postgres, service_role}; can_manage_invite {postgres};
+  search_workspace prosecdef=false; customers 0, invites 0, auth users 1 (nothing left behind)
+npm run typecheck --workspace apps/mobile -> 0 errors
+npm run lint --workspace apps/mobile      -> 0 warnings
+npm test                                  -> 76 passed
+.venv pytest -q                           -> 12 passed
+Playwright verify_q678.py (390x844, read-only; invites list intercepted with sample rows) -> search live
+  ("pie" 1 product, "zzzz" No matches, "TKT" 6 orders); account rows + edit validation; invite sheets
+  (pending/expired/accepted), revoke confirmation; revoke/resend/profile calls 0; mutating none; errors none
+Prototype captures (proto_shots.py) and app captures compared: search empty/results/no matches, account,
+  invite sheet — differences listed in PROTOTYPE-PORT addendum
+kit_spot.py -> settings renders with restyled danger button; no writes, no errors
+```
+
+### Not done / not claimed
+
+- No resend, revoke or profile save was pressed against production from the app; SMOKE-TEST §1b/§8 cover it.
+- The test account's active bakery during the drive was Smoke Bakery B (little data), so search results were
+  shown for its one product and its orders; customer search was proven in SQL.
+- Photo upload (Q9) not built; manager invite actions proven in SQL only. No new dependencies. Nothing committed.

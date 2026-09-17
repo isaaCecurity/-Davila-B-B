@@ -1194,9 +1194,9 @@ need an owner answer before building (CLAUDE.md blocker rule).
 | Q3 | Branch performance (revenue, collected, tickets per branch over a range) | `report-branches` | Owner/admin only? *decide* |
 | Q4 | Sales by staff member and by payment method | `sales-monitor`, supervisor/manager homes | Who may see other staff's figures? *decide* |
 | Q5 | Notification events (history table + read state) | `notifications` history, bell badge | Which events notify whom? *decide*; P6.3 is DEFERRED today |
-| Q6 | Full-text search across orders, customers, products | `search` (today: newest 200 orders, client filter) | Postgres FTS / trigram; RLS-safe RPC |
-| Q7 | Invite revoke and resend | `invites` per-row actions | Resend = new token + expire old; audit both |
-| Q8 | Profile update (name, phone, avatar) | `account` edit | Column allowlist; avatar needs Q9 |
+| Q6 | ✅ **DONE 2026-09-17** — Search (`search_workspace`, SECURITY INVOKER) | `search` | ILIKE + phone-digit match, no extension; pg_trgm when tables grow (TD-020) |
+| Q7 | ✅ **DONE 2026-09-17** — Invite revoke and resend | `invites` action sheet | Resend rotates the token on the same row; both audited |
+| Q8 | ✅ **DONE 2026-09-17** — Profile update, name + contact phone (`update_my_profile`) | `account` Edit | Avatar still needs Q9 |
 | Q9 | File upload (expense receipts, proof of delivery, avatars) | `add-expense` receipt, delivery proof photo | Buckets and tenant-folder policies already exist; needs row linkage columns + client picker dependency (ask before adding) |
 
 Pending before this queue (not part of it): apply AD-025's invite migration

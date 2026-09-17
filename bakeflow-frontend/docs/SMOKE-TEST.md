@@ -27,6 +27,18 @@ Each step says what to do, then what you should see. Tick it or note what happen
    every figure now belongs to that bakery (nothing from the first one shows, even briefly).
 4. Settings → **Appearance** → Dark, then System. → The whole app repaints each time.
 
+### 1b. Search, account (any role)
+
+1. Home → search icon. → "Search customers, orders, products." (a driver sees customers, tickets).
+2. Type part of a customer's name, then their phone as `0803…`. → The customer appears both times.
+3. Type an order number (e.g. `TKT-0000`). → Orders appear, newest first; tap one → it opens.
+4. As a **cashier**, search a colleague's order number. → Not listed (cashiers search their own orders).
+5. `zzzz` → "No matches".
+6. More → Settings → your card → **Edit** → name and `0803 123 4567` → **Save**. → "Details saved";
+   Account shows the name and "+234 803 123 4567"; Home greets you by first name; Audit log has a
+   *profile · update* entry.
+7. Edit → clear the phone → Save. → Contact phone reads "Not added". Blank name → Save stays disabled.
+
 ## 2. Orders (owner, manager, cashier)
 
 1. Orders → **New order** → Walk-in → add 2 products → Continue → Create order.
@@ -167,6 +179,13 @@ link (AD-025/AD-026). Phone steps need phone sign-in switched on in Supabase (se
     invites.
 11. As a **cashier**, check that + is not offered and Invites explains who sends invites.
 12. Open a link older than 7 days. → "This invite has expired"; Invites now shows it **Expired**.
+13. Invites → a **pending** invite → **Resend invite**. → A new link is shown (or "Invite resent" once email
+    works); the old link now says it was already used or does not exist. Invites still lists one row.
+14. An **expired** invite → Resend → it reads **Pending** again with a new 7-day expiry.
+15. A pending invite → **Revoke invite** → **Revoke invite** again to confirm. → "Invite revoked"; the row
+    reads **Revoked**; its link no longer works; Audit log has the status change. Accepted and revoked
+    invites offer no actions.
+16. As a **manager**, try to revoke an invite for another branch or an admin invite. → Refused.
 
 ## 9. Role homes (one pass per role)
 

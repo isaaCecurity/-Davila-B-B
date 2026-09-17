@@ -101,3 +101,100 @@ export interface ProductPerformance {
   products_sold: number;
   rows: ProductPerformanceRow[];
 }
+
+/** Who a sales breakdown was computed for (Q4, owner decision 2026-09-17). */
+export type SalesBreakdownScope = 'full' | 'branch' | 'own';
+
+export const SALES_BREAKDOWN_METHODS = ['cash', 'transfer', 'pos', 'card', 'credit'] as const;
+export type SalesBreakdownMethod = (typeof SALES_BREAKDOWN_METHODS)[number];
+
+export interface SalesMethodRow {
+  method: SalesBreakdownMethod;
+  payments: number;
+  gross_collected: Money;
+  refunds: Money;
+  /** Can be negative. */
+  net_collected: Money;
+}
+
+export interface SalesStaffRow {
+  profile_id: Uuid | null;
+  full_name: string | null;
+  completed_tickets: number;
+  gross_sales: Money;
+  /** Share of the listed sales, `NN.NN`, server-computed. */
+  share_pct: string;
+}
+
+export interface SalesRecentRow {
+  ticket_id: Uuid;
+  ticket_number: string;
+  completed_at: string;
+  total_amount: Money;
+  customer_name: string | null;
+  /** Null in a supervisor's view (no per-person figures). */
+  seller_name: string | null;
+  methods: SalesBreakdownMethod[];
+}
+
+/**
+ * `get_sales_breakdown()` — P9.9 Q4. `full`: every seller and method (owner, admin, the branch's
+ * manager); `branch`: totals and methods, no per-person figures (supervisor); `own`: only the caller's
+ * sales (cashier, driver). `by_staff` is null for `branch`.
+ */
+export interface SalesBreakdown {
+  branch_id: Uuid;
+  period: ReportPeriod | null;
+  start_date: string;
+  end_date: string;
+  timezone: string;
+  scope: SalesBreakdownScope;
+  totals: {
+    gross_sales: Money;
+    completed_tickets: number;
+    gross_collected: Money;
+    refunds: Money;
+    net_collected: Money;
+  };
+  by_method: SalesMethodRow[];
+  by_staff: SalesStaffRow[] | null;
+  recent: SalesRecentRow[];
+}
+
+export interface BranchPerformanceRow {
+  branch_id: Uuid;
+  name: string;
+  code: string;
+  is_primary: boolean;
+  gross_revenue: Money;
+  refunds: Money;
+  net_revenue: Money;
+  net_collected: Money;
+  completed_tickets: number;
+  staff_count: number;
+  /** Share of the listed branches' net revenue, `NN.NN`. */
+  share_pct: string;
+  /** Net revenue for the 7 organization-local days ending at the period end, oldest first. */
+  trend: { date: string; net_revenue: Money }[];
+}
+
+/**
+ * `get_branch_performance()` — P9.9 Q3. `all` for owner/admin; `managed` for a branch manager (only
+ * branches they manage). Branches ordered by net revenue, highest first.
+ */
+export interface BranchPerformance {
+  period: ReportPeriod | null;
+  start_date: string;
+  end_date: string;
+  timezone: string;
+  scope: 'all' | 'managed';
+  totals: {
+    gross_revenue: Money;
+    refunds: Money;
+    net_revenue: Money;
+    net_collected: Money;
+    completed_tickets: number;
+    branch_count: number;
+  };
+  branches: BranchPerformanceRow[];
+}

@@ -116,3 +116,12 @@ export interface AuditEvent {
   action: string;
   occurred_at: string;
 }
+
+/** The signed-in person's own profile — read from `profiles`, edited by `update_my_profile()` (Q8). */
+export interface MyProfile {
+  id: Uuid;
+  full_name: string;
+  /** Contact phone shown to the team (E.164), not the sign-in phone. */
+  phone: string | null;
+  avatar_url: string | null;
+}

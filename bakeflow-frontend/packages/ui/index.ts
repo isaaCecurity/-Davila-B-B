@@ -31,6 +31,7 @@ export { CountUp, type CountUpFormat } from './CountUp';
 export { SearchBar } from './SearchBar';
 export { SwipeRow, type SwipeAction } from './SwipeRow';
 export { List, ListRow, type ListRowProps } from './List';
+export { Sparkline } from './Sparkline';
 export { TrendChart, type TrendPoint } from './TrendChart';
 export { TabBar, type TabBarProps, type TabItem } from './TabBar';
 export { Sheet, type SheetProps } from './Sheet';

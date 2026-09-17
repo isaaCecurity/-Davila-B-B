@@ -11,23 +11,25 @@ import { colorFor, type ColorToken } from './tokens';
 
 export type ButtonTone = 'primary' | 'secondary' | 'danger';
 
+/* The prototype's `.btn.-secondary` (cream-deep fill, no border) and `.btn.-danger` (error tint with
+   the darker error ink) — a destructive action reads as serious without shouting in solid red. */
 const SURFACE: Record<ButtonTone, string> = {
   primary: 'bg-cocoa active:opacity-80',
-  secondary: 'bg-white border border-border active:opacity-70',
-  danger: 'bg-error active:opacity-80',
+  secondary: 'bg-cream-deep active:opacity-80',
+  danger: 'bg-error-tint active:opacity-80',
 };
 
 const LABEL: Record<ButtonTone, string> = {
   primary: 'text-cream',
   secondary: 'text-cocoa',
-  danger: 'text-cream',
+  danger: 'text-error-ink',
 };
 
 /** ActivityIndicator takes a colour prop, not a class — so it resolves through the scheme. */
 const SPINNER: Record<ButtonTone, ColorToken> = {
   primary: 'cream',
   secondary: 'cocoa',
-  danger: 'cream',
+  danger: 'error-ink',
 };
 
 export interface ButtonProps extends Omit<PressableProps, 'children' | 'className'> {

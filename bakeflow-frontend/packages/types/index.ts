@@ -114,7 +114,10 @@ export {
 
 export type { OrganizationMembership, OrganizationRole } from './organization';
 
-export type { AuditEvent, Driver, InviteStatus, OrganizationInvite, ProfileStatus, StaffRole } from './staff';
+export type { AuditEvent, Driver, InviteStatus, MyProfile, OrganizationInvite, ProfileStatus, StaffRole } from './staff';
+export type { SearchCustomerHit, SearchOrderHit, SearchProductHit, WorkspaceSearchResults } from './search';
+export type { AppNotification, NotificationKind } from './notifications';
+export { NOTIFICATION_KINDS } from './notifications';
 export { INVITE_STATUSES, PROFILE_STATUSES } from './staff';
 
 export type { DriverTrip, DriverTripPhase, DriverTripStatus } from './driver-trip';
@@ -140,9 +143,17 @@ export type {
   ProductPerformance,
   ProductPerformanceOrder,
   ProductPerformanceRow,
+  BranchPerformance,
+  BranchPerformanceRow,
   ReportPeriod,
   RevenueFigures,
+  SalesBreakdown,
+  SalesBreakdownMethod,
+  SalesBreakdownScope,
+  SalesMethodRow,
+  SalesRecentRow,
+  SalesStaffRow,
   RevenueReport,
   RevenueReportDay,
 } from './reporting';
-export { REPORT_PERIODS } from './reporting';
+export { REPORT_PERIODS, SALES_BREAKDOWN_METHODS } from './reporting';

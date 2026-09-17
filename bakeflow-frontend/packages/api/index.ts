@@ -16,7 +16,13 @@ export { getExpenseById, listCashSessions, listExpenses, type ExpenseFilters } f
 // P9.8 -- reporting, revenue/cash half only (COGS/gross-profit stay out, BLOCKER-018).
 // Read-only RPC; see queries/reporting.ts's header for why it lives in queries/ rather
 // than mutations/.
-export { getDailyRevenueSummary, getProductPerformance, getRevenueReport } from './queries/reporting';
+export {
+  getBranchPerformance,
+  getDailyRevenueSummary,
+  getProductPerformance,
+  getRevenueReport,
+  getSalesBreakdown,
+} from './queries/reporting';
 export {
   closeCashSession,
   createExpense,
@@ -187,7 +193,30 @@ export {
 // P9.6 — driver picker read path. `listDrivers` answers "who in this tenant holds the
 // `driver` role", which `transition_delivery`'s `assigned` hop has always needed and never
 // had. See `queries/staff.ts` for the RLS/RPC provenance.
-export { listAuditEvents, listDrivers, listOrganizationInvites, listStaffRoles } from './queries/staff';
+export { getMyProfile, listAuditEvents, listDrivers, listOrganizationInvites, listStaffRoles } from './queries/staff';
+
+// P9.9 Q5 — notification history, read state and push registration.
+export { countUnreadNotifications, listMyNotifications } from './queries/notifications';
+export {
+  markNotificationsRead,
+  registerPushToken,
+  requestPushDispatch,
+  unregisterPushToken,
+} from './mutations/notifications';
+
+// P9.9 Q6 — one search across customers, orders and products (caller's own RLS).
+export { searchWorkspace, type WorkspaceSearchOptions } from './queries/search';
+
+// P9.9 Q8 — edit your own name and contact phone.
+export {
+  AVATAR_MAX_BYTES,
+  getAvatarUrl,
+  removeMyAvatar,
+  updateMyProfile,
+  uploadMyAvatar,
+  type UpdateMyProfileInput,
+  type UploadMyAvatarInput,
+} from './mutations/profile';
 
 // P8.1 — organization membership reads. The one read path that works with a null tenant
 // claim, because `organizations_select` keys off auth.uid() rather than
@@ -211,10 +240,14 @@ export {
   acceptOrganizationInvite,
   createAndSendInvite,
   createOrganizationInvite,
+  resendAndDeliverInvite,
+  resendOrganizationInvite,
+  revokeOrganizationInvite,
   sendInviteEmail,
   type AcceptInviteResult,
   type CreateInviteInput,
   type CreateInviteResult,
+  type ResendInviteResult,
   type SendInviteEmailInput,
   type SendInviteEmailResult,
 } from './mutations/invitations';

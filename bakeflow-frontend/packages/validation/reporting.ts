@@ -69,3 +69,87 @@ export const productPerformanceSchema = z.object({
     }),
   ),
 });
+
+const methodSchema = z.enum(['cash', 'transfer', 'pos', 'card', 'credit']);
+const shareSchema = z.string().regex(/^\d{1,3}\.\d{2}$/);
+
+/** Mirrors `get_sales_breakdown()` (P9.9 Q4). */
+export const salesBreakdownSchema = z.object({
+  branch_id: uuidSchema,
+  period: reportPeriodSchema.nullable(),
+  start_date: dateOnlySchema,
+  end_date: dateOnlySchema,
+  timezone: z.string(),
+  scope: z.enum(['full', 'branch', 'own']),
+  totals: z.object({
+    gross_sales: nonNegativeMoneySchema,
+    completed_tickets: z.number().int().nonnegative(),
+    gross_collected: nonNegativeMoneySchema,
+    refunds: nonNegativeMoneySchema,
+    net_collected: signedMoneySchema,
+  }),
+  by_method: z.array(
+    z.object({
+      method: methodSchema,
+      payments: z.number().int().nonnegative(),
+      gross_collected: nonNegativeMoneySchema,
+      refunds: nonNegativeMoneySchema,
+      net_collected: signedMoneySchema,
+    }),
+  ),
+  by_staff: z
+    .array(
+      z.object({
+        profile_id: uuidSchema.nullable(),
+        full_name: z.string().nullable(),
+        completed_tickets: z.number().int().nonnegative(),
+        gross_sales: nonNegativeMoneySchema,
+        share_pct: shareSchema,
+      }),
+    )
+    .nullable(),
+  recent: z.array(
+    z.object({
+      ticket_id: uuidSchema,
+      ticket_number: z.string(),
+      completed_at: z.string(),
+      total_amount: nonNegativeMoneySchema,
+      customer_name: z.string().nullable(),
+      seller_name: z.string().nullable(),
+      methods: z.array(methodSchema),
+    }),
+  ),
+});
+
+/** Mirrors `get_branch_performance()` (P9.9 Q3). */
+export const branchPerformanceSchema = z.object({
+  period: reportPeriodSchema.nullable(),
+  start_date: dateOnlySchema,
+  end_date: dateOnlySchema,
+  timezone: z.string(),
+  scope: z.enum(['all', 'managed']),
+  totals: z.object({
+    gross_revenue: nonNegativeMoneySchema,
+    refunds: nonNegativeMoneySchema,
+    net_revenue: signedMoneySchema,
+    net_collected: signedMoneySchema,
+    completed_tickets: z.number().int().nonnegative(),
+    branch_count: z.number().int().nonnegative(),
+  }),
+  branches: z.array(
+    z.object({
+      branch_id: uuidSchema,
+      name: z.string(),
+      code: z.string(),
+      is_primary: z.boolean(),
+      gross_revenue: nonNegativeMoneySchema,
+      refunds: nonNegativeMoneySchema,
+      net_revenue: signedMoneySchema,
+      net_collected: signedMoneySchema,
+      completed_tickets: z.number().int().nonnegative(),
+      staff_count: z.number().int().nonnegative(),
+      share_pct: shareSchema,
+      trend: z.array(z.object({ date: dateOnlySchema, net_revenue: signedMoneySchema })),
+    }),
+  ),
+});

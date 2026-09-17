@@ -4,6 +4,7 @@ export {
   formatDecimalString,
   formatMoney,
   formatNaira,
+  formatNairaShort,
   formatQuantity,
   type FormatDecimalOptions,
 } from './money';

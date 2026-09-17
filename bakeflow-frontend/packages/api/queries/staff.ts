@@ -8,11 +8,11 @@
  * See `@bakeflow/types` `staff.ts` for the RLS/RPC provenance this query relies on.
  */
 
-import type { AuditEvent, Driver, OrganizationInvite, StaffRole, Uuid } from '@bakeflow/types';
-import { auditEventSchema, driverSchema, organizationInviteSchema, staffRoleSchema } from '@bakeflow/validation';
+import type { AuditEvent, Driver, MyProfile, OrganizationInvite, StaffRole, Uuid } from '@bakeflow/types';
+import { auditEventSchema, driverSchema, myProfileSchema, organizationInviteSchema, staffRoleSchema } from '@bakeflow/validation';
 
 import type { BakeflowClient } from '../client';
-import { parseRows, run } from '../internal/read';
+import { parseRow, parseRows, run } from '../internal/read';
 
 /**
  * The raw embed shape before flattening. `user_roles` carries three foreign keys into
@@ -173,4 +173,15 @@ export async function listAuditEvents(client: BakeflowClient, limit = 100): Prom
       .limit(Math.min(Math.max(limit, 1), 200)),
   );
   return parseRows(auditEventSchema, data, 'listAuditEvents');
+}
+
+/**
+ * The signed-in person's own profile (`profiles_select` always allows your own row), or null when
+ * no profile exists yet.
+ */
+export async function getMyProfile(client: BakeflowClient, userId: Uuid): Promise<MyProfile | null> {
+  const data = await run(
+    client.from('profiles').select('id,full_name,phone,avatar_url').eq('id', userId).is('deleted_at', null).maybeSingle(),
+  );
+  return parseRow(myProfileSchema, data, 'getMyProfile');
 }

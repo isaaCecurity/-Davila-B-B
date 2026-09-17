@@ -110,7 +110,7 @@ export function OwnerHome(): React.JSX.Element {
 
       {branches.options.length > 1 && (
         <>
-          <SectionHead title="Branches" link={{ label: 'Reports', href: '/reports' }} />
+          <SectionHead title="Branches" link={{ label: 'Compare', href: '/reports/branches' }} />
           <List>
             {branches.options.map((b, i) => (
               <ListRow

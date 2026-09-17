@@ -61,8 +61,8 @@ const STATEMENT_PERIODS: readonly ReportPeriod[] = ['today', '7d', 'month', 'las
  *
  * PORT-NOTE: the prototype's hero also shows net profit and a month-on-month delta. Profit and cost
  * of goods are out of MVP scope (AD-022), and a delta would be arithmetic on money done here, so the
- * hero is net revenue with the order count. Profit & Loss and Branch performance have no endpoint
- * yet; PDF/spreadsheet export and scheduled e-mail have no backend. None are shown as if available.
+ * hero is net revenue with the order count. Profit & Loss has no endpoint (AD-022); PDF/spreadsheet
+ * export and scheduled e-mail have no backend. Sales report (Q4) and Branch performance (Q3) are live. None are shown as if available.
  * Whether a role may read reports is the RPC's decision (supervisors are refused today, as for the
  * daily summary); a refusal is shown as returned.
  */
@@ -205,7 +205,17 @@ export default function ReportsScreen(): React.JSX.Element {
                 onPress={() => router.push('/reports/products')}
               />
             )}
-            <MenuItem icon="sales" title="Sales" sub="Today's take and orders" onPress={() => router.push('/sales')} />
+            {persona !== 'baker' && (
+              <MenuItem
+                icon="sales"
+                title="Sales report"
+                sub={reportRoles || persona === 'supervisor' ? 'By salesperson and payment method' : 'Your sales today'}
+                onPress={() => router.push('/reports/sales')}
+              />
+            )}
+            {moneyRoles && (
+              <MenuItem icon="store" title="Branch performance" sub="Branches side by side" onPress={() => router.push('/reports/branches')} />
+            )}
             {moneyRoles && (
               <MenuItem icon="receipt" title="Expenses" sub="What was spent, by day" onPress={() => router.push('/expenses')} />
             )}
@@ -218,7 +228,7 @@ export default function ReportsScreen(): React.JSX.Element {
           </Menu>
 
           <Text variant="meta" className="mt-4">
-            Profit & loss and branch performance arrive in a later version.
+            Profit & loss arrives in a later version.
           </Text>
         </>
       )}

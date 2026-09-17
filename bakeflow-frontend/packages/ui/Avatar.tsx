@@ -1,4 +1,4 @@
-import { Text as RNText, View } from 'react-native';
+import { Image, Text as RNText, View } from 'react-native';
 
 import { cn } from './cn';
 import { avatarTones, type AvatarTone } from './tokens';
@@ -25,19 +25,33 @@ const SIZE = {
   lg: { box: 'h-[54px] w-[54px] rounded-[17px]', text: 'text-title-3' },
 } as const;
 
-/** The prototype's initials avatar (`.avatar`). */
+/** The prototype's initials avatar (`.avatar`); shows a photo in the same shape when `uri` is given. */
 export function Avatar({
   name,
   size = 'md',
   tone,
+  uri,
   className,
 }: {
   name: string;
   size?: keyof typeof SIZE;
   tone?: AvatarTone;
+  /** A photo URL (e.g. a signed profile photo URL); initials are shown when absent. */
+  uri?: string | null;
   className?: string;
 }): React.JSX.Element {
   const t = avatarTones[tone ?? toneFor(name)];
+  if (uri) {
+    return (
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        className={cn('overflow-hidden bg-cream-deep', SIZE[size].box, className)}
+      >
+        <Image source={{ uri }} className="h-full w-full" resizeMode="cover" />
+      </View>
+    );
+  }
   return (
     <View
       accessibilityElementsHidden

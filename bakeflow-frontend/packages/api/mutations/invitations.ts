@@ -257,3 +257,89 @@ export async function acceptOrganizationInvite(
     throw normalizeThrown(err);
   }
 }
+
+export interface ResendInviteResult {
+  inviteId: Uuid;
+  rawToken: string;
+  expiresAt: string;
+  /** Who the new link is for — the invite's email or phone. */
+  email: string | null;
+  phone: string | null;
+}
+
+function inviteRpcPayload(context: string, data: unknown): Record<string, unknown> {
+  if (data === null || typeof data !== 'object') {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: `${context}: the RPC returned no envelope` });
+  }
+  const invite = (data as Record<string, unknown>).invite;
+  if (invite === null || typeof invite !== 'object' || typeof (invite as Record<string, unknown>).id !== 'string') {
+    throw new BakeflowApiError({ code: 'response_shape_invalid', message: `${context}: the response carried no invite` });
+  }
+  return invite as Record<string, unknown>;
+}
+
+/**
+ * Revoke an invite — P9.9 Q7, `revoke_organization_invite(p_invite_id)`. A pending or expired
+ * invite becomes `revoked`; its link stops working. Nothing is deleted; the change is audited.
+ *
+ * Who may: whoever may create that invite (owner any; admin below admin; branch manager crew
+ * invites for a branch they manage).
+ *
+ * @throws {BakeflowApiError} `insufficient_role` (also for an unknown id);
+ *   `invalid_transition` when the invite is already accepted or revoked.
+ */
+export async function revokeOrganizationInvite(client: BakeflowClient, inviteId: Uuid): Promise<void> {
+  try {
+    const { data, error } = await client.rpc('revoke_organization_invite', { p_invite_id: inviteId });
+    if (error) throw normalizePostgrestError(error);
+    inviteRpcPayload('revokeOrganizationInvite', data);
+  } catch (err) {
+    if (err instanceof BakeflowApiError) throw err;
+    throw normalizeThrown(err);
+  }
+}
+
+/**
+ * Resend an invite — P9.9 Q7, `resend_organization_invite(p_invite_id)`. A pending or expired invite
+ * gets a NEW link and a fresh 7-day expiry; the previous link stops working. Only a hash of each
+ * link is stored, so this is also how a lost link is replaced.
+ *
+ * @throws {BakeflowApiError} `insufficient_role`; `invalid_transition` for accepted or revoked
+ *   invites; `duplicate_reference` when another pending invite already exists for the same person;
+ *   `rate_limited`.
+ */
+export async function resendOrganizationInvite(client: BakeflowClient, inviteId: Uuid): Promise<ResendInviteResult> {
+  try {
+    const { data, error } = await client.rpc('resend_organization_invite', { p_invite_id: inviteId, p_valid_days: 7 });
+    if (error) throw normalizePostgrestError(error);
+    const invite = inviteRpcPayload('resendOrganizationInvite', data);
+    const rawToken = (data as Record<string, unknown>).raw_token;
+    if (typeof rawToken !== 'string' || !/^[0-9a-f]{64}$/.test(rawToken)) {
+      throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'resendOrganizationInvite: no new link in the response' });
+    }
+    return {
+      inviteId: invite.id as Uuid,
+      rawToken,
+      expiresAt: typeof invite.expires_at === 'string' ? invite.expires_at : '',
+      email: typeof invite.email === 'string' ? invite.email : null,
+      phone: typeof invite.phone === 'string' ? invite.phone : null,
+    };
+  } catch (err) {
+    if (err instanceof BakeflowApiError) throw err;
+    throw normalizeThrown(err);
+  }
+}
+
+/**
+ * Resend, then for an email invite hand the new link to `send-invite-email`. A phone invite returns
+ * `delivery: null`: the inviter shares the new link themselves (AD-026).
+ */
+export async function resendAndDeliverInvite(
+  client: BakeflowClient,
+  inviteId: Uuid,
+): Promise<ResendInviteResult & { delivery: SendInviteEmailResult['delivery'] | null }> {
+  const resent = await resendOrganizationInvite(client, inviteId);
+  if (resent.email === null) return { ...resent, delivery: null };
+  const sent = await sendInviteEmail(client, { inviteId: resent.inviteId, rawToken: resent.rawToken });
+  return { ...resent, delivery: sent.delivery };
+}

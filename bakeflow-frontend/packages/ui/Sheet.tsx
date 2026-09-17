@@ -10,6 +10,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { IconButton } from './AppBar';
 import { timing } from './motion';
 import { Text } from './Text';
 import { motion } from './tokens';
@@ -21,7 +22,7 @@ export interface SheetProps {
   title?: string;
   /** Pinned under the scrolling body — primary and cancel actions. */
   foot?: ReactNode;
-  /** Right-hand header slot. */
+  /** Right-hand header slot. Defaults to the prototype's close (×) button when there is a title. */
   headerRight?: ReactNode;
   /** Show the drag grip and allow swipe-to-dismiss. */
   grip?: boolean;
@@ -131,7 +132,7 @@ export function Sheet({
                     {title}
                   </Text>
                 )}
-                {headerRight}
+                {headerRight ?? (title !== undefined ? <IconButton icon="close" label="Close" onPress={onClose} /> : null)}
               </View>
             )}
             <ScrollView

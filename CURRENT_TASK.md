@@ -1,5 +1,30 @@
 # BakeFlow — Current Task
 
+## ✅ Q6 search, Q7 invite revoke/resend, Q8 profile editing DELIVERED (2026-09-17)
+
+Owner: "continue with queue Q6 search, Q7 revoke and resend invites and Q8 profile editing".
+
+- **Live:** `search_workspace()` (SECURITY INVOKER), `revoke_organization_invite()`,
+  `resend_organization_invite()`, `update_my_profile()`, helper `private.can_manage_invite()` —
+  migration `search_invite_actions_profile_update`. Rolled-back tests 40/40, then applied and checked
+  live (grants, no leftover rows).
+- **App:** Search on the RPC (prototype grouping, copy, 180 ms debounce, icon after input); Invites
+  action sheet (Resend with new link / Revoke with confirmation); Account rebuilt to the prototype
+  layout with an Edit sheet (name + contact phone); the name shown in Home, More and Settings now comes
+  from the profile.
+- **Prototype parity:** screenshot pairs at 390×844 for search (empty/results/no matches), account and
+  the invite sheet. Kit fixes found by the comparison: Button `secondary` (cream-deep, no border) and
+  `danger` (error tint + error ink) now match the prototype CSS, Sheet shows the prototype's × close,
+  SearchBar darkens on focus and supports the prototype's end-position icon.
+- **Checks:** typecheck 0, lint 0, 76 unit tests, pytest 12, read-only web drives (no writes).
+- **Found, not changed:** TD-019 (`profiles_update_self` tenant check), TD-020 (search scale).
+- **Queue left:** Q3 branch performance, Q4 sales by staff/method, Q5 notifications (each needs a
+  decision); Q9 file upload (needs a picker dependency — ask first). Phone SMS still parked.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-17. **Not committed.**
+
+---
+
 ## ✅ Q1 revenue report over a period + Q2 product performance DELIVERED (2026-09-14)
 
 Owner picked Q1 and Q2 from the P9.9 queue.

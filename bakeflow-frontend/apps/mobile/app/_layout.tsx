@@ -3,6 +3,7 @@ import '../global.css';
 import { Stack, useGlobalSearchParams, useRouter, useSegments } from 'expo-router';
 import { useEffect } from 'react';
 
+import { PushBridge } from '../features/notifications/PushBridge';
 import { AppProviders } from '../providers/AppProviders';
 import { usePendingInviteStore } from '../stores/auth/pendingInvite.store';
 import { useSessionStore } from '../stores/session';
@@ -84,6 +85,7 @@ export default function RootLayout(): React.JSX.Element {
   return (
     <AppProviders>
       <NavigationGate />
+      <PushBridge />
       <Stack
         screenOptions={{
           headerShown: false,

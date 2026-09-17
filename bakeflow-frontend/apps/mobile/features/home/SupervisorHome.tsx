@@ -70,7 +70,7 @@ export function SupervisorHome(): React.JSX.Element {
 
       <SectionHead title="Operations" />
       <TileGrid>
-        <StatTile index={0} icon="sales" label="Orders today" value={ordersToday.label} sub="All channels" href="/orders" />
+        <StatTile index={0} icon="sales" label="Orders today" value={ordersToday.label} sub="Sales by method" href="/reports/sales" />
         <StatTile index={1} icon="box" label="Stock warnings" value={levels.isError ? '—' : levels.isLoading ? '—' : String(out)} sub={levels.isError ? 'Not readable for your role' : 'Out or below zero'} attention={out > 0} href="/inventory" />
         <StatTile index={2} icon="flame" label="Kitchen" value={kitchen.label} sub="Scheduled or preparing" href="/production" />
         <StatTile index={3} icon="truck" label="Deliveries" value={deliveries.isLoading ? '—' : String(active)} sub="Active right now" href="/delivery" />

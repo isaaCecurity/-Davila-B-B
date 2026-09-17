@@ -857,7 +857,7 @@ during the port.
 | 3 | login | `sign-in` | ✅ Phase 2 |
 | 4 | org | `select-organization` | ✅ |
 | 5 | home (role-adaptive) | `(tabs)/index` → `features/home/*` | ✅ all seven roles |
-| 6 | search | `search` | ✅ (newest 200 orders; no full-text endpoint) |
+| 6 | search | `search` | ✅ `search_workspace()` (P9.9 Q6) |
 | 7 | more | `(tabs)/more` | ✅ |
 | 8 | my-activity | → `my-sales`, `tickets` | ↪ covered |
 | 9 | profile | `account` | ✅ |
@@ -1074,4 +1074,42 @@ periods and ordering requested correctly (`get_revenue_report` ×6, `get_product
 smoke branch has no completed sales in 90 days, so the populated states were rendered with the two
 RPCs intercepted in the browser and sample payloads of the same shape (bars, list, shares, 90-day chart
 labels, units ordering). No mutating requests, no page errors.
+
+### Addendum 2026-09-17 — search, invite actions, account editing (P9.9 Q6/Q7/Q8) with screenshot parity
+
+Compared at 390 × 844 against the prototype served locally (`#owner/search`, `nav('search',{q})`,
+`#owner/account`, `nav('invites')` + tapping a pending invite). Captures: `parity/p-*.png` vs `a-*.png`
+(scratch, not committed).
+
+**search** — now `search_workspace()`: groups Customers / Orders / Products with IconTile rows (user,
+bag, box), six per group, the prototype's copy ("Search customers, orders, products.", "No matches / Try
+a different name, reference or phone number."), 180 ms debounce, no placeholder, magnifier after the
+input. Remaining differences, with reasons:
+- Deliveries and Production groups are not searched (production is the order queue — AD-022; deliveries
+  have their own board); owner hint therefore omits "deliveries".
+- Product sub-line is "from ₦X · N sizes" instead of "₦X · N left" (stock is per stockroom).
+- The prototype keeps the tab bar under Search and its title sits 9 px lower; the app opens Search as a
+  stack screen without the tab bar (shell-wide, pre-existing).
+
+**invites** — tapping an invite opens the prototype's action sheet: title with ×, "role · sent · status",
+a Resend invite row, a tinted Revoke invite button, Close. Differences: no "Copy invite link" row (only a
+hash is stored; Resend shows a new link); Revoke asks for confirmation (audited, irreversible); revoked
+invites stay listed as Revoked; no scrim blur (no expo-blur).
+
+**account** — prototype layout: card with avatar, name and Edit; Details: Branch, Role, Bakery.
+Differences: an extra Contact phone row (the number the team calls from Staff); no "+" photo button (Q9);
+Edit is the standard 46 px button rather than the prototype's `-sm` 44 px; Edit opens a sheet for name and
+contact phone (the prototype only toasts).
+
+**Kit corrections found by the comparison (affect every screen, all toward the prototype CSS):**
+`Button` `secondary` = cream-deep fill, no border (`.btn.-secondary`); `danger` = error tint with error ink
+(`.btn.-danger`); `Sheet` shows the prototype's × close whenever it has a title (`sheet()` header);
+`SearchBar` darkens to a 1.5 px cocoa border on focus (`:focus-within`), hides the web focus outline, and
+takes `iconPosition="end"` for the prototype's global search and counter-sale bars.
+
+Behaviour verified read-only (`verify_q678.py`): live search requests for "pie", "zzzz", "TKT" (product
+row, No matches, 6 orders); account rows and Edit validation (bad phone disables Save; `+234 803 123 4567`
+hint); invites with sample rows intercepted in the browser — pending sheet (Resend + Revoke), revoke
+confirmation, expired sheet offers Resend, accepted sheet offers nothing. Zero revoke/resend/profile
+calls, no mutating requests, no page errors.
 

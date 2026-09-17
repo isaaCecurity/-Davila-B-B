@@ -1,123 +1,162 @@
 import { getSupabaseClient } from '@bakeflow/auth';
-import { useCustomerPages, useCustomersByPhone, useProducts, useTickets } from '@bakeflow/hooks';
-import { Avatar, EmptyState, GroupLabel, IconTile, List, ListRow, ScreenScroll, SearchBar, Skeleton, Text } from '@bakeflow/ui';
+import { useWorkspaceSearch } from '@bakeflow/hooks';
+import { EmptyState, GroupLabel, IconTile, List, ListRow, ScreenScroll, SearchBar, Skeleton, Text } from '@bakeflow/ui';
 import { formatNaira } from '@bakeflow/utils';
+import { formatPhone, toE164Phone } from '@bakeflow/validation';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
-import { NoOrganizationState } from '../components/ScreenState';
+import { ErrorState, NoOrganizationState } from '../components/ScreenState';
 import { useActivePersona } from '../features/auth/hooks/useActivePersona';
-import { STATUS_META, ticketTime } from '../features/tickets/ticketDisplay';
+import type { Persona } from '../navigation/tabs';
 import { useSessionStore } from '../stores/session';
 
-const PAGE = { limit: 200 } as const;
-const SHOWN = 6;
-const looksLikePhone = (q: string): boolean => /^[+\d][\d\s-]{5,}$/.test(q);
+/** The prototype's 180ms settle before searching. */
+const DEBOUNCE_MS = 180;
+
+type Group = 'customers' | 'orders' | 'products';
 
 /**
- * Search — the prototype's `search`: one box across customers, orders and products, scoped to
- * what each role can already see.
+ * Which groups each persona searches — the prototype's `SEARCH_CATEGORIES.roles`, mapped onto what
+ * exists. Cashier ("staff") and driver see only their own orders, as on their own lists.
+ */
+function groupsFor(persona: Persona): { groups: Group[]; ordersLabel: string; onlyMyOrders: boolean } {
+  switch (persona) {
+    case 'driver':
+      return { groups: ['customers', 'orders'], ordersLabel: 'Tickets', onlyMyOrders: true };
+    case 'cashier':
+      return { groups: ['customers', 'orders', 'products'], ordersLabel: 'Orders', onlyMyOrders: true };
+    case 'baker':
+    case 'supervisor':
+      return { groups: ['orders', 'products'], ordersLabel: 'Orders', onlyMyOrders: false };
+    default:
+      return { groups: ['customers', 'orders', 'products'], ordersLabel: 'Orders', onlyMyOrders: false };
+  }
+}
+
+function phoneLine(phone: string | null): string | undefined {
+  if (phone === null || phone === '') return undefined;
+  const e164 = toE164Phone(phone);
+  return e164 === null ? phone : formatPhone(e164);
+}
+
+/**
+ * Search — the prototype's `search`: one box, results grouped by kind, up to six each, every row
+ * opening its own screen.
  *
- * A phone-shaped query asks the server for that exact number; anything else filters recently
- * loaded rows (the newest 200 orders, the first 200 products and customers). Every result opens
- * its own screen. RLS bounds every read, so a role only ever matches rows it could open.
+ * `search_workspace()` (P9.9 Q6) runs with the caller's own RLS, so a role only ever finds rows it
+ * could open. Customers match by name or phone (0803… finds +234 803…), orders by number or customer
+ * name, products by name, size or SKU; starts-with matches first.
  *
- * PORT-NOTE: the prototype searches its whole fictional dataset in memory. There is no
- * full-text search endpoint, so older orders beyond the newest 200 are not matched — the screen
- * says which sets it searched. Deliveries and production categories are reached from their own
- * screens.
+ * PORT-NOTE: the prototype's Deliveries and Production groups (drivers, bakers, supervisors) are
+ * reached from their own screens; production in this version is the order queue (AD-022), so bakers
+ * and supervisors search orders and products. A product row shows its lowest price instead of the
+ * prototype's "N left" — stock is per stockroom and is on the product screen.
  */
 export default function SearchScreen(): React.JSX.Element {
   const router = useRouter();
-  const client = getSupabaseClient();
   const persona = useActivePersona();
   const tenantId = useSessionStore((s) => s.activeTenantId);
-  const userId = useSessionStore((s) => s.userId);
   const [query, setQuery] = useState('');
-  const q = query.trim().toLowerCase();
-  const active = q.length >= 2;
-  const phone = looksLikePhone(q);
+  const [settled, setSettled] = useState('');
 
-  const seesCatalog = persona !== 'driver';
-  const ownOrdersOnly = persona === 'cashier' || persona === 'driver';
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(query), DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
 
-  const customers = useCustomerPages(client, active ? tenantId : null, { isWalkIn: false });
-  const byPhone = useCustomersByPhone(client, tenantId, phone ? q : '');
-  const tickets = useTickets(client, active ? tenantId : null, ownOrdersOnly && userId !== null ? { createdBy: userId } : {}, PAGE);
-  const products = useProducts(client, active && seesCatalog ? tenantId : null, PAGE);
-
-  const results = useMemo(() => {
-    if (!active) return { customers: [], orders: [], products: [] };
-    const loaded = customers.data?.pages.flatMap((p) => p.rows) ?? [];
-    return {
-      customers: phone ? (byPhone.data ?? []) : loaded.filter((c) => c.full_name.toLowerCase().includes(q) || (c.phone ?? '').includes(q)),
-      orders: (tickets.data?.rows ?? []).filter((t) => t.ticket_number.toLowerCase().includes(q)),
-      products: (products.data?.rows ?? []).filter((p) => p.name.toLowerCase().includes(q)),
-    };
-  }, [active, phone, q, customers.data, byPhone.data, tickets.data, products.data]);
+  const scope = groupsFor(persona);
+  const search = useWorkspaceSearch(getSupabaseClient(), tenantId, settled, { onlyMyOrders: scope.onlyMyOrders });
 
   if (tenantId === null) {
     return <NoOrganizationState onChoose={() => router.push('/select-organization')} />;
   }
 
-  const loading = active && (customers.isLoading || tickets.isLoading || (seesCatalog && products.isLoading));
-  const count = results.customers.length + results.orders.length + results.products.length;
+  const q = settled.trim();
+  const active = q.length >= 2;
+  const data = search.data;
+  const shows = (g: Group): boolean => scope.groups.includes(g);
+  const customers = data !== undefined && shows('customers') ? data.customers : [];
+  const orders = data !== undefined && shows('orders') ? data.orders : [];
+  const products = data !== undefined && shows('products') ? data.products : [];
+  const count = customers.length + orders.length + products.length;
+  const labels = scope.groups.map((g) => (g === 'orders' ? scope.ordersLabel.toLowerCase() : g));
 
   return (
     <ScreenScroll title="Search" onBack={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
       <View className="mt-2">
-        <SearchBar value={query} onChangeText={setQuery} placeholder="Customers, order numbers, products" autoFocus />
+        <SearchBar value={query} onChangeText={setQuery} accessibilityLabel="Search" iconPosition="end" autoFocus />
       </View>
 
       {!active ? (
-        <Text variant="meta" className="mt-6 text-center">Type at least two letters, an order number, or a phone number.</Text>
-      ) : loading ? (
-        <View className="mt-4 gap-2"><Skeleton variant="row" /><Skeleton variant="row" /></View>
+        <Text variant="meta" className="mt-4">Search {labels.join(', ')}.</Text>
+      ) : search.isError ? (
+        <View className="mt-4">
+          <ErrorState error={search.error} onRetry={() => void search.refetch()} />
+        </View>
+      ) : data === undefined ? (
+        <View className="mt-4 gap-2">
+          <Skeleton variant="row" />
+          <Skeleton variant="row" />
+        </View>
       ) : count === 0 ? (
-        <EmptyState icon="search" title={`Nothing matches “${query.trim()}”`} text="Try part of a name, a full phone number, or an order number like TKT-000081." />
+        <EmptyState icon="search" title="No matches" text="Try a different name, reference or phone number." />
       ) : (
         <>
-          {results.customers.length > 0 && (
+          {customers.length > 0 && (
             <>
               <GroupLabel>Customers</GroupLabel>
               <List>
-                {results.customers.slice(0, SHOWN).map((c) => (
-                  <ListRow key={c.id} leading={<Avatar name={c.full_name} />} title={c.full_name} sub={c.phone ?? undefined} onPress={() => router.push(`/customer/${c.id}`)} />
+                {customers.map((c) => (
+                  <ListRow
+                    key={c.id}
+                    leading={<IconTile icon="user" size="sm" />}
+                    title={c.full_name}
+                    sub={phoneLine(c.phone)}
+                    onPress={() => router.push(`/customer/${c.id}`)}
+                  />
                 ))}
               </List>
             </>
           )}
-          {results.orders.length > 0 && (
+          {orders.length > 0 && (
             <>
-              <GroupLabel>Orders</GroupLabel>
+              <GroupLabel>{scope.ordersLabel}</GroupLabel>
               <List>
-                {results.orders.slice(0, SHOWN).map((t) => (
+                {orders.map((t) => (
                   <ListRow
                     key={t.id}
-                    leading={<IconTile icon="bag" size="sm" />}
+                    leading={<IconTile icon={persona === 'driver' ? 'ticket' : 'bag'} size="sm" />}
                     title={t.ticket_number}
-                    sub={`${STATUS_META[t.status].label} · ${ticketTime(t.created_at)}`}
-                    end={formatNaira(t.total_amount)}
+                    sub={`${t.customer_name ?? 'Walk-in'} · ${formatNaira(t.total_amount)}`}
                     onPress={() => router.push(`/order/${t.id}`)}
                   />
                 ))}
               </List>
             </>
           )}
-          {results.products.length > 0 && (
+          {products.length > 0 && (
             <>
               <GroupLabel>Products</GroupLabel>
               <List>
-                {results.products.slice(0, SHOWN).map((p) => (
-                  <ListRow key={p.id} leading={<IconTile icon="box" size="sm" />} title={p.name} onPress={() => router.push(`/product/${p.id}`)} />
+                {products.map((p) => (
+                  <ListRow
+                    key={p.id}
+                    leading={<IconTile icon="box" size="sm" />}
+                    title={p.name}
+                    sub={[
+                      p.price_from === null ? 'No active price' : `${p.variant_count > 1 ? 'from ' : ''}${formatNaira(p.price_from)}`,
+                      p.variant_count > 1 ? `${p.variant_count} sizes` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    onPress={() => router.push(`/product/${p.id}`)}
+                  />
                 ))}
               </List>
             </>
           )}
-          <Text variant="caption" className="mt-4 text-center">
-            Searched {phone ? 'customers by phone' : 'loaded customers'}, the newest {ownOrdersOnly ? 'of your ' : ''}orders{seesCatalog ? ' and products' : ''}.
-          </Text>
         </>
       )}
     </ScreenScroll>

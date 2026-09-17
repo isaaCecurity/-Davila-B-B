@@ -1,7 +1,28 @@
 import { getSupabaseClient } from '@bakeflow/auth';
-import { useDeliveries, useDriverTrips, useProductStockLevels, useWarehouses } from '@bakeflow/hooks';
-import { isNegativeDecimalString, isZeroDecimalString } from '@bakeflow/types';
-import { EmptyState, GroupLabel, IconTile, List, ListRow, ScreenScroll, Skeleton, Text, type IconName, type TileTone } from '@bakeflow/ui';
+import {
+  useDeliveries,
+  useDriverTrips,
+  useMarkNotificationsRead,
+  useMyNotifications,
+  useProductStockLevels,
+  useWarehouses,
+} from '@bakeflow/hooks';
+import { isNegativeDecimalString, isZeroDecimalString, type AppNotification, type NotificationKind } from '@bakeflow/types';
+import {
+  EmptyState,
+  GroupLabel,
+  Icon,
+  IconButton,
+  IconTile,
+  List,
+  ListRow,
+  PressableScale,
+  ScreenScroll,
+  Skeleton,
+  Text,
+  type IconName,
+  type TileTone,
+} from '@bakeflow/ui';
 import { useRouter, type Href } from 'expo-router';
 import { useMemo } from 'react';
 import { View } from 'react-native';
@@ -14,6 +35,51 @@ import { useOpenTill, useTicketCount } from '../../features/home/hooks/useHomeDa
 import { startOfToday, ticketTime } from '../../features/tickets/ticketDisplay';
 import { useOffBarBack } from '../../navigation/useOffBarBack';
 import { useSessionStore } from '../../stores/session';
+
+/** How each notification kind presents: the prototype's groups, icons and tone strips. */
+const KIND: Record<NotificationKind, { group: string; icon: IconName; tone: TileTone }> = {
+  order_new: { group: 'Orders & production', icon: 'bag', tone: 'accent' },
+  order_ready: { group: 'Orders & production', icon: 'box', tone: 'ok' },
+  payment_received: { group: 'Payments & cash', icon: 'cash', tone: 'ok' },
+  till_variance: { group: 'Payments & cash', icon: 'alert', tone: 'warn' },
+  stock_out: { group: 'Inventory', icon: 'box', tone: 'bad' },
+  invite_accepted: { group: 'Team & account', icon: 'user', tone: 'info' },
+};
+const GROUP_ORDER = ['Orders & production', 'Payments & cash', 'Inventory', 'Team & account'];
+const STRIP: Record<string, string> = { accent: 'bg-apricot', ok: 'bg-success', warn: 'bg-warning', bad: 'bg-error', info: 'bg-info', neutral: 'bg-border' };
+
+function ago(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Intl.DateTimeFormat('en-NG', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+}
+
+/** The prototype's notification row: a tone strip, tile, title and "time · detail", unread dot, chevron. */
+function NotificationRow({ n, onOpen }: { n: AppNotification; onOpen: () => void }): React.JSX.Element {
+  const k = KIND[n.kind];
+  const unread = n.read_at === null;
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={`${unread ? 'Unread. ' : ''}${n.title}. ${n.body ?? ''}`}
+      onPress={onOpen}
+      scaleTo={1}
+      className="min-h-tap flex-row items-center gap-[13px] px-4 py-[13px] active:bg-cocoa/5"
+    >
+      <View className={`absolute bottom-0 left-0 top-0 w-[3px] ${STRIP[k.tone] ?? 'bg-border'}`} />
+      <IconTile icon={k.icon} tone={k.tone} size="sm" />
+      <View className="min-w-0 flex-1">
+        <Text variant="body" className={unread ? 'font-semibold' : 'font-medium'}>{n.title}</Text>
+        <Text variant="meta" numberOfLines={2}>{[ago(n.created_at), n.body].filter(Boolean).join(' · ')}</Text>
+      </View>
+      {unread && <View className="h-2 w-2 rounded-full bg-apricot" />}
+      {n.route !== null && <Icon name="chevRight" size={17} color="textMuted" />}
+    </PressableScale>
+  );
+}
 
 interface Alert {
   key: string;
@@ -31,10 +97,14 @@ interface Alert {
  * stock that ran out, deliveries that failed, trips waiting on the bakery, no till open — and
  * each opens the screen where it is handled. Pull to refresh re-derives them.
  *
- * PORT-NOTE: the prototype shows an event history ("Order BF-2045 confirmed", "Password
- * changed") with read/unread and "mark all read". There is no notifications table or push
- * channel yet, so this is a live to-do list rather than a history, and there is nothing to mark
- * read. Payment/invoice, insight and sign-in events have no source.
+ * Above the to-do list is the prototype's notification history (P9.9 Q5): events written by the
+ * database for this person — new orders, orders ready, payments received, stock running out, invites
+ * accepted, tills closing short or over — grouped, with unread dots and "mark all read" (✓ in the
+ * header). Tapping one marks it read and opens its screen. The same events are pushed to phones.
+ *
+ * PORT-NOTE: the prototype's insight, invoice and sign-in events have no source and are not shown.
+ * The live "needs attention" list is kept below the history — it covers states the history cannot
+ * (a failed delivery, no till open) and was already the app's Alerts screen.
  */
 export default function AlertsScreen(): React.JSX.Element {
   const router = useRouter();
@@ -46,6 +116,17 @@ export default function AlertsScreen(): React.JSX.Element {
   const branch = branches.options[0] ?? null;
   const scope = branch === null ? {} : { branchId: branch.branchId };
   const { labels } = useVariantLabels();
+  const history = useMyNotifications(client, tenantId);
+  const markRead = useMarkNotificationsRead(client, tenantId);
+  const unread = (history.data ?? []).filter((n) => n.read_at === null).length;
+  const historyGroups = useMemo(() => {
+    const by = new Map<string, AppNotification[]>();
+    for (const n of history.data ?? []) {
+      const g = KIND[n.kind].group;
+      by.set(g, [...(by.get(g) ?? []), n]);
+    }
+    return GROUP_ORDER.filter((g) => by.has(g)).map((g) => ({ label: g, items: by.get(g) ?? [] }));
+  }, [history.data]);
 
   const office = persona === 'owner' || persona === 'manager' || persona === 'admin' || persona === 'cashier' || persona === 'supervisor';
   const submitted = useTicketCount({ status: 'submitted', ...scope });
@@ -125,11 +206,13 @@ export default function AlertsScreen(): React.JSX.Element {
 
   return (
     <ScreenScroll
-      title="Alerts"
-      sub={loading ? undefined : total === 0 ? 'All clear' : `${total} need${total === 1 ? 's' : ''} attention`}
+      title="Notifications"
+      sub={history.isLoading ? undefined : unread > 0 ? `${unread} unread` : total === 0 ? 'All clear' : `${total} need${total === 1 ? 's' : ''} attention`}
       onBack={onBack}
-      refreshing={submitted.isRefetching}
+      right={unread > 0 ? <IconButton icon="check" label="Mark all as read" onPress={() => markRead.mutate({})} /> : undefined}
+      refreshing={submitted.isRefetching || history.isRefetching}
       onRefresh={() => {
+        void history.refetch();
         void submitted.refetch();
         void toMake.refetch();
         void ready.refetch();
@@ -139,10 +222,29 @@ export default function AlertsScreen(): React.JSX.Element {
         void levels.refetch();
       }}
     >
+      {historyGroups.map((g) => (
+        <View key={g.label}>
+          <GroupLabel>{g.label}</GroupLabel>
+          <List>
+            {g.items.map((n) => (
+              <NotificationRow
+                key={n.id}
+                n={n}
+                onOpen={() => {
+                  if (n.read_at === null) markRead.mutate({ ids: [n.id] });
+                  if (n.route !== null) router.push(n.route as Href);
+                }}
+              />
+            ))}
+          </List>
+        </View>
+      ))}
+      {historyGroups.length > 0 && groups.length > 0 && <GroupLabel>Needs attention</GroupLabel>}
       {loading ? (
         <View className="mt-2 gap-2"><Skeleton variant="row" /><Skeleton variant="row" /></View>
       ) : groups.length === 0 ? (
-        <EmptyState icon="checkCircle" title="Nothing needs you right now" text="Orders waiting, stock that runs out, failed deliveries and trips that need the bakery appear here." />
+        historyGroups.length > 0 ? null : 
+        <EmptyState icon="checkCircle" title="Nothing needs you right now" text="New orders, payments, stock that runs out, failed deliveries and trips that need the bakery appear here." />
       ) : (
         groups.map((g) => (
           <View key={g.label}>
