@@ -51,6 +51,22 @@ export interface UploadMyAvatarInput {
   /** A local file URI from the image picker (or a blob: URL on web). */
   uri: string;
   mimeType: string;
+  /** The photo being replaced, so the old file can be cleared out afterwards. */
+  previousPath?: string | null;
+}
+
+/**
+ * Best-effort removal of a profile photo file the caller uploaded (TD-021 rules: you may delete your
+ * own file in `avatars`). Never throws — the profile has already been changed by the time this runs,
+ * and a leftover file is not worth failing the action for.
+ */
+async function discardAvatarFile(client: BakeflowClient, objectPath: string | null | undefined): Promise<void> {
+  if (objectPath === null || objectPath === undefined || objectPath === '') return;
+  try {
+    await client.storage.from('avatars').remove([objectPath]);
+  } catch {
+    /* the profile no longer points at it; an orphaned file is harmless */
+  }
 }
 
 /**
@@ -97,16 +113,21 @@ export async function uploadMyAvatar(client: BakeflowClient, input: UploadMyAvat
   if (parsed === null) {
     throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'uploadMyAvatar: the RPC returned no profile' });
   }
+  await discardAvatarFile(client, input.previousPath);
   return parsed;
 }
 
-/** Remove your profile photo (the profile goes back to initials; the file is kept, as uploads are). */
-export async function removeMyAvatar(client: BakeflowClient): Promise<MyProfile> {
+/**
+ * Remove your profile photo: the profile goes back to initials and the stored file is deleted.
+ * `currentPath` is the photo being removed — pass it so the file does not linger in storage.
+ */
+export async function removeMyAvatar(client: BakeflowClient, currentPath?: string | null): Promise<MyProfile> {
   const payload = await run(client.rpc('set_my_avatar', { p_object_path: null }));
   const parsed = parseRow(myProfileSchema, payload, 'removeMyAvatar');
   if (parsed === null) {
     throw new BakeflowApiError({ code: 'response_shape_invalid', message: 'removeMyAvatar: the RPC returned no profile' });
   }
+  await discardAvatarFile(client, currentPath);
   return parsed;
 }
 

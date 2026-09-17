@@ -1913,11 +1913,14 @@ export function useUploadMyAvatar(
   });
 }
 
-/** Remove your profile photo (P9.9 Q9). */
-export function useRemoveMyAvatar(client: BakeflowClient, userId: string | null): UseMutationResult<MyProfile, Error, void> {
+/** Remove your profile photo (P9.9 Q9). Pass the photo's path so its file is deleted too. */
+export function useRemoveMyAvatar(
+  client: BakeflowClient,
+  userId: string | null,
+): UseMutationResult<MyProfile, Error, string | null | undefined> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => removeMyAvatar(client),
+    mutationFn: (currentPath) => removeMyAvatar(client, currentPath),
     onSuccess: (profile) => {
       if (userId !== null) queryClient.setQueryData(queryKeys.myProfile(userId), profile);
     },

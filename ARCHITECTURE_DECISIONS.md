@@ -1105,3 +1105,27 @@ Edge Function `dispatch-push` deployed (verify_jwt on).
 **Owner setup still needed for pushes to reach phones:** push credentials in the Expo project — FCM (Android)
 and APNs (iOS) — see NOTIFICATIONS.md. In-app notifications work without it.
 
+## AD-028 — Who may replace or delete a stored file · APPROVED, IMPLEMENTED 2026-09-17
+
+Closing TD-021, found while building profile photos: `bakeflow_objects_update` let any member of an
+organization overwrite any object in that organization's folders, in all four buckets.
+
+**Decisions (product owner, 2026-09-17, asked and answered):**
+- **Replace (UPDATE):** only the person who uploaded the file, and only in `avatars` and
+  `product-images`. Owner, admin and branch manager may also replace shared product photos.
+  **Receipts and delivery proofs can never be replaced** — evidence stays as uploaded.
+- **Delete (DELETE):** owner, admin and branch manager as before (profile and product photos), plus
+  anyone may delete a profile photo they uploaded themselves. Receipts and delivery proofs remain
+  undeletable through the API.
+- **Read and upload are unchanged:** any member of the organization, inside that organization's folder.
+
+Implementation notes: the UPDATE policy's WITH CHECK also pins `bucket_id`, so an object cannot be
+renamed or moved into `receipts` or `delivery-proofs` to escape these rules. The app now deletes the
+old file when a profile photo is replaced or removed (best effort — the profile change never fails
+because of a leftover file). Storage held no objects when this was applied, so nothing was affected.
+
+Migration `20260917190000_storage_replace_delete_rules.sql`, applied live after 21/21 rolled-back
+policy tests. Direct SQL deletes on `storage.objects` are blocked by Supabase's `protect_objects_delete`
+trigger; the tests set `storage.allow_delete_query` inside the rolled-back transaction to exercise the
+DELETE policy.
+

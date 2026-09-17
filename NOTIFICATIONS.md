@@ -19,12 +19,16 @@ See `ARCHITECTURE_DECISIONS.md` AD-027.
 
 ---
 
-## DECISION NEEDED (not urgent): who may replace uploaded files (2026-09-17)
+## DONE: who may replace or delete a stored file (2026-09-17, your decision)
 
-While building profile photos I found that any member of a bakery could overwrite any file stored for
-that bakery — including receipts and delivery photos once those uploads exist. Nothing does that today
-(profile photos never overwrite), but it should be closed before receipt or delivery-photo uploads are
-built. Options are in `TECHNICAL_DEBT.md` TD-021.
+Any member of a bakery could previously overwrite any file stored for that bakery. Now:
+- you can replace a file **you** uploaded; owners, admins and branch managers can also replace shared
+  product photos;
+- receipts and delivery photos can never be replaced or deleted once uploaded;
+- owners, admins and branch managers delete profile and product photos, and anyone can delete a
+  profile photo of their own — removing your photo now deletes the file as well.
+
+Nothing was stored in the bakery's file storage at the time, so no existing file was affected.
 
 ---
 

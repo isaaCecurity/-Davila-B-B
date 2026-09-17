@@ -121,7 +121,8 @@ Each step says what to do, then what you should see. Tick it or note what happen
 8. On a phone build with push credentials: repeat step 4 with the app in the background → a push arrives;
    tapping it opens the order. Sign out → no more pushes to that phone for that person.
 9. Account → tap the photo **+** → Choose a photo → pick one under 2 MB. → "Photo updated"; the photo shows on
-   Account, More and Settings; Audit log has a profile update. Remove photo → initials again.
+   Account, More and Settings; Audit log has a profile update. Choose another photo → the first file is gone
+   from storage (`avatars`). Remove photo → initials again and the file is deleted (AD-028).
 
 ## 5. Stock (owner, manager, baker)
 

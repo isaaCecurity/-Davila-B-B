@@ -7096,3 +7096,32 @@ Parity screenshots vs prototype: sales-monitor, report-branches, notifications, 
 - No push reached a real phone (needs FCM/APNs credentials and an EAS build); no photo was uploaded to
   production from the app; the notification screen was shown with sample rows intercepted in the browser.
 - Receipt and delivery-proof uploads not built (owner scoped Q9 to the profile photo).
+
+---
+
+## 2026-09-17 — TD-021 closed: who may replace or delete a stored file (AD-028)
+
+Owner asked to fix the storage gap before moving on. Asked the two authorization questions (replace,
+delete) and implemented the answers.
+
+- `20260917190000_storage_replace_delete_rules.sql` — `bakeflow_objects_update` rewritten (uploader only,
+  `avatars` + `product-images`, owner/admin/branch_manager also for product photos, WITH CHECK pins
+  `bucket_id`); `bakeflow_objects_delete` extended so people can delete a profile photo they uploaded.
+  SELECT and INSERT untouched.
+- App: `uploadMyAvatar` takes `previousPath` and `removeMyAvatar` takes the current path; both delete the
+  old file best-effort after the profile change succeeds (`discardAvatarFile`). `useRemoveMyAvatar` now
+  takes that path; `app/account.tsx` passes `profile.data?.avatar_url`.
+
+```
+Rolled-back policy tests -> 21/21 (own avatar replaceable; other people's avatar, receipts, delivery
+  proofs and product photos refused for a cashier; other-tenant folder refused; moving a file into
+  receipts refused by WITH CHECK; cashier cannot delete others' avatars, product photos or receipts;
+  receipt upload still allowed; upload into another tenant refused; own profile photo deletable;
+  manager replaces/deletes product photos but cannot replace someone else's avatar or a receipt;
+  manager deletes a profile photo; other organization refused on replace and delete; anon refused)
+  NOTE: storage.objects has a BEFORE DELETE trigger (protect_objects_delete) that blocks SQL deletes;
+  the test sets storage.allow_delete_query inside the rolled-back transaction.
+apply_migration -> success; live pg_policies check shows UPDATE and DELETE both testing owner_id
+storage.objects row count at the time: 0 (no existing file was affected)
+npm run typecheck --workspace apps/mobile -> 0 errors
+```

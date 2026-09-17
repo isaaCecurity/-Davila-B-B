@@ -123,7 +123,7 @@ export default function AccountScreen(): React.JSX.Element {
       return;
     }
     upload.mutate(
-      { tenantId, userId, uri: picked.uri, mimeType: picked.mimeType },
+      { tenantId, userId, uri: picked.uri, mimeType: picked.mimeType, previousPath: profile.data?.avatar_url ?? null },
       {
         onSuccess: () => {
           setPhotoSheet(false);
@@ -216,7 +216,7 @@ export default function AccountScreen(): React.JSX.Element {
               busy={removePhoto.isPending}
               disabled={upload.isPending}
               onPress={() =>
-                removePhoto.mutate(undefined, {
+                removePhoto.mutate(profile.data?.avatar_url ?? null, {
                   onSuccess: () => {
                     setPhotoSheet(false);
                     toast({ tone: 'neutral', title: 'Photo removed' });
