@@ -4,6 +4,44 @@ Human-facing queue. Newest first. An entry here always has a matching `BLOCKERS.
 
 ---
 
+## ACTION NEEDED: add push credentials so phones receive notifications (2026-09-17)
+
+Notifications now appear inside the app (the bell and the Notifications screen). To also get them on
+phones, the Expo project needs push credentials — this is set up in your Expo account, not in the code:
+
+- **Android:** create a Firebase project, download the FCM **v1 service-account key**, and upload it with
+  `eas credentials` (Android → Push Notifications) or on expo.dev → project → Credentials.
+- **iOS:** an Apple Developer account; `eas credentials` (iOS → Push Notifications key) creates the APNs key.
+- Then build the app with EAS (push does not work in Expo Go for this setup).
+
+Until then everything else works; pushes are recorded as failed and can be seen in the database.
+See `ARCHITECTURE_DECISIONS.md` AD-027.
+
+---
+
+## DECISION NEEDED (not urgent): who may replace uploaded files (2026-09-17)
+
+While building profile photos I found that any member of a bakery could overwrite any file stored for
+that bakery — including receipts and delivery photos once those uploads exist. Nothing does that today
+(profile photos never overwrite), but it should be closed before receipt or delivery-photo uploads are
+built. Options are in `TECHNICAL_DEBT.md` TD-021.
+
+---
+
+## DONE: sales by staff and payment method, branch comparison, notifications, profile photo (2026-09-17)
+
+- **Sales monitoring** (Reports → Sales report; Operations → Sales): today's takings by salesperson and by
+  Cash/Transfer/POS, and recent sales. Managers and up see everyone; supervisors see the method split only;
+  cashiers and drivers see their own.
+- **Branch performance** (Reports; owner Home → Branches → Compare): every branch side by side for owners
+  and admins, own branches for managers.
+- **Notifications**: new orders, orders ready, payments received, stock running out, invites accepted and
+  tills closing short/over appear under the bell (with a dot when unread), and are sent to phones once push
+  credentials are added.
+- **Profile photo**: Account → tap the photo "+" to choose or take a picture, or remove it.
+
+---
+
 ## PARKED by owner (2026-09-14): switch on phone sign-in in Supabase
 
 Owner said to leave the phone SMS setup for now. Nothing to do until it is picked up again; the note

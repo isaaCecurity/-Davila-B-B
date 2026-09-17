@@ -1,5 +1,22 @@
 # BakeFlow — Current Task
 
+## ✅ P9.9 queue finished: Q3 branch performance, Q4 sales by staff/method, Q5 notifications + push, Q9 profile photo (2026-09-17)
+
+Owner answered the four open decisions (AD-027) and asked to continue the queue, then push to git.
+
+- **Live:** `get_sales_breakdown`, `get_branch_performance` (+ `private.report_period`); `set_my_avatar`;
+  `notifications` + `push_tokens` tables, six event triggers, `mark_notifications_read`,
+  `register_push_token`/`unregister_push_token`, `claim_push_batch`/`complete_push_batch`; Edge Function
+  `dispatch-push`. Rolled-back tests 27/27, 11/11, 24/24, then applied.
+- **App:** `reports/sales`, `reports/branches`, Account photo, Notifications history + bell dot, push
+  registration; packages `expo-image-picker`, `expo-notifications` added (owner-approved).
+- **Owner actions:** Expo push credentials (FCM/APNs); decision on storage overwrite policy (TD-021).
+- **Queue:** P9.9 is complete. Phone SMS sign-in still parked.
+
+Full detail: `IMPLEMENTATION_LOG.md` 2026-09-17 (queue completion entry).
+
+---
+
 ## ✅ Q6 search, Q7 invite revoke/resend, Q8 profile editing DELIVERED (2026-09-17)
 
 Owner: "continue with queue Q6 search, Q7 revoke and resend invites and Q8 profile editing".

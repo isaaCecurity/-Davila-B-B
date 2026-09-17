@@ -45,6 +45,8 @@
 --   invite_by_role_email_or_phone (AD-026) and revenue_report_and_product_performance (P9.9 Q1/Q2)
 --   added functions complete_counter_sale, private.manages_branch, private.resolve_report_window,
 --   get_revenue_report, get_product_performance and index idx_tickets_branch_completed_at,
+--   sales_breakdown_and_branch_performance, set_my_avatar and notifications_and_push (P9.9 Q3/Q4/Q5/Q9)
+--   added report and avatar functions, tables notifications and push_tokens with RLS and triggers,
 --   and search_invite_actions_profile_update (P9.9 Q6-Q8) added search_workspace,
 --   revoke_organization_invite, resend_organization_invite, update_my_profile, private.can_manage_invite, a phone column + 2 CHECKs + 1 index on organization_invites, and
 --   replaced several functions and the organization_invites_select policy. All are carried
@@ -9687,3 +9689,932 @@ $function$;
 REVOKE ALL ON FUNCTION public.update_my_profile(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.update_my_profile(text, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.update_my_profile(text, text) TO authenticated, service_role;
+
+-- ── 20260917120000_sales_breakdown_and_branch_performance.sql (P9.9 Q3/Q4, applied live 2026-09-17) ──
+
+-- BACKEND_ROADMAP P9.9 Q3 + Q4. Owner decisions 2026-09-17:
+--   Q3 branch performance — owner/admin compare every branch; a branch manager sees only the branches
+--      they manage; nobody else.
+--   Q4 sales by staff and payment method — owner, admin and a branch manager (for a branch they manage)
+--      see every staff member's sales and the method split; supervisors (and accountants) see the method
+--      split and totals but not per-person figures; cashiers and drivers see only their own.
+--
+-- Figures follow get_revenue_report() (REPORTING-MODEL.md): sales = tickets.total_amount by completed_at;
+-- collections = payments.amount by received_at; refunds by refunded_at, attributed to the refunded
+-- payment's method; organization-local days, half-open ranges; money as numeric(19,4)::text; every sum
+-- and share computed here.
+--
+-- 1. private.report_period(period, start, end): the period → dates → UTC bounds logic of
+--    private.resolve_report_window(), without its role check, so each report applies its own rules.
+-- 2. get_sales_breakdown(branch, period): scope 'full' | 'branch' | 'own' decided from the caller's roles;
+--    totals, by_method (all five methods), by_staff (null unless full; only the caller's row when own),
+--    recent (≤ 30 completed sales with methods). Default period: today.
+-- 3. get_branch_performance(period): per visible branch — revenue, refunds, collections, orders, staff,
+--    share of net revenue, and a 7-day net-revenue trend ending at the period end. Default period: today.
+
+-- 1 ───────────────────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION private.report_period(
+  p_tenant_id uuid,
+  p_period    text,
+  p_start     date,
+  p_end       date,
+  OUT timezone   text,
+  OUT start_date date,
+  OUT end_date   date,
+  OUT from_ts    timestamptz,
+  OUT to_ts      timestamptz
+)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_today date;
+BEGIN
+  SELECT o.timezone INTO timezone FROM public.organizations o WHERE o.id = p_tenant_id;
+  IF timezone IS NULL THEN
+    RAISE EXCEPTION 'no active organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  v_today := (now() AT TIME ZONE timezone)::date;
+
+  IF p_period IS NOT NULL THEN
+    IF p_start IS NOT NULL OR p_end IS NOT NULL THEN
+      RAISE EXCEPTION 'give a period or explicit dates, not both'
+        USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_range')::text;
+    END IF;
+    CASE p_period
+      WHEN 'today'      THEN start_date := v_today;                            end_date := v_today;
+      WHEN '7d'         THEN start_date := v_today - 6;                        end_date := v_today;
+      WHEN '30d'        THEN start_date := v_today - 29;                       end_date := v_today;
+      WHEN '90d'        THEN start_date := v_today - 89;                       end_date := v_today;
+      WHEN 'month'      THEN start_date := date_trunc('month', v_today)::date; end_date := v_today;
+      WHEN 'last_month' THEN start_date := (date_trunc('month', v_today) - interval '1 month')::date;
+                             end_date   := (date_trunc('month', v_today) - interval '1 day')::date;
+      ELSE
+        RAISE EXCEPTION 'unknown period %', p_period
+          USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_period')::text;
+    END CASE;
+  ELSE
+    end_date   := coalesce(p_end, v_today);
+    start_date := coalesce(p_start, end_date);
+  END IF;
+
+  IF start_date > end_date THEN
+    RAISE EXCEPTION 'the start date is after the end date'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_range')::text;
+  END IF;
+  IF end_date - start_date + 1 > 366 THEN
+    RAISE EXCEPTION 'reports cover at most 366 days'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','range_too_long')::text;
+  END IF;
+
+  from_ts := (start_date::timestamp) AT TIME ZONE timezone;
+  to_ts   := ((end_date + 1)::timestamp) AT TIME ZONE timezone;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION private.report_period(uuid, text, date, date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION private.report_period(uuid, text, date, date) FROM anon, authenticated;
+
+-- 2 ───────────────────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_sales_breakdown(
+  p_branch_id uuid,
+  p_period    text DEFAULT 'today',
+  p_start     date DEFAULT NULL,
+  p_end       date DEFAULT NULL
+)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant uuid := current_tenant_id();
+  v_user   uuid := auth.uid();
+  v_scope  text;
+  v_period text := CASE WHEN p_start IS NULL AND p_end IS NULL THEN coalesce(p_period, 'today') ELSE NULL END;
+  w record;
+  v_totals jsonb;
+  v_methods jsonb;
+  v_staff jsonb;
+  v_recent jsonb;
+BEGIN
+  IF v_tenant IS NULL OR v_user IS NULL THEN
+    RAISE EXCEPTION 'no active organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+  IF p_branch_id IS NULL OR NOT has_branch_access(p_branch_id)
+     OR NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = p_branch_id AND b.tenant_id = v_tenant) THEN
+    RAISE EXCEPTION 'insufficient_role: no access to this branch'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  -- Q4 decision: the widest scope the caller's roles allow at this branch.
+  v_scope := CASE
+    WHEN has_role(ARRAY['owner','admin']) THEN 'full'
+    WHEN has_role(ARRAY['branch_manager']) AND private.manages_branch(p_branch_id) THEN 'full'
+    WHEN has_role(ARRAY['supervisor','accountant']) THEN 'branch'
+    WHEN has_role(ARRAY['cashier','driver','branch_manager']) THEN 'own'
+    ELSE NULL
+  END;
+  IF v_scope IS NULL THEN
+    RAISE EXCEPTION 'insufficient_role: sales figures are not available to this role'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  SELECT * INTO w FROM private.report_period(v_tenant, v_period, p_start, p_end);
+
+  -- totals
+  SELECT jsonb_build_object(
+           'gross_sales',       coalesce(sum(t.total_amount), 0)::numeric(19,4)::text,
+           'completed_tickets', count(*))
+    INTO v_totals
+    FROM tickets t
+   WHERE t.tenant_id = v_tenant AND t.branch_id = p_branch_id AND t.deleted_at IS NULL
+     AND t.completed_at >= w.from_ts AND t.completed_at < w.to_ts
+     AND (v_scope <> 'own' OR t.created_by = v_user);
+
+  -- by method: collections and refunds in the period, by the payment's method
+  WITH m(method, ord) AS (VALUES ('cash',1),('transfer',2),('pos',3),('card',4),('credit',5)),
+  col AS (
+    SELECT py.method, sum(py.amount) AS amount, count(*) AS n
+      FROM payments py
+     WHERE py.tenant_id = v_tenant AND py.branch_id = p_branch_id AND py.deleted_at IS NULL
+       AND py.received_at >= w.from_ts AND py.received_at < w.to_ts
+       AND (v_scope <> 'own' OR py.created_by = v_user)
+     GROUP BY py.method
+  ),
+  ref AS (
+    SELECT py.method, sum(rf.amount) AS amount
+      FROM refunds rf
+      JOIN payments py ON py.id = rf.payment_id AND py.tenant_id = rf.tenant_id
+     WHERE rf.tenant_id = v_tenant AND rf.branch_id = p_branch_id AND rf.deleted_at IS NULL
+       AND rf.refunded_at >= w.from_ts AND rf.refunded_at < w.to_ts
+       AND (v_scope <> 'own' OR py.created_by = v_user)
+     GROUP BY py.method
+  )
+  SELECT jsonb_agg(jsonb_build_object(
+           'method',          m.method,
+           'payments',        coalesce(col.n, 0),
+           'gross_collected', coalesce(col.amount, 0)::numeric(19,4)::text,
+           'refunds',         coalesce(ref.amount, 0)::numeric(19,4)::text,
+           'net_collected',   (coalesce(col.amount, 0) - coalesce(ref.amount, 0))::numeric(19,4)::text
+         ) ORDER BY m.ord)
+    INTO v_methods
+    FROM m LEFT JOIN col ON col.method = m.method LEFT JOIN ref ON ref.method = m.method;
+
+  SELECT v_totals || jsonb_build_object(
+           'gross_collected', coalesce(sum((x->>'gross_collected')::numeric), 0)::numeric(19,4)::text,
+           'refunds',         coalesce(sum((x->>'refunds')::numeric), 0)::numeric(19,4)::text,
+           'net_collected',   coalesce(sum((x->>'net_collected')::numeric), 0)::numeric(19,4)::text)
+    INTO v_totals
+    FROM jsonb_array_elements(v_methods) x;
+
+  -- by staff: completed sales per seller (tickets.created_by)
+  IF v_scope IN ('full', 'own') THEN
+    WITH s AS (
+      SELECT t.created_by, sum(t.total_amount) AS amount, count(*) AS n
+        FROM tickets t
+       WHERE t.tenant_id = v_tenant AND t.branch_id = p_branch_id AND t.deleted_at IS NULL
+         AND t.completed_at >= w.from_ts AND t.completed_at < w.to_ts
+         AND (v_scope <> 'own' OR t.created_by = v_user)
+       GROUP BY t.created_by
+    ),
+    tot AS (SELECT coalesce(sum(amount), 0) AS amount FROM s)
+    SELECT coalesce(jsonb_agg(jsonb_build_object(
+             'profile_id',        s.created_by,
+             'full_name',         coalesce(nullif(p.full_name, ''), NULL),
+             'completed_tickets', s.n,
+             'gross_sales',       s.amount::numeric(19,4)::text,
+             'share_pct',         CASE WHEN tot.amount = 0 THEN '0.00'
+                                       ELSE round(s.amount * 100 / tot.amount, 2)::numeric(5,2)::text END
+           ) ORDER BY s.amount DESC, p.full_name), '[]'::jsonb)
+      INTO v_staff
+      FROM s CROSS JOIN tot
+      LEFT JOIN profiles p ON p.id = s.created_by;
+  ELSE
+    v_staff := NULL;
+  END IF;
+
+  -- recent completed sales
+  SELECT coalesce(jsonb_agg(r.item ORDER BY r.completed_at DESC), '[]'::jsonb) INTO v_recent FROM (
+    SELECT jsonb_build_object(
+             'ticket_id',     t.id,
+             'ticket_number', t.ticket_number,
+             'completed_at',  t.completed_at,
+             'total_amount',  t.total_amount::numeric(19,4)::text,
+             'customer_name', c.full_name,
+             'seller_name',   CASE WHEN v_scope = 'branch' THEN NULL ELSE nullif(sp.full_name, '') END,
+             'methods',       coalesce((SELECT jsonb_agg(DISTINCT py.method) FROM payments py
+                                         WHERE py.ticket_id = t.id AND py.tenant_id = t.tenant_id AND py.deleted_at IS NULL), '[]'::jsonb)
+           ) AS item,
+           t.completed_at
+      FROM tickets t
+      LEFT JOIN customers c ON c.id = t.customer_id AND c.tenant_id = t.tenant_id
+      LEFT JOIN profiles sp ON sp.id = t.created_by
+     WHERE t.tenant_id = v_tenant AND t.branch_id = p_branch_id AND t.deleted_at IS NULL
+       AND t.completed_at >= w.from_ts AND t.completed_at < w.to_ts
+       AND (v_scope <> 'own' OR t.created_by = v_user)
+     ORDER BY t.completed_at DESC
+     LIMIT 30
+  ) r;
+
+  RETURN jsonb_build_object(
+    'branch_id',  p_branch_id,
+    'period',     v_period,
+    'start_date', w.start_date,
+    'end_date',   w.end_date,
+    'timezone',   w.timezone,
+    'scope',      v_scope,
+    'totals',     v_totals,
+    'by_method',  v_methods,
+    'by_staff',   v_staff,
+    'recent',     v_recent
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.get_sales_breakdown(uuid, text, date, date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_sales_breakdown(uuid, text, date, date) FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_sales_breakdown(uuid, text, date, date) TO authenticated, service_role;
+
+-- 3 ───────────────────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_branch_performance(
+  p_period text DEFAULT 'today',
+  p_start  date DEFAULT NULL,
+  p_end    date DEFAULT NULL
+)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_tenant uuid := current_tenant_id();
+  v_all    boolean;
+  v_period text := CASE WHEN p_start IS NULL AND p_end IS NULL THEN coalesce(p_period, 'today') ELSE NULL END;
+  w record;
+  v_rows jsonb;
+  v_totals jsonb;
+BEGIN
+  IF v_tenant IS NULL OR auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'no active organization'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request')::text;
+  END IF;
+
+  -- Q3 decision
+  v_all := has_role(ARRAY['owner','admin']);
+  IF NOT v_all AND NOT has_role(ARRAY['branch_manager']) THEN
+    RAISE EXCEPTION 'insufficient_role: branch performance is for owners, admins and branch managers'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  SELECT * INTO w FROM private.report_period(v_tenant, v_period, p_start, p_end);
+
+  WITH b AS (
+    SELECT br.id, br.name, br.code, br.is_primary
+      FROM branches br
+     WHERE br.tenant_id = v_tenant AND br.deleted_at IS NULL
+       AND (v_all OR private.manages_branch(br.id))
+  ),
+  sales AS (
+    SELECT t.branch_id, sum(t.total_amount) AS amount, count(*) AS n
+      FROM tickets t
+     WHERE t.tenant_id = v_tenant AND t.deleted_at IS NULL
+       AND t.completed_at >= w.from_ts AND t.completed_at < w.to_ts
+     GROUP BY t.branch_id
+  ),
+  refs AS (
+    SELECT rf.branch_id, sum(rf.amount) AS amount
+      FROM refunds rf
+     WHERE rf.tenant_id = v_tenant AND rf.deleted_at IS NULL
+       AND rf.refunded_at >= w.from_ts AND rf.refunded_at < w.to_ts
+     GROUP BY rf.branch_id
+  ),
+  cols AS (
+    SELECT py.branch_id, sum(py.amount) AS amount
+      FROM payments py
+     WHERE py.tenant_id = v_tenant AND py.deleted_at IS NULL
+       AND py.received_at >= w.from_ts AND py.received_at < w.to_ts
+     GROUP BY py.branch_id
+  ),
+  staff AS (
+    SELECT ur.branch_id, count(DISTINCT ur.profile_id) AS n
+      FROM user_roles ur
+     WHERE ur.tenant_id = v_tenant AND ur.deleted_at IS NULL AND ur.branch_id IS NOT NULL
+     GROUP BY ur.branch_id
+  ),
+  per AS (
+    SELECT b.*,
+           coalesce(sales.amount, 0)::numeric(19,4) AS gross_revenue,
+           coalesce(refs.amount, 0)::numeric(19,4)  AS refunds,
+           (coalesce(sales.amount, 0) - coalesce(refs.amount, 0))::numeric(19,4) AS net_revenue,
+           (coalesce(cols.amount, 0) - coalesce(refs.amount, 0))::numeric(19,4)  AS net_collected,
+           coalesce(sales.n, 0) AS completed_tickets,
+           coalesce(staff.n, 0) AS staff_count
+      FROM b
+      LEFT JOIN sales ON sales.branch_id = b.id
+      LEFT JOIN refs  ON refs.branch_id  = b.id
+      LEFT JOIN cols  ON cols.branch_id  = b.id
+      LEFT JOIN staff ON staff.branch_id = b.id
+  ),
+  tot AS (SELECT coalesce(sum(net_revenue), 0) AS net FROM per),
+  trend AS (
+    SELECT per.id AS branch_id,
+           jsonb_agg(jsonb_build_object('date', d.day, 'net_revenue',
+             (coalesce((SELECT sum(t.total_amount) FROM tickets t
+                         WHERE t.tenant_id = v_tenant AND t.branch_id = per.id AND t.deleted_at IS NULL
+                           AND t.completed_at >= (d.day::timestamp AT TIME ZONE w.timezone)
+                           AND t.completed_at <  ((d.day + 1)::timestamp AT TIME ZONE w.timezone)), 0)
+              - coalesce((SELECT sum(rf.amount) FROM refunds rf
+                         WHERE rf.tenant_id = v_tenant AND rf.branch_id = per.id AND rf.deleted_at IS NULL
+                           AND rf.refunded_at >= (d.day::timestamp AT TIME ZONE w.timezone)
+                           AND rf.refunded_at <  ((d.day + 1)::timestamp AT TIME ZONE w.timezone)), 0)
+             )::numeric(19,4)::text) ORDER BY d.day) AS days
+      FROM per
+      CROSS JOIN LATERAL (SELECT gs::date AS day FROM generate_series(w.end_date - 6, w.end_date, interval '1 day') gs) d
+     GROUP BY per.id
+  )
+  SELECT
+    coalesce(jsonb_agg(jsonb_build_object(
+      'branch_id',         per.id,
+      'name',              per.name,
+      'code',              per.code,
+      'is_primary',        per.is_primary,
+      'gross_revenue',     per.gross_revenue::text,
+      'refunds',           per.refunds::text,
+      'net_revenue',       per.net_revenue::text,
+      'net_collected',     per.net_collected::text,
+      'completed_tickets', per.completed_tickets,
+      'staff_count',       per.staff_count,
+      'share_pct',         CASE WHEN tot.net <= 0 OR per.net_revenue <= 0 THEN '0.00'
+                                ELSE least(round(per.net_revenue * 100 / tot.net, 2), 100)::numeric(5,2)::text END,
+      'trend',             trend.days
+    ) ORDER BY per.net_revenue DESC, per.is_primary DESC, per.name), '[]'::jsonb),
+    jsonb_build_object(
+      'gross_revenue',     coalesce(sum(per.gross_revenue), 0)::numeric(19,4)::text,
+      'refunds',           coalesce(sum(per.refunds), 0)::numeric(19,4)::text,
+      'net_revenue',       coalesce(sum(per.net_revenue), 0)::numeric(19,4)::text,
+      'net_collected',     coalesce(sum(per.net_collected), 0)::numeric(19,4)::text,
+      'completed_tickets', coalesce(sum(per.completed_tickets), 0)::bigint,
+      'branch_count',      count(per.id))
+  INTO v_rows, v_totals
+  FROM per CROSS JOIN tot LEFT JOIN trend ON trend.branch_id = per.id;
+
+  RETURN jsonb_build_object(
+    'period',     v_period,
+    'start_date', w.start_date,
+    'end_date',   w.end_date,
+    'timezone',   w.timezone,
+    'scope',      CASE WHEN v_all THEN 'all' ELSE 'managed' END,
+    'totals',     v_totals,
+    'branches',   v_rows
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.get_branch_performance(text, date, date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_branch_performance(text, date, date) FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_branch_performance(text, date, date) TO authenticated, service_role;
+
+-- ── 20260917140000_set_my_avatar.sql (P9.9 Q9, applied live 2026-09-17) ──
+
+-- BACKEND_ROADMAP P9.9 Q9, narrowed by the owner (2026-09-17): "The only upload that's needed for now
+-- is the profile photo."
+--
+-- The app uploads the photo to the private `avatars` bucket under
+--   <active organization id>/profiles/<user id>/<unique name>.(jpg|jpeg|png|webp)
+-- (bucket limits: 2 MB, JPEG/PNG/WebP; storage policies already require the organization folder), then
+-- calls set_my_avatar() to point profiles.avatar_url at that object path. The function:
+--   • accepts only a path in the caller's own profile folder under the active organization;
+--   • requires the object to exist in `avatars` and to have been uploaded by the caller (owner_id);
+--   • with NULL clears the photo;
+--   • audits the change. Photos are shown through short-lived signed URLs (the bucket is private).
+-- Old photo files are not deleted here (storage delete is limited to owner/admin/manager); unique names
+-- mean an upload never overwrites anything.
+
+CREATE OR REPLACE FUNCTION public.set_my_avatar(p_object_path text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_user   uuid := auth.uid();
+  v_tenant uuid := public.current_tenant_id();
+  v_path   text := nullif(btrim(coalesce(p_object_path, '')), '');
+  v_before public.profiles;
+  v_after  public.profiles;
+BEGIN
+  IF v_user IS NULL OR v_tenant IS NULL THEN
+    RAISE EXCEPTION 'authentication and an active organization are required'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  IF v_path IS NOT NULL THEN
+    IF v_path !~ ('^' || v_tenant::text || '/profiles/' || v_user::text || '/[A-Za-z0-9._-]{1,100}\.(jpg|jpeg|png|webp)$') THEN
+      RAISE EXCEPTION 'photo path must be in your own profile folder'
+        USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_avatar_path')::text;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM storage.objects o
+       WHERE o.bucket_id = 'avatars' AND o.name = v_path AND o.owner_id = v_user::text
+    ) THEN
+      RAISE EXCEPTION 'photo not found'
+        USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','avatar_not_uploaded')::text;
+    END IF;
+  END IF;
+
+  SELECT * INTO v_before FROM public.profiles WHERE id = v_user AND deleted_at IS NULL FOR UPDATE;
+  IF v_before.id IS NULL THEN
+    RAISE EXCEPTION 'profile not found'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+
+  UPDATE public.profiles SET avatar_url = v_path WHERE id = v_user RETURNING * INTO v_after;
+
+  IF v_before.avatar_url IS DISTINCT FROM v_after.avatar_url THEN
+    PERFORM public.log_audit_event(
+      v_tenant, 'profile', v_user, 'update',
+      jsonb_build_object('avatar_url', v_before.avatar_url),
+      jsonb_build_object('avatar_url', v_after.avatar_url));
+  END IF;
+
+  RETURN jsonb_build_object('id', v_after.id, 'full_name', v_after.full_name, 'phone', v_after.phone,
+                            'avatar_url', v_after.avatar_url);
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.set_my_avatar(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.set_my_avatar(text) FROM anon;
+GRANT EXECUTE ON FUNCTION public.set_my_avatar(text) TO authenticated, service_role;
+
+-- ── 20260917160000_notifications_and_push.sql (P9.9 Q5, applied live 2026-09-17) ──
+
+-- BACKEND_ROADMAP P9.9 Q5. Owner decision 2026-09-17: in-app notification history + phone push.
+--
+-- Events (the set offered to and chosen by the owner) and who receives them. "Leads" = owners and
+-- admins of the organization plus branch managers of the event's branch (or organization-wide
+-- managers). The person who caused an event never receives it.
+--   order_new        a ticket reaches `submitted`                       → leads
+--   order_ready      a ticket reaches `ready`                           → its creator, its assignee, leads
+--   payment_received a payment is recorded by someone other than the    → the ticket's creator, leads
+--                    ticket's creator (a sale taken and paid by the same person is not news — this keeps
+--                    every counter and roadside sale from notifying)
+--   stock_out        a product stock level goes from above zero to ≤ 0  → leads
+--   invite_accepted  an invite becomes `accepted`                        → whoever sent it
+--   till_variance    a cash session closes with a non-zero variance      → leads
+--
+-- Push: every notification is queued (`push_status = 'pending'`). The `dispatch-push` Edge Function
+-- (called by the app after actions that can create notifications) claims pending rows with the service
+-- role, sends them through Expo's push service to the recipient's registered devices for that
+-- organization, and records the outcome. Nothing here needs a database extension.
+--
+-- Tables are organization-scoped (tenant_id), RLS enabled and forced; clients read their own
+-- notifications and tokens only, and write only through the RPCs below.
+
+-- ── tables ───────────────────────────────────────────────────────────────────────────────────────
+CREATE TABLE public.notifications (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     uuid NOT NULL REFERENCES public.organizations(id),
+  branch_id     uuid NULL,
+  recipient_id  uuid NOT NULL REFERENCES public.profiles(id),
+  kind          text NOT NULL CHECK (kind IN ('order_new','order_ready','payment_received','stock_out','invite_accepted','till_variance')),
+  title         text NOT NULL CHECK (char_length(btrim(title)) BETWEEN 1 AND 160),
+  body          text NULL CHECK (body IS NULL OR char_length(body) <= 500),
+  entity_type   text NULL CHECK (entity_type IS NULL OR char_length(entity_type) <= 60),
+  entity_id     uuid NULL,
+  route         text NULL CHECK (route IS NULL OR route ~ '^/[A-Za-z0-9/_-]{0,199}$'),
+  actor_id      uuid NULL REFERENCES public.profiles(id),
+  read_at       timestamptz NULL,
+  push_status   text NOT NULL DEFAULT 'pending' CHECK (push_status IN ('pending','sending','sent','skipped','failed')),
+  push_attempts integer NOT NULL DEFAULT 0 CHECK (push_attempts >= 0),
+  pushed_at     timestamptz NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  deleted_at    timestamptz NULL,
+  deleted_by    uuid NULL REFERENCES public.profiles(id),
+  FOREIGN KEY (tenant_id, branch_id) REFERENCES public.branches(tenant_id, id)
+);
+
+CREATE INDEX idx_notifications_recipient ON public.notifications (recipient_id, tenant_id, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_notifications_unread ON public.notifications (recipient_id, tenant_id) WHERE read_at IS NULL AND deleted_at IS NULL;
+CREATE INDEX idx_notifications_push_pending ON public.notifications (created_at) WHERE push_status IN ('pending','sending');
+CREATE INDEX idx_notifications_tenant_branch ON public.notifications (tenant_id, branch_id);
+CREATE INDEX idx_notifications_actor ON public.notifications (actor_id) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_notifications_deleted_by ON public.notifications (deleted_by) WHERE deleted_by IS NOT NULL;
+
+CREATE TRIGGER notifications_set_updated_at BEFORE UPDATE ON public.notifications
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications FORCE ROW LEVEL SECURITY;
+CREATE POLICY notifications_select_own ON public.notifications
+  AS PERMISSIVE FOR SELECT TO authenticated
+  USING (recipient_id = (SELECT auth.uid()) AND tenant_id = (SELECT public.current_tenant_id()) AND deleted_at IS NULL);
+
+REVOKE ALL ON public.notifications FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.notifications TO authenticated;
+GRANT ALL ON public.notifications TO service_role;
+
+CREATE TABLE public.push_tokens (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id          uuid NOT NULL REFERENCES public.organizations(id),
+  profile_id         uuid NOT NULL REFERENCES public.profiles(id),
+  token              text NOT NULL CHECK (token ~ '^Expo(nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$'),
+  platform           text NOT NULL CHECK (platform IN ('ios','android')),
+  last_registered_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at         timestamptz NULL,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, profile_id, token)
+);
+
+CREATE INDEX idx_push_tokens_profile ON public.push_tokens (profile_id, tenant_id) WHERE revoked_at IS NULL;
+CREATE INDEX idx_push_tokens_token ON public.push_tokens (token);
+
+CREATE TRIGGER push_tokens_set_updated_at BEFORE UPDATE ON public.push_tokens
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+ALTER TABLE public.push_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.push_tokens FORCE ROW LEVEL SECURITY;
+CREATE POLICY push_tokens_select_own ON public.push_tokens
+  AS PERMISSIVE FOR SELECT TO authenticated
+  USING (profile_id = (SELECT auth.uid()) AND tenant_id = (SELECT public.current_tenant_id()));
+
+REVOKE ALL ON public.push_tokens FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.push_tokens TO authenticated;
+GRANT ALL ON public.push_tokens TO service_role;
+
+-- ── recipients and insertion ─────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION private.notification_leads(p_tenant_id uuid, p_branch_id uuid)
+ RETURNS SETOF uuid
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT DISTINCT ur.profile_id
+    FROM public.user_roles ur
+    JOIN public.roles r ON r.id = ur.role_id AND r.deleted_at IS NULL
+    JOIN public.profiles p ON p.id = ur.profile_id AND p.deleted_at IS NULL AND p.status = 'active'
+   WHERE ur.tenant_id = p_tenant_id
+     AND ur.deleted_at IS NULL
+     AND (r.key IN ('owner','admin')
+          OR (r.key = 'branch_manager' AND (ur.branch_id IS NULL OR ur.branch_id = p_branch_id)));
+$function$;
+
+CREATE OR REPLACE FUNCTION private.notify(
+  p_tenant_id   uuid,
+  p_branch_id   uuid,
+  p_kind        text,
+  p_title       text,
+  p_body        text,
+  p_entity_type text,
+  p_entity_id   uuid,
+  p_route       text,
+  p_recipients  uuid[]
+)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_count integer;
+BEGIN
+  INSERT INTO public.notifications
+    (tenant_id, branch_id, recipient_id, kind, title, body, entity_type, entity_id, route, actor_id)
+  SELECT p_tenant_id, p_branch_id, rcpt, p_kind, left(p_title, 160), left(p_body, 500), p_entity_type, p_entity_id, p_route, v_actor
+    FROM (SELECT DISTINCT unnest(p_recipients) AS rcpt) x
+   WHERE rcpt IS NOT NULL
+     AND rcpt IS DISTINCT FROM v_actor
+     -- only people who still belong to the organization
+     AND EXISTS (SELECT 1 FROM public.user_roles ur WHERE ur.profile_id = rcpt AND ur.tenant_id = p_tenant_id AND ur.deleted_at IS NULL);
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION private.notification_leads(uuid, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION private.notify(uuid, uuid, text, text, text, text, uuid, text, uuid[]) FROM PUBLIC, anon, authenticated;
+
+-- ── event triggers ───────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.notify_ticket_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_customer text;
+BEGIN
+  IF NEW.deleted_at IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.status = 'submitted' AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'submitted') THEN
+    SELECT c.full_name INTO v_customer FROM public.customers c WHERE c.id = NEW.customer_id AND c.tenant_id = NEW.tenant_id;
+    PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'order_new',
+      'New order ' || NEW.ticket_number,
+      coalesce(v_customer, 'Walk-in customer') || ' · ₦' || to_char(NEW.total_amount, 'FM999,999,999,990.00'),
+      'ticket', NEW.id, '/order/' || NEW.id::text,
+      ARRAY(SELECT private.notification_leads(NEW.tenant_id, NEW.branch_id)));
+  ELSIF NEW.status = 'ready' AND TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM 'ready' THEN
+    SELECT c.full_name INTO v_customer FROM public.customers c WHERE c.id = NEW.customer_id AND c.tenant_id = NEW.tenant_id;
+    PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'order_ready',
+      'Order ' || NEW.ticket_number || ' is ready',
+      coalesce(v_customer, 'Walk-in customer') || ' · ' || CASE WHEN NEW.fulfilment_type = 'delivery' THEN 'ready for delivery' ELSE 'ready for pickup' END,
+      'ticket', NEW.id, '/order/' || NEW.id::text,
+      ARRAY[NEW.created_by, NEW.assigned_to] || ARRAY(SELECT private.notification_leads(NEW.tenant_id, NEW.branch_id)));
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER tickets_notify_status AFTER INSERT OR UPDATE OF status ON public.tickets
+  FOR EACH ROW EXECUTE FUNCTION public.notify_ticket_status();
+
+CREATE OR REPLACE FUNCTION public.notify_payment_received()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_ticket public.tickets;
+BEGIN
+  SELECT * INTO v_ticket FROM public.tickets t WHERE t.id = NEW.ticket_id AND t.tenant_id = NEW.tenant_id;
+  IF v_ticket.id IS NULL OR NEW.deleted_at IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+  -- A sale taken and paid by the same person is not news.
+  IF NEW.created_by IS NOT DISTINCT FROM v_ticket.created_by THEN
+    RETURN NEW;
+  END IF;
+  PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'payment_received',
+    '₦' || to_char(NEW.amount, 'FM999,999,999,990.00') || ' received',
+    'Order ' || v_ticket.ticket_number || ' · ' ||
+      CASE NEW.method WHEN 'pos' THEN 'POS' WHEN 'transfer' THEN 'Transfer' WHEN 'cash' THEN 'Cash' WHEN 'card' THEN 'Card' ELSE 'Credit' END,
+    'ticket', v_ticket.id, '/order/' || v_ticket.id::text,
+    ARRAY[v_ticket.created_by] || ARRAY(SELECT private.notification_leads(NEW.tenant_id, NEW.branch_id)));
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER payments_notify_received AFTER INSERT ON public.payments
+  FOR EACH ROW EXECUTE FUNCTION public.notify_payment_received();
+
+CREATE OR REPLACE FUNCTION public.notify_stock_out()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_name text;
+  v_product uuid;
+BEGIN
+  IF NEW.quantity_on_hand <= 0 AND OLD.quantity_on_hand > 0 AND NEW.deleted_at IS NULL THEN
+    SELECT p.name || CASE WHEN coalesce(v.name, '') = '' THEN '' ELSE ' · ' || v.name END, p.id
+      INTO v_name, v_product
+      FROM public.product_variants v JOIN public.products p ON p.id = v.product_id
+     WHERE v.id = NEW.product_variant_id;
+    PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'stock_out',
+      coalesce(v_name, 'A product') || ' is out of stock',
+      CASE WHEN NEW.quantity_on_hand < 0 THEN 'Stock is below zero — check the count' ELSE 'None left in the stockroom' END,
+      'product', v_product, CASE WHEN v_product IS NULL THEN '/inventory' ELSE '/product/' || v_product::text END,
+      ARRAY(SELECT private.notification_leads(NEW.tenant_id, NEW.branch_id)));
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER product_stock_levels_notify_out AFTER UPDATE OF quantity_on_hand ON public.product_stock_levels
+  FOR EACH ROW EXECUTE FUNCTION public.notify_stock_out();
+
+CREATE OR REPLACE FUNCTION public.notify_invite_accepted()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_name text;
+  v_role text;
+BEGIN
+  IF NEW.status = 'accepted' AND OLD.status IS DISTINCT FROM 'accepted' THEN
+    SELECT nullif(p.full_name, '') INTO v_name FROM public.profiles p WHERE p.id = NEW.accepted_by;
+    SELECT r.name INTO v_role FROM public.roles r WHERE r.id = NEW.role_id;
+    PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'invite_accepted',
+      coalesce(v_name, NEW.email, NEW.phone, 'Someone') || ' joined as ' || coalesce(v_role, 'staff'),
+      'Your invite was accepted',
+      'organization_invite', NEW.id, '/staff',
+      ARRAY[NEW.created_by]);
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER organization_invites_notify_accepted AFTER UPDATE OF status ON public.organization_invites
+  FOR EACH ROW EXECUTE FUNCTION public.notify_invite_accepted();
+
+CREATE OR REPLACE FUNCTION public.notify_till_variance()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF NEW.status = 'closed' AND OLD.status IS DISTINCT FROM 'closed'
+     AND NEW.variance_amount IS NOT NULL AND NEW.variance_amount <> 0 THEN
+    PERFORM private.notify(NEW.tenant_id, NEW.branch_id, 'till_variance',
+      'Till closed ' || CASE WHEN NEW.variance_amount < 0 THEN 'short' ELSE 'over' END
+        || ' by ₦' || to_char(abs(NEW.variance_amount), 'FM999,999,999,990.00'),
+      'The counted cash did not match the expected amount',
+      'cash_session', NEW.id, '/cash',
+      ARRAY(SELECT private.notification_leads(NEW.tenant_id, NEW.branch_id)));
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER cash_sessions_notify_variance AFTER UPDATE OF status ON public.cash_sessions
+  FOR EACH ROW EXECUTE FUNCTION public.notify_till_variance();
+
+REVOKE ALL ON FUNCTION public.notify_ticket_status() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.notify_payment_received() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.notify_stock_out() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.notify_invite_accepted() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.notify_till_variance() FROM PUBLIC, anon, authenticated;
+
+-- ── client RPCs ──────────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.mark_notifications_read(p_ids uuid[] DEFAULT NULL)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_count integer;
+BEGIN
+  IF auth.uid() IS NULL OR public.current_tenant_id() IS NULL THEN
+    RAISE EXCEPTION 'authentication and an active organization are required'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+  UPDATE public.notifications n
+     SET read_at = now()
+   WHERE n.recipient_id = auth.uid()
+     AND n.tenant_id = public.current_tenant_id()
+     AND n.read_at IS NULL
+     AND n.deleted_at IS NULL
+     AND (p_ids IS NULL OR n.id = ANY (p_ids));
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.register_push_token(p_token text, p_platform text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_user   uuid := auth.uid();
+  v_tenant uuid := public.current_tenant_id();
+  v_row    public.push_tokens;
+BEGIN
+  IF v_user IS NULL OR v_tenant IS NULL THEN
+    RAISE EXCEPTION 'authentication and an active organization are required'
+      USING errcode = 'P0001', detail = json_build_object('code','insufficient_role')::text;
+  END IF;
+  IF p_token IS NULL OR p_token !~ '^Expo(nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$' THEN
+    RAISE EXCEPTION 'not an Expo push token'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_push_token')::text;
+  END IF;
+  IF p_platform NOT IN ('ios','android') THEN
+    RAISE EXCEPTION 'platform must be ios or android'
+      USING errcode = 'P0001', detail = json_build_object('code','invalid_request','reason','invalid_platform')::text;
+  END IF;
+
+  -- A device belongs to whoever signed in on it last: stop sending to anyone else on this token.
+  UPDATE public.push_tokens SET revoked_at = now()
+   WHERE token = p_token AND profile_id <> v_user AND revoked_at IS NULL;
+
+  INSERT INTO public.push_tokens (tenant_id, profile_id, token, platform)
+  VALUES (v_tenant, v_user, p_token, p_platform)
+  ON CONFLICT (tenant_id, profile_id, token)
+  DO UPDATE SET revoked_at = NULL, platform = EXCLUDED.platform, last_registered_at = now()
+  RETURNING * INTO v_row;
+
+  RETURN jsonb_build_object('id', v_row.id, 'platform', v_row.platform, 'registered_at', v_row.last_registered_at);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.unregister_push_token(p_token text)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_count integer;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN 0;
+  END IF;
+  UPDATE public.push_tokens SET revoked_at = now()
+   WHERE token = p_token AND profile_id = auth.uid() AND revoked_at IS NULL;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.mark_notifications_read(uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.register_push_token(text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.unregister_push_token(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.mark_notifications_read(uuid[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.register_push_token(text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.unregister_push_token(text) TO authenticated, service_role;
+
+-- ── push dispatch (service role only; used by the dispatch-push Edge Function) ───────────────────
+CREATE OR REPLACE FUNCTION public.claim_push_batch(p_limit integer DEFAULT 100)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_batch jsonb;
+BEGIN
+  -- Rows stuck in `sending` for 10 minutes (a crashed dispatch) are retried, up to 3 attempts.
+  WITH candidates AS (
+    SELECT n.id
+      FROM public.notifications n
+     WHERE n.deleted_at IS NULL
+       AND n.push_attempts < 3
+       AND (n.push_status = 'pending' OR (n.push_status = 'sending' AND n.updated_at < now() - interval '10 minutes'))
+     ORDER BY n.created_at
+     LIMIT least(greatest(coalesce(p_limit, 100), 1), 500)
+     FOR UPDATE SKIP LOCKED
+  ),
+  claimed AS (
+    UPDATE public.notifications n
+       SET push_status = CASE WHEN EXISTS (
+                               SELECT 1 FROM public.push_tokens t
+                                WHERE t.profile_id = n.recipient_id AND t.tenant_id = n.tenant_id AND t.revoked_at IS NULL)
+                             THEN 'sending' ELSE 'skipped' END,
+           push_attempts = n.push_attempts + 1
+      FROM candidates c
+     WHERE n.id = c.id
+    RETURNING n.*
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'notification_id', c.id,
+           'title', c.title,
+           'body', c.body,
+           'route', c.route,
+           'kind', c.kind,
+           'tokens', (SELECT jsonb_agg(t.token) FROM public.push_tokens t
+                       WHERE t.profile_id = c.recipient_id AND t.tenant_id = c.tenant_id AND t.revoked_at IS NULL),
+           'badge', (SELECT count(*) FROM public.notifications u
+                      WHERE u.recipient_id = c.recipient_id AND u.tenant_id = c.tenant_id AND u.read_at IS NULL AND u.deleted_at IS NULL)
+         )) FILTER (WHERE c.push_status = 'sending'), '[]'::jsonb)
+    INTO v_batch
+    FROM claimed c;
+  RETURN v_batch;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.complete_push_batch(p_results jsonb)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_count integer;
+BEGIN
+  -- p_results: [{ notification_id, ok: bool, dead_tokens: [token…] }]
+  UPDATE public.notifications n
+     SET push_status = CASE WHEN (r->>'ok')::boolean THEN 'sent' ELSE 'failed' END,
+         pushed_at = CASE WHEN (r->>'ok')::boolean THEN now() ELSE n.pushed_at END
+    FROM jsonb_array_elements(coalesce(p_results, '[]'::jsonb)) r
+   WHERE n.id = (r->>'notification_id')::uuid AND n.push_status = 'sending';
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+
+  UPDATE public.push_tokens t
+     SET revoked_at = now()
+   WHERE t.revoked_at IS NULL
+     AND t.token IN (SELECT jsonb_array_elements_text(r->'dead_tokens')
+                       FROM jsonb_array_elements(coalesce(p_results, '[]'::jsonb)) r
+                      WHERE jsonb_typeof(r->'dead_tokens') = 'array');
+  RETURN v_count;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.claim_push_batch(integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.complete_push_batch(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_push_batch(integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.complete_push_batch(jsonb) TO service_role;

@@ -7019,3 +7019,80 @@ kit_spot.py -> settings renders with restyled danger button; no writes, no error
 - The test account's active bakery during the drive was Smoke Bakery B (little data), so search results were
   shown for its one product and its orders; customer search was proven in SQL.
 - Photo upload (Q9) not built; manager invite actions proven in SQL only. No new dependencies. Nothing committed.
+
+---
+
+## 2026-09-17 — P9.9 queue completed: Q3 branch performance, Q4 sales by staff/method, Q5 notifications + push, Q9 profile photo
+
+### Request and decisions
+
+"okay let's continue on the queue" → the four remaining items all needed decisions; asked in one
+AskUserQuestion and answered: Q3 owner/admin all + managers own; Q4 managers up see all, crew own
+(supervisors method split only); Q5 in-app + phone push; Q9 only the profile photo. "when you are done make
+git push". Recorded as AD-027.
+
+### Backend (applied live)
+
+- `sales_breakdown_and_branch_performance` — `private.report_period`, `get_sales_breakdown`,
+  `get_branch_performance`.
+- `set_my_avatar` — own-folder, own-upload profile photo path, audited.
+- `notifications_and_push` — `notifications`, `push_tokens` (RLS forced, SELECT-only grants), leads helper,
+  `private.notify`, triggers on tickets/payments/product_stock_levels/organization_invites/cash_sessions,
+  `mark_notifications_read`, `register_push_token`, `unregister_push_token`, `claim_push_batch`,
+  `complete_push_batch` (service_role).
+- Edge Function `dispatch-push` deployed via `mcp__supabase__deploy_edge_function` (version 1, verify_jwt true).
+- Found, not changed: TD-021 (storage update policy), TD-022 (push relies on app pings).
+
+### App
+
+- Packages (owner-approved): `expo-image-picker ~57.0.18`, `expo-notifications ~57.0.19`; app.json plugins
+  with permission text.
+- Types/schemas/API/hooks for sales breakdown, branch performance, notifications, avatar upload.
+- Screens: `reports/sales`, `reports/branches`, Notifications history in `(tabs)/alerts`, bell dot, Account
+  photo sheet; `PushBridge` (registration, tap routing with a route allowlist, sign-out unregister); the
+  QueryClient's MutationCache pings `dispatch-push` after successful writes (throttled).
+- Kit: `Sparkline`, `features/reports/components/HBar`, `formatNairaShort` (+5 tests), `Avatar uri`.
+- Entry points: Reports menu (Sales report, Branch performance), Operations Sales tile, supervisor Home stat,
+  owner Home Branches → Compare.
+
+### Executed evidence
+
+```
+Rolled-back SQL Q3/Q4 -> 27/27 (scopes full/branch/own, method split incl. pos/transfer deltas, staff sums,
+  recent methods + seller, manager refused at other branch, supervisor no staff, cashier own only, baker
+  refused, branch performance all/managed, shares ~100, 7-day trend, helper + anon refused)
+Rolled-back SQL Q9 -> 11/11 (own upload set + audited; other person/org folder, missing upload, someone
+  else's upload, other bucket, traversal, gif refused; null clears; anon refused)
+Rolled-back SQL Q5 -> 24/24 on the second run (first run's E1/E6 failures were test setup: generated columns
+  total_amount / variance_amount) — order_new, order_ready, payment_received (+ counter sale not news),
+  stock_out (+ no repeat), invite_accepted, till_variance; own-only RLS; no direct writes; mark one/all read;
+  token register/invalid/handover; client cannot claim; claim/skip/no double claim/complete + dead token;
+  other org sees none; anon refused
+apply_migration x3 -> success; live grant checks: report functions {authenticated, postgres, service_role},
+  helpers {postgres}; no test rows left (auth users 1)
+deploy_edge_function dispatch-push -> ACTIVE v1; live POST with the anon key -> HTTP 200 {"claimed":0,"sent":0,"failed":0}
+  (an empty queue drained; a signed-in caller can only make queued pushes go sooner, not choose what is sent)
+npm run typecheck --workspace apps/mobile -> 0 errors
+npm test -> 81 passed (8 suites)
+npm run lint --workspace apps/mobile -> eslint . --max-warnings=0, exit 0
+expo export --platform web -> exit 0; served on :5183, prototype on :5184
+Playwright drive at 390x844 (signed in as the smoke owner, reads only):
+  home bell label "Notifications, 3 unread"
+  /reports/sales   -> "Today · ₦0.00 · 0 sales", 1 salesperson section, 3 method tiles, Transfer chip -> "No sales match"
+                      (Smoke Bakery B has no sales today; structure verified, figures not)
+  /reports/branches-> "Today · all branches", 1 branch card with share and trend
+  /account         -> photo sheet opens: Profile photo / Choose a photo / Take a photo
+  /alerts          -> groups ORDERS & PRODUCTION, PAYMENTS & CASH, INVENTORY, TEAM & ACCOUNT; "3 unread";
+                      Mark all as read present (notification rows served as sample data, GET/HEAD intercepted)
+  rpcs called: get_sales_breakdown, get_branch_performance, get_revenue_report
+  mutating requests: none; page errors: none
+Parity screenshots vs prototype: sales-monitor, report-branches, notifications, account — differences recorded
+  in bakeflow-frontend/docs/PROTOTYPE-PORT.md (2026-09-17 addendum)
+
+```
+
+### Not done / not claimed
+
+- No push reached a real phone (needs FCM/APNs credentials and an EAS build); no photo was uploaded to
+  production from the app; the notification screen was shown with sample rows intercepted in the browser.
+- Receipt and delivery-proof uploads not built (owner scoped Q9 to the profile photo).

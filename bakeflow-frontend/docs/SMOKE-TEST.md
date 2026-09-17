@@ -105,6 +105,24 @@ Each step says what to do, then what you should see. Tick it or note what happen
 5. Switch to **Units sold**. → The product with the most units is first.
 6. As a **baker** or **supervisor**, open Reports. → The figures are refused, not shown as zero.
 
+### 4d. Sales monitoring, branch performance, notifications, photo
+
+1. As a cashier, ring up a POS sale; as the owner, record a transfer payment on an order someone else took.
+   Reports → **Sales report**. → By salesperson lists both people; POS and Transfer tiles include the amounts;
+   Recent transactions shows both with their method; the Transfer chip filters to one.
+2. The same screen as a **supervisor**: no salesperson card, no names. As the **cashier**: "Your sales" only.
+3. Owner: Home → Branches → **Compare** (or Reports → Branch performance). → Every branch; a manager sees only
+   theirs; a cashier cannot open it.
+4. Owner submits nothing; a **cashier** creates and submits a customer order. → The owner's and manager's bell
+   shows a dot; Notifications lists "New order …"; tap it → the order opens and the dot clears.
+5. Move that order to **Ready** as the owner. → The cashier gets "Order … is ready".
+6. Close a till short by ₦500 as a cashier. → Managers get "Till closed short by ₦500.00".
+7. Sell the last unit of a product. → Leads get "… is out of stock".
+8. On a phone build with push credentials: repeat step 4 with the app in the background → a push arrives;
+   tapping it opens the order. Sign out → no more pushes to that phone for that person.
+9. Account → tap the photo **+** → Choose a photo → pick one under 2 MB. → "Photo updated"; the photo shows on
+   Account, More and Settings; Audit log has a profile update. Remove photo → initials again.
+
 ## 5. Stock (owner, manager, baker)
 
 1. More → **Stock** → tap a product → set the count to a new number → *Correction* → Save count.

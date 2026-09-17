@@ -1191,13 +1191,13 @@ need an owner answer before building (CLAUDE.md blocker rule).
 |---|---|---|---|
 | Q1 | ✅ **DONE 2026-09-14** — Ranged revenue report (`get_revenue_report`) | `reports` hero + statement periods, `finance` 7/30/90-day switch | Migration `20260914130000_revenue_report_and_product_performance.sql`; custom-date UI not built (API accepts dates; no date-picker dependency) |
 | Q2 | ✅ **DONE 2026-09-14** — Product performance (`get_product_performance`) | `reports/products` | Sales value before order discounts; no margin (AD-022) |
-| Q3 | Branch performance (revenue, collected, tickets per branch over a range) | `report-branches` | Owner/admin only? *decide* |
-| Q4 | Sales by staff member and by payment method | `sales-monitor`, supervisor/manager homes | Who may see other staff's figures? *decide* |
-| Q5 | Notification events (history table + read state) | `notifications` history, bell badge | Which events notify whom? *decide*; P6.3 is DEFERRED today |
+| Q3 | ✅ **DONE 2026-09-17** — Branch performance (`get_branch_performance`) | `reports/branches` | AD-027: owner/admin all, managers their branches |
+| Q4 | ✅ **DONE 2026-09-17** — Sales by staff and method (`get_sales_breakdown`) | `reports/sales` | AD-027: full / branch / own scopes |
+| Q5 | ✅ **DONE 2026-09-17** — Notifications + push (`notifications`, `push_tokens`, triggers, `dispatch-push`) | `alerts` (Notifications), bell badge, phone push | AD-027; push needs Expo FCM/APNs credentials (owner) |
 | Q6 | ✅ **DONE 2026-09-17** — Search (`search_workspace`, SECURITY INVOKER) | `search` | ILIKE + phone-digit match, no extension; pg_trgm when tables grow (TD-020) |
 | Q7 | ✅ **DONE 2026-09-17** — Invite revoke and resend | `invites` action sheet | Resend rotates the token on the same row; both audited |
 | Q8 | ✅ **DONE 2026-09-17** — Profile update, name + contact phone (`update_my_profile`) | `account` Edit | Avatar still needs Q9 |
-| Q9 | File upload (expense receipts, proof of delivery, avatars) | `add-expense` receipt, delivery proof photo | Buckets and tenant-folder policies already exist; needs row linkage columns + client picker dependency (ask before adding) |
+| Q9 | ✅ **DONE 2026-09-17 (profile photo only, by owner decision)** — `set_my_avatar` + upload | `account` photo | Receipts and delivery proofs not needed now; storage update policy gap → TD-021 |
 
 Pending before this queue (not part of it): apply AD-025's invite migration
 (`20260913120100_bind_invite_acceptance_to_email.sql`, BLOCKER-031) once the owner approves.

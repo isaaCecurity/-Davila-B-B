@@ -861,7 +861,7 @@ during the port.
 | 7 | more | `(tabs)/more` | ✅ |
 | 8 | my-activity | → `my-sales`, `tickets` | ↪ covered |
 | 9 | profile | `account` | ✅ |
-| 10 | notifications | `(tabs)/alerts` | ✅ live to-do feed (no notification history table) |
+| 10 | notifications | `(tabs)/alerts` | ✅ history + push (Q5) above the live to-do list |
 | 11 | orders | `(tabs)/orders` | ✅ |
 | 12 | order | `order/[id]` | ✅ |
 | 13 | new-ticket | `driver/sell` (driver), `new-order` | ✅ |
@@ -886,7 +886,7 @@ during the port.
 | 32 | add-my-expense | `add-expense` | ✅ same screen |
 | 33 | reports | `reports` | ✅ |
 | 34 | report-products | `reports/products` | ✅ P9.9 Q2 (no margin — AD-022) |
-| 35 | report-branches | — | ⛔ needs a report endpoint |
+| 35 | report-branches | `reports/branches` | ✅ Q3 |
 | 36 | products | `products` | ✅ |
 | 37 | product-detail | `product/[id]` | ✅ |
 | 38 | customers | `customers` | ✅ |
@@ -894,7 +894,7 @@ during the port.
 | 40 | staff | `(tabs)/staff` | ✅ |
 | 41 | invites | `invites` (+ new `invite` for the invitee) | ✅ |
 | 42 | operations | `(tabs)/operations` | ✅ |
-| 43 | sales-monitor | → `orders` | ⛔ needs per-staff / per-method aggregates |
+| 43 | sales-monitor | `reports/sales` | ✅ Q4 |
 | 44 | inventory-monitor | `inventory`, `inventory/[warehouseId]` | ✅ |
 | 45 | production | `(tabs)/production` | ✅ as the order queue (AD-022) |
 | 46 | production-monitor | `(tabs)/production` | ✅ same |
@@ -1112,4 +1112,27 @@ row, No matches, 6 orders); account rows and Edit validation (bad phone disables
 hint); invites with sample rows intercepted in the browser — pending sheet (Resend + Revoke), revoke
 confirmation, expired sheet offers Resend, accepted sheet offers nothing. Zero revoke/resend/profile
 calls, no mutating requests, no page errors.
+
+### Addendum 2026-09-17 (queue end) — sales monitoring, branch performance, notifications, profile photo
+
+Compared at 390 × 844 with the prototype (`nav('sales-monitor')`, `nav('report-branches')`,
+`nav('notifications')`, `nav('account')`).
+
+- **sales-monitor → `reports/sales`:** "Today · ₦total · N sales"; By salesperson `.hbar` card (first name,
+  short money, leader apricot); By payment method tiles (Cash, Transfer, POS; Card/Credit only when used);
+  Recent transactions with All/Cash/Transfer/POS chips. Differences: tiles show money collected after refunds;
+  a supervisor sees no salesperson card and no seller names; a cashier/driver sees "Your sales"; rows open the
+  order and show "Walk-in" when there is no customer.
+- **report-branches → `reports/branches`:** ink hero "Revenue today · Across N branches · X orders"; one
+  card per branch (store tile, orders · staff, revenue, "% of today's revenue", 7-day sparkline, bar against the
+  leader). Differences: no delta chips or insight (period comparison on money); the primary branch is outlined
+  instead of "you are here".
+- **notifications → `(tabs)/alerts`:** title Notifications, "N unread", ✓ mark all read, grouped rows with tone
+  strip, tile, title, "time · detail", unread dot, chevron. Differences: groups are Orders & production,
+  Payments & cash, Inventory, Team & account (no insight/invoice/sign-in events); the live "needs attention"
+  list stays below the history. Home bell shows an apricot dot when anything is unread.
+- **account photo:** the prototype's "+" on the avatar opens Profile photo (Choose a photo / Take a photo /
+  Remove photo); More and Settings show the photo.
+- Kit additions: `Sparkline` (prototype `spark()`), `HBar` (`.hbar` measurements), `formatNairaShort`
+  (prototype `moneyShort`, exact string arithmetic, 5 tests), `Avatar` `uri`.
 

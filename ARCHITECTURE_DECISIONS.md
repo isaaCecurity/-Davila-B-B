@@ -1068,3 +1068,40 @@ bearer link), and a branch manager invites **crew only, into their own branch**.
 Migration: `supabase/migrations/20260914100000_invite_by_role_email_or_phone.sql`, applied live
 2026-09-14. Verified first in a rolled-back transaction (26/26 — see IMPLEMENTATION_LOG.md), then live.
 
+## AD-027 — Report visibility, notifications with phone push, profile photos · APPROVED, IMPLEMENTED 2026-09-17
+
+**Decisions (product owner, 2026-09-17, asked and answered):**
+- **Branch performance (Q3):** owners and admins compare every branch; a branch manager sees only the
+  branches they manage; nobody else.
+- **Sales by staff and payment method (Q4):** owner, admin and the branch's manager see every salesperson
+  and the method split; supervisors (and accountants) see totals and the method split without per-person
+  figures; cashiers and drivers see only their own sales.
+- **Notifications (Q5):** an in-app history **and** phone push.
+- **Uploads (Q9):** "The only upload that's needed for now is the profile photo." Expo's image picker is
+  the one package added for it (asked as part of the Q9 question); `expo-notifications` was added for the
+  push choice.
+
+**Implementation judgements (recorded, not guessed business rules):**
+- Notification events are the six offered with the choice: new order (ticket → submitted), order ready,
+  payment received, stock out (a level crossing from above zero to ≤ 0), invite accepted, till closed
+  with a variance. Recipients: "leads" (owners/admins + that branch's managers), plus the order's creator
+  and assignee for *order ready*, the order's creator for *payment received*, the invite's sender for
+  *invite accepted*. The person who caused an event never receives it. A payment recorded by the same
+  person who created the sale is not news (keeps every counter and roadside sale from notifying).
+- Push without a database extension: triggers queue each notification; the app pings the `dispatch-push`
+  Edge Function after any successful write (at most every 3 s); the function claims queued rows with the
+  service role, sends through Expo's push service, records sent/failed and revokes dead tokens. No
+  `pg_net`/`pg_cron` was installed (previously treated as separate decisions).
+- Push tokens are per organization and person; a device registering for someone else revokes the previous
+  person's token on it; sign-out unregisters the device.
+- Profile photos live in the private `avatars` bucket under `<organization>/profiles/<user>/`, a new file
+  name per upload (never overwriting), set through `set_my_avatar()` (own folder, own upload, audited) and
+  shown through one-hour signed URLs.
+
+Migrations (all applied live 2026-09-17 after rolled-back tests): `20260917120000_sales_breakdown_and_branch_performance.sql`
+(27/27), `20260917140000_set_my_avatar.sql` (11/11), `20260917160000_notifications_and_push.sql` (24/24).
+Edge Function `dispatch-push` deployed (verify_jwt on).
+
+**Owner setup still needed for pushes to reach phones:** push credentials in the Expo project — FCM (Android)
+and APNs (iOS) — see NOTIFICATIONS.md. In-app notifications work without it.
+
