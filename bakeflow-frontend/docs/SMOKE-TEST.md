@@ -8,8 +8,25 @@ the part nobody has pressed yet. Run it before relying on the new screens.
 
 - **Use a test bakery, never a real one.** Every step below writes real rows: orders, payments,
   stock movements, cash sessions, invites. Nothing here can be undone from the app.
-- You need one account per role you want to test (owner, branch manager, cashier, baker,
-  driver, supervisor). Invite them from **More → Staff & activity → +** (see §8).
+- **One account per role already exists in Smoke Bakery A**, so nobody has to hand-invite eight
+  people before testing can start (`20260919120000_smoke_role_credentials.sql`, applied live
+  2026-09-19). Same password as the existing `smoke.owner@bakeflow.test`; only the local part of
+  the email changes per role:
+
+  | Role | Email |
+  |---|---|
+  | Owner | `smoke.owner@bakeflow.test` |
+  | Admin | `smoke.admin@bakeflow.test` |
+  | Branch manager | `smoke.manager@bakeflow.test` |
+  | Cashier | `smoke.cashier@bakeflow.test` |
+  | Baker | `smoke.baker@bakeflow.test` |
+  | Driver | `smoke.driver@bakeflow.test` |
+  | Supervisor | `smoke.supervisor@bakeflow.test` |
+  | Accountant | `smoke.accountant@bakeflow.test` (disabled in MVP 1 — no app screen invites or shows this role; the account exists for backend testing only) |
+
+  All eight belong to **Smoke Bakery A** (`ab..da01`, branch Smoke A1); the branch-scoped ones
+  (everyone but owner/admin) are already assigned to that branch. Inviting real people is still
+  §8's job — this is only the fixed set used to click through each role.
 - Run the app with `npx expo start` from `bakeflow-frontend/apps/mobile`, on a phone (Expo Go /
   dev build) and, if you like, in the web preview. Test at least once on a real phone — the
   count-up figures and gestures use a native path that the web preview does not.

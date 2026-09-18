@@ -7125,3 +7125,36 @@ apply_migration -> success; live pg_policies check shows UPDATE and DELETE both 
 storage.objects row count at the time: 0 (no existing file was affected)
 npm run typecheck --workspace apps/mobile -> 0 errors
 ```
+
+---
+
+## 2026-09-19 — Smoke Bakery A: one sign-in-capable account per role
+
+Owner asked: "add credentials for every role in the smoketest bakery." Only `smoke.owner` existed;
+manual testing (`SMOKE-TEST.md`) required inviting every other role by hand each time.
+
+`20260919120000_smoke_role_credentials.sql` creates `smoke.admin`, `smoke.manager` (branch_manager),
+`smoke.cashier`, `smoke.baker`, `smoke.driver`, `smoke.supervisor`, `smoke.accountant` — real
+`auth.users` rows (bcrypt via `pgcrypto`, matching how GoTrue itself would hash), a matching
+`auth.identities` row for the `email` provider, and the same `profiles` + `user_roles` +
+`branch_assignments` writes `accept_organization_invite()` makes on a first acceptance. All eight
+now sit in Smoke Bakery A (`ab..da01`) / branch Smoke A1; owner and admin are organization-wide
+(no `branch_id`), matching `docs/ROLES-AND-PERMISSIONS.md`'s hierarchy. Accountant is included
+despite being MVP-1-disabled (CLAUDE.md: "do not remove it from the role model"); there is no
+in-app invite path to it, so the account is for backend/RLS testing only. Supervisor needed no
+extra "enable" step — the docs describe no separate feature-flag table beyond holding the role.
+
+```
+Rolled-back dry run -> 35/35 (profile row per account; bcrypt hash verifies with crypt(); an
+  auth.identities row exists with provider='email'; the user_roles row has the right role and
+  branch_id — null for admin, Smoke A1 for the rest; branch_assignments row present for the
+  branch-scoped ones; tenant A ends with exactly 8 role rows)
+apply_migration -> success
+Live probe: POST /auth/v1/token?grant_type=password for all 7 new emails -> HTTP 200, each JWT's
+  tenant_id = Smoke Bakery A and roles = [<that role>] (the admin account signs a "manager" email
+  smoke.manager@bakeflow.test to a branch_manager role, matching the doc's own naming)
+```
+
+Docs: `SMOKE-TEST.md` "Before you start" now lists all eight emails (same shared password as the
+existing owner account) instead of telling the tester to invite them; a short pointer added at the
+top of `scripts/smoke-signed-in.mjs`. Baseline file appended. No app code changed.
