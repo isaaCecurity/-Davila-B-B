@@ -128,7 +128,7 @@ BEGIN
   -- suite (2026-08-15) failed here with 'audit rows = 0' while the row existed: the
   -- assertion was evaluated as `authenticated` holding branch_manager, and audit_log's
   -- SELECT policy is
-  --     tenant_id = current_tenant_id() AND has_role('owner','admin','accountant')
+  --     tenant_id = current_tenant_id() AND has_role('owner','admin')
   --                                     AND deleted_at IS NULL
   -- so a branch_manager cannot see the audit trail they just caused to be written.
   -- Measuring an invariant through a policy that hides it tests the policy, not the
@@ -138,7 +138,7 @@ BEGIN
     n>=1, 'audit rows = '||n);
 
   -- A11c -- the audit trail is not readable by the role that writes to it. Deliberate:
-  -- audit_log is for owner/admin/accountant, and a branch_manager seeing every action in
+  -- audit_log is for owner/admin, and a branch_manager seeing every action in
   -- their organization would be a privilege they are not granted elsewhere either.
   SELECT count(*) INTO n FROM public.audit_log;
   INSERT INTO _r VALUES ('A11c a branch_manager cannot read audit_log at all', n=0,

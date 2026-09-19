@@ -46,9 +46,9 @@
 --     payment.create/.reverse to mirror, unlike customer.create where the catalog superseded a
 --     stale RLS array.
 --   - expense.create has no RPC precedent at all -- expenses are inserted directly by clients,
---     gated by the expenses_insert RLS policy (owner/admin/branch_manager/cashier/accountant).
+--     gated by the expenses_insert RLS policy (owner/admin/branch_manager/cashier).
 --     That RLS array conflicts with the role_permissions catalog's financial.expense.create
---     grants (owner/admin/branch_manager/supervisor/accountant -- no cashier) on BOTH cashier
+--     grants (owner/admin/branch_manager/supervisor -- no cashier) on BOTH cashier
 --     and supervisor. Unlike the customer.create precedent (an outdated EB-013 doc vs. a
 --     current, deployed role_permissions catalog), this is two independently live, deployed
 --     mechanisms disagreeing with each other -- not a stale-doc-vs-database case with a
@@ -95,7 +95,7 @@
 --   E2  invalid category -> REJECTED, 22023 invalid_request
 --   E3  cash paid_method without cash_session_id -> REJECTED, 22023 invalid_request
 --   E4  cash paid_method with a valid cash_session_id at the operation branch -> APPLIED
---   E5  baker (not owner/admin/branch_manager/cashier/accountant) cannot create -> REJECTED, 42501
+--   E5  baker (not owner/admin/branch_manager/cashier) cannot create -> REJECTED, 42501
 --   EV1 branch_manager expense.reverse (partial) -> APPLIED, revision 2 (same expense
 --       entity_id lifecycle ledger, mirrors R1)
 --   EV2 missing expense_id -> REJECTED, 22023 invalid_request
@@ -660,7 +660,7 @@ begin
   -- called log_audit_event -- expenses had no audit trail at all until the new
   -- expenses_audit_trail AFTER trigger was added. Proves the trigger-based fix covers the
   -- sync/RPC write path (financial_write_rls.sql's F25-F27 cover the direct-write path).
-  -- audit_log_select is owner/admin/accountant-only, so this needs its own role switch --
+  -- audit_log_select is owner/admin-only, so this needs its own role switch --
   -- restored to the driver/branch_manager context E2 expects immediately after.
   reset role;
   set local role authenticated;

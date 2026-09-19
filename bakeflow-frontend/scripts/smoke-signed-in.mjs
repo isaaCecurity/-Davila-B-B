@@ -25,10 +25,12 @@ const URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? 'https://tvfyxpafbpnkneujcnv
 const KEY =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? 'sb_publishable_mlUe7laMCw3u08YZqCf6eA_sXIB7jRf';
 
-// Seven more accounts (smoke.admin, smoke.manager, smoke.cashier, smoke.baker, smoke.driver,
-// smoke.supervisor, smoke.accountant — same @bakeflow.test / same password), one per remaining
-// role, all in ORG_A / branch A: docs/SMOKE-TEST.md's "Before you start" table, added by
-// `20260919120000_smoke_role_credentials.sql`. This script only exercises the owner path.
+// Six more accounts (smoke.admin, smoke.manager, smoke.cashier, smoke.baker, smoke.driver,
+// smoke.supervisor — same @bakeflow.test / same password), one per remaining role, all in ORG_A
+// / branch A: docs/SMOKE-TEST.md's "Before you start" table, added by
+// `20260919120000_smoke_role_credentials.sql`. (That migration also added smoke.accountant;
+// the accountant role itself was removed entirely 2026-09-20 — AD-029 — so that account no
+// longer exists.) This script only exercises the owner path.
 const EMAIL = 'smoke.owner@bakeflow.test';
 const PASSWORD = 'SmokeTest!2026';
 const ORG_A = 'ab000000-0000-4000-8000-00000000da01';

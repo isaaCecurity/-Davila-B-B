@@ -65,7 +65,7 @@
 --   U2 cashier-only (no longer authorized post-decision) -> REJECTED, 42501 insufficient_role
 --   U3 branch_manager-only -> APPLIED, revision 2, fields changed
 --   U4 supervisor-only (role held in tenant) -> APPLIED, revision 2
---   U5 unauthorized role (accountant) cannot update -> REJECTED, 42501 insufficient_role
+--   U5 unauthorized role (baker) cannot update -> REJECTED, 42501 insufficient_role
 --   U6 stale base_revision on update -> sync_conflicts row, customer NOT overwritten
 --   U7 identical update replay -> replayed=true, does not create a second sync_changes row
 --   U8 customer_id in payload not matching operation entity_id -> REJECTED, 22023
@@ -575,7 +575,7 @@ begin
     v_row.status || ' ' || v_row.result::text);
 end $$;
 
--- =================== U5: unauthorized role (accountant) cannot update ===================
+-- =================== U5: unauthorized role (baker) cannot update ===================
 do $$
 declare
   v_create_opid uuid := gen_random_uuid();
@@ -589,7 +589,7 @@ begin
       'branch_id', 'ac000000-0000-4000-8000-00000000da01',
       'entity_id', gen_random_uuid(), 'entity_type', 'customers',
       'operation_type', 'CREATE', 'domain_operation', 'customer.create',
-      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Accountant Target')
+      'device_created_at', now()::text, 'payload', jsonb_build_object('full_name','Baker Target')
     )));
   select (result->>'customer_id')::uuid into v_cust_id from public.sync_operations where operation_id = v_create_opid;
 
@@ -598,11 +598,11 @@ begin
     and tenant_id='ab000000-0000-4000-8000-00000000da01';
   insert into public.user_roles (tenant_id, profile_id, role_id)
   select 'ab000000-0000-4000-8000-00000000da01', 'aa000000-0000-4000-8000-00000000da01', id
-  from public.roles where key = 'accountant';
+  from public.roles where key = 'baker';
   set local role authenticated;
   perform set_config('request.jwt.claims', json_build_object(
     'sub','aa000000-0000-4000-8000-00000000da01','tenant_id','ab000000-0000-4000-8000-00000000da01',
-    'roles', array['accountant']
+    'roles', array['baker']
   )::text, true);
 
   perform public.process_sync_batch('f8000000-0000-4000-8000-000000000001',
@@ -628,9 +628,9 @@ begin
     'roles', array['driver']
   )::text, true);
 
-  insert into _results values ('U5 accountant role -> REJECTED 42501, customer unchanged',
+  insert into _results values ('U5 baker role -> REJECTED 42501, customer unchanged',
     v_row.status = 'REJECTED' and v_row.error_code = '42501'
-      and (select full_name from public.customers where id = v_cust_id) = 'Accountant Target',
+      and (select full_name from public.customers where id = v_cust_id) = 'Baker Target',
     v_row.status || ' ' || coalesce(v_row.error_code,''));
 end $$;
 

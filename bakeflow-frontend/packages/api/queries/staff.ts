@@ -160,7 +160,7 @@ export async function listOrganizationInvites(client: BakeflowClient): Promise<O
 }
 
 /**
- * The newest audit entries for the active organization. Owner/admin/accountant only by RLS;
+ * The newest audit entries for the active organization. Owner/admin only by RLS;
  * others receive an empty list. `before`/`after` are not selected (see `AuditEvent`).
  */
 export async function listAuditEvents(client: BakeflowClient, limit = 100): Promise<AuditEvent[]> {

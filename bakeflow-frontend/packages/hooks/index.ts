@@ -1959,7 +1959,7 @@ export function useUpdateMyProfile(
   });
 }
 
-/** The newest audit entries (owner/admin/accountant; RLS returns none to anyone else). */
+/** The newest audit entries (owner/admin; RLS returns none to anyone else). */
 export function useAuditEvents(
   client: BakeflowClient,
   tenantId: string | null,

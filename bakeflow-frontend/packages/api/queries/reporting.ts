@@ -38,7 +38,7 @@ import { parseRow, run } from '../internal/read';
  * explicit `YYYY-MM-DD` to look at a different day.
  *
  * @throws {BakeflowApiError} `insufficient_role` when the caller lacks branch access or
- *   an authorized role (owner/admin/branch_manager/cashier/accountant); `invalid_request`
+ *   an authorized role (owner/admin/branch_manager/cashier); `invalid_request`
  *   when there is no active organization.
  */
 export async function getDailyRevenueSummary(
@@ -70,7 +70,7 @@ export async function getDailyRevenueSummary(
  * `get_daily_revenue_summary()`. Totals are summed server-side; nothing is added up here.
  *
  * @throws {BakeflowApiError} `insufficient_role` without branch access or an authorized role
- *   (owner/admin/branch_manager/cashier/accountant); `invalid_request` for an unknown period or
+ *   (owner/admin/branch_manager/cashier); `invalid_request` for an unknown period or
  *   when there is no active organization.
  */
 export async function getRevenueReport(

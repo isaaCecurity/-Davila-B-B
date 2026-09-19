@@ -94,7 +94,7 @@ Refer to these files:
 
 Tasks:
 1. Write SQL DDL to create:
-   - `roles` (pre-defined platform roles: Owner, Admin, Branch Manager, Supervisor, Baker, Cashier, Driver, Accountant — see `docs/ROLES-AND-PERMISSIONS.md` §4 for the live `rank` values)
+   - `roles` (pre-defined platform roles: Owner, Admin, Branch Manager, Supervisor, Baker, Cashier, Driver — see `docs/ROLES-AND-PERMISSIONS.md` §4 for the live `rank` values; an eighth role, Accountant, was removed 2026-09-20, AD-029)
    - `permissions` and `role_permissions` (the permission catalog read by `has_permission()`)
    - `user_roles` (junction table linking profile to role, scoped by `tenant_id`)
    - `branch_assignments` (linking profiles to branches for multi-branch assignment)

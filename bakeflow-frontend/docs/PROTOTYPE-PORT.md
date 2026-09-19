@@ -56,10 +56,11 @@ no hardcoded colours inside screens.
 
 **D3 — Prototype personas map onto canonical roles.** `owner`→Owner, `manager`→Branch
 Manager, `staff` ("Salesperson": own sales, own cash drawer, own expenses)→Cashier,
-`supervisor`→Supervisor, `baker`→Baker, `driver`→Driver, `admin`→Admin. Accountant stays
-disabled. Tab *layout* follows the prototype; what a role can *reach* is decided by the
-real resolved role/permissions — the prototype's own README says its role gating is
-cosmetic.
+`supervisor`→Supervisor, `baker`→Baker, `driver`→Driver, `admin`→Admin. (There was an
+eighth role, Accountant, mapped to the Admin bar while disabled; it was removed entirely
+2026-09-20 — AD-029 — so there is nothing left to map it to.) Tab *layout* follows the
+prototype; what a role can *reach* is decided by the real resolved role/permissions — the
+prototype's own README says its role gating is cosmetic.
 
 **D4 — No new dependency for graphics.** `react-native-svg` is absent, but the repo already
 ships `@shopify/react-native-skia@2.6.2` and `victory-native@41` (Skia + Reanimated

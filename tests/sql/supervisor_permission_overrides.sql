@@ -250,7 +250,7 @@ BEGIN
     v_raised <> 'no exception', 'raised: ' || left(v_raised, 150));
 
   -- ---- PO13: the successful override write produced an audit_log row. audit_log's own
-  -- RLS restricts SELECT to owner/admin/accountant (verified live) -- branch_manager, the
+  -- RLS restricts SELECT to owner/admin (verified live) -- branch_manager, the
   -- actor for every prior step, cannot see it, so switch context first or this silently
   -- reads back zero rows via RLS rather than because nothing was written. ----
   PERFORM set_config('request.jwt.claims',

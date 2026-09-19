@@ -7191,3 +7191,78 @@ npm test -> 81 passed (8 suites)
 ```
 
 TD-023 added and closed in the same entry. No backend or migration change.
+
+---
+
+## 2026-09-20 — Removed the `accountant` role entirely (AD-029)
+
+Owner asked to clarify what the Accountant role was, having no memory of it being part of the
+plan; after the explanation, asked to remove it completely: database, docs, live app.
+
+### Live database (`20260920100000_remove_accountant_role.sql`)
+
+- Deleted `smoke.accountant@bakeflow.test` (`auth.users`, cascading identity/profile/user_roles/
+  branch_assignments) — the account created the day before for role-by-role smoke testing.
+- Deleted its 7 `role_permissions` grants.
+- Rewrote 6 functions (`private.resolve_report_window`, `get_daily_revenue_summary`,
+  `apply_expense_create`, `guard_driver_created_order_assignment`, `update_invoice_due_at`,
+  `get_sales_breakdown`) and 5 RLS policies (`audit_log_select`, `daily_financial_audits_select`,
+  `expenses_insert`, `expenses_update`, `invoices_update`) to drop `accountant` from their
+  `has_role`/`has_role_in` arrays — nothing else in any of them changed.
+- Deleted the `roles` row, then narrowed `roles_key_check` (the CHECK enumerating every allowed
+  `roles.key`) to the remaining 7 keys.
+
+```
+Rolled-back dry run -> 13/13: smoke.accountant's auth.users/profile/user_roles/branch_assignments/
+  identity all gone; roles table has 7 rows, no 'accountant'; role_permissions has no orphans; no
+  function or policy body still mentions 'accountant'; re-inserting a role with key='accountant'
+  hits the narrowed CHECK constraint; a forged JWT claiming role 'accountant' (with a throwaway
+  actor given real branch access) is now refused by get_sales_breakdown with "sales figures are
+  not available to this role"; a supervisor JWT still gets scope='branch' from the same function
+  (the array rewrite didn't break the real case)
+apply_migration -> success
+Live verification query -> role_count=7, accountant_rows=0, smoke_account_left=0,
+  functions_mentioning=0, policies_mentioning=0, roles_key_check narrowed to the 7 remaining keys
+```
+
+### App code
+
+- `navigation/tabs.ts`: dropped the `accountant` entries from `PERSONA_BY_ROLE` and `RANK`.
+- Comment-only mentions fixed in `app/audit.tsx`, `packages/api/queries/reporting.ts`,
+  `packages/api/queries/staff.ts`, `packages/hooks/index.ts`, `packages/types/staff.ts` — none had
+  code logic naming the role, only doc comments describing the (now old) RLS grant lists.
+
+### Docs
+
+CLAUDE.md, `docs/ROLES-AND-PERMISSIONS.md` (tree, role list, §3/§4 tables, rank table, grant
+table, catalog counts 8→7 roles / 93→86 grants), `docs/AI-BUILD-GUIDE.md`, `docs/API-CONTRACT.md`,
+`docs/SCHEMA-REFERENCE.md`, `supabase/seed.sql` (removed the seed row and its grants, added an
+explicit `delete ... where key = 'accountant'` for anyone reseeding from an older snapshot, fixed
+the expected-counts verification block), `docs/SOFT-DELETE-AND-RETENTION.md` (and its `patch/`
+mirror), `bakeflow-frontend/docs/PROTOTYPE-PORT.md`, `bakeflow-frontend/docs/SMOKE-TEST.md`
+(dropped the credential row). `ARCHITECTURE_DECISIONS.md` AD-029 added; AD-027 given a one-line
+forward pointer rather than rewritten. Left untouched, deliberately: `docs/PROJECT-OVERVIEW.md`
+and `docs/DESIGN-TOKENS.md`'s "non-accountant" prose (a different, ordinary-English meaning —
+the target user's lack of bookkeeping background); `IMPLEMENTATION_LOG.md`/`BACKEND_ROADMAP.md`/
+`BLOCKERS.md` entries from before today (historical record — accurate for when they were
+written); the `docs/engineering-bible/` chapters (CLAUDE.md already treats these as superseded by
+the concrete docs for role questions; sweeping every chapter's role list was judged not worth the
+cost for a role that was never reachable from the app — flagged to the owner, not done unasked).
+
+### Test suites
+
+`tests/sql/p3_7_customer_sync.sql`'s U5 case ("unauthorized role cannot update a customer") used
+`accountant`; swapped for `baker` — same intent (a role excluded from `apply_customer_update`'s
+`has_role_in(ARRAY['owner','admin','branch_manager','supervisor'])`), same assertions, only the
+role name and the target's fixture name changed. Six other files had comment-only mentions of the
+old role list, fixed. **Not executed**: this project has no reachable `BAKEFLOW_TEST_DATABASE_URL`
+and no local `psql` in this environment (confirmed today), so the full suite — already true before
+this change — could not be run either before or after the edit. The substitution's safety rests on
+reading `apply_customer_update`'s unchanged, unmodified authorization array directly (baker was
+never in it, same as accountant never was) rather than on an execution result; recorded here
+rather than claimed as tested.
+
+```
+npm run typecheck --workspace apps/mobile -> 0 errors
+npm run lint --workspace apps/mobile -> 0 errors, 0 warnings
+```

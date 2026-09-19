@@ -393,8 +393,8 @@ BEGIN
   FROM public.audit_log
   WHERE entity_type = 'expense' AND entity_id = v_expense_id AND action = 'insert';
 
-  -- F26 — a direct client UPDATE of a NON-amount field (owner/admin/branch_manager/
-  -- accountant, per expenses_update) still leaves an audit_log row with correct
+  -- F26 — a direct client UPDATE of a NON-amount field (owner/admin/branch_manager,
+  -- per expenses_update) still leaves an audit_log row with correct
   -- before/after. Changed to `description`, not `amount`, on 2026-09-05 (BLOCKER-028
   -- resolution): amount is no longer directly editable at all -- see F26b.
   v_raised := 'no exception';
@@ -451,7 +451,7 @@ BEGIN
           'd1000000-0000-4000-8000-000000000001');
 
   -- F28 — role gate: a cashier may not reverse an expense (mirrors record_refund()'s
-  -- own actor list, which likewise excludes cashier/accountant).
+  -- own actor list, which likewise excludes cashier).
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub','d1000000-0000-4000-8000-000000000001',
                       'tenant_id','d0000000-0000-4000-8000-0000000000a1',

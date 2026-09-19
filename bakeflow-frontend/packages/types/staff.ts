@@ -106,7 +106,7 @@ export interface OrganizationInvite {
  * are not carried: they can hold any column of any table, including money rendered as JSON
  * numbers, so the read model keeps only the identifying fields.
  *
- * Readable by owner/admin/accountant (`audit_log_select`, read live 2026-09-13).
+ * Readable by owner/admin (`audit_log_select`, updated live 2026-09-20 — accountant removed).
  */
 export interface AuditEvent {
   id: Uuid;

@@ -16,22 +16,28 @@
 -- Roles
 -- ---------------------------------------------------------------------------
 -- `rank` orders privilege, lower = more privileged. It backs "at least manager"
--- style checks and private.can_manage_target_role(). Ranks 5-7 are intentionally
--- unused so a role can be inserted between supervisor and accountant without
--- renumbering anything.
+-- style checks and private.can_manage_target_role(). Ranks 5-8 are intentionally
+-- unused, leaving room to insert roles without renumbering (rank 8 belonged to
+-- `accountant`, removed 2026-09-20 — ARCHITECTURE_DECISIONS.md AD-029 — and left
+-- open rather than reused).
 
 insert into public.roles (key, name, rank) values
   ('owner',          'Owner',      1),
   ('admin',          'Admin',      2),
   ('branch_manager', 'Manager',    3),
   ('supervisor',     'Supervisor', 4),
-  ('accountant',     'Accountant', 8),
   ('baker',          'Baker',      9),
   ('cashier',        'Cashier',   10),
   ('driver',         'Driver',    11)
 on conflict (key) do update
   set name = excluded.name,
       rank = excluded.rank;
+
+-- 'accountant' (rank 8) was removed 2026-09-20 (AD-029) -- never reachable from the app, and
+-- not recognized by the owner as part of the project's plan. If a stale row survives from an
+-- older seed run, delete it explicitly (it can't be left for `on conflict` above to catch,
+-- since that only inserts/updates keys present in the VALUES list, never removes one):
+delete from public.roles where key = 'accountant';
 
 -- ---------------------------------------------------------------------------
 -- Permissions
@@ -133,12 +139,6 @@ with grants (role_key, permission_key) as (
       'financial.view','reports.view','staff.view',
       'tickets.correct','tickets.create','tickets.view']),
 
-    -- accountant (7) — role exists architecturally, disabled for MVP 1
-    ('accountant', array[
-      'financial.audit.confirm','financial.audit.submit',
-      'financial.expense.create','financial.expense.update','financial.expense.delete',
-      'financial.view','reports.view']),
-
     -- cashier (7)
     ('cashier', array[
       'customers.create','customers.update',
@@ -165,7 +165,7 @@ on conflict (role_id, permission_id) do nothing;
 -- ---------------------------------------------------------------------------
 -- Verification
 -- ---------------------------------------------------------------------------
--- Expected: 8 roles, 25 permissions, 93 grants.
+-- Expected: 7 roles, 25 permissions, 86 grants.
 
 do $$
 declare
@@ -177,10 +177,10 @@ begin
   select count(*) into v_perms  from public.permissions;
   select count(*) into v_grants from public.role_permissions;
 
-  if v_roles <> 8 or v_perms <> 25 or v_grants <> 93 then
-    raise warning 'Seed counts differ from production: roles=% (expected 8), permissions=% (expected 25), grants=% (expected 93)',
+  if v_roles <> 7 or v_perms <> 25 or v_grants <> 86 then
+    raise warning 'Seed counts differ from production: roles=% (expected 7), permissions=% (expected 25), grants=% (expected 86)',
       v_roles, v_perms, v_grants;
   else
-    raise notice 'Seed OK: 8 roles, 25 permissions, 93 grants.';
+    raise notice 'Seed OK: 7 roles, 25 permissions, 86 grants.';
   end if;
 end $$;

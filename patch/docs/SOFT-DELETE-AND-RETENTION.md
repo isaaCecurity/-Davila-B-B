@@ -183,7 +183,6 @@ Current rule:
 | Admin | Yes |
 | Manager / Branch Manager | Yes |
 | Supervisor | No |
-| Accountant | No |
 | Cashier | No |
 | Driver | No |
 | Baker | No |
@@ -206,7 +205,6 @@ Current roles:
 | Admin | Yes |
 | Manager / Branch Manager | Yes |
 | Supervisor | No |
-| Accountant | No |
 | Cashier | No |
 | Driver | No |
 | Baker | No |

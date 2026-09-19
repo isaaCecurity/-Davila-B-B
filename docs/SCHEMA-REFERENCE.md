@@ -73,7 +73,7 @@ Platform-defined, not tenant-scoped. Seeded once.
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID PK | |
-| key | TEXT NOT NULL UNIQUE | owner, admin, branch_manager, baker, cashier, driver, accountant |
+| key | TEXT NOT NULL UNIQUE | owner, admin, branch_manager, baker, cashier, driver, supervisor (an eighth role, `accountant`, was removed 2026-09-20 — AD-029) |
 | name | TEXT NOT NULL | Display name |
 | rank | SMALLINT NOT NULL | Lower = more privileged; used for "at least manager" checks |
 
@@ -865,10 +865,10 @@ unchanged in behavior).**
 	arrays are the only live rule.
 - **`apply_expense_create(p_operation sync_operations)`** has no RPC precedent to mirror —
 	expenses are inserted directly by clients today, gated only by the live `expenses_insert`
-	RLS policy (owner/admin/branch_manager/cashier/accountant), which the handler mirrors via
+	RLS policy (owner/admin/branch_manager/cashier), which the handler mirrors via
 	`has_role_in()`. That RLS array disagrees with the `role_permissions` catalog's
-	`financial.expense.create` grants (owner/admin/branch_manager/supervisor/accountant — no
-	cashier) on both `cashier` and `supervisor`; unlike the `customer.create` precedent (a stale
+	`financial.expense.create` grants (owner/admin/branch_manager/supervisor — no
+	cashier) on `cashier` vs `supervisor`; unlike the `customer.create` precedent (a stale
 	doc vs. a current catalog, with a documented resolution), this is two independently live,
 	deployed mechanisms in conflict — not resolved here, mirrored to the RLS array since that's
 	what actually gates expense creation today (see `IMPLEMENTATION_LOG.md` 2026-08-30 for full
@@ -1054,4 +1054,4 @@ The table design is genuinely good and satisfies much of `OFFLINE-SYNC-MODEL.md`
 - Money columns are `NUMERIC(19,4)`; CHECK `variance = physical_cash - expected_cash`.
 - Status: `DRAFT | PENDING_SYNC | REQUIRES_RECONCILIATION | CONFIRMED | REJECTED`. Note these are UPPERCASE, unlike every other status column in the schema.
 - `guard_daily_financial_audit_mutation()` blocks DELETE; freezes `tenant_id`/`branch_id`/`audit_date`/`submitted_by`; refuses any change once `CONFIRMED` or `REJECTED`; requires owner/admin/branch_manager to confirm or reject; and enforces **segregation of duties — `confirmed_by` may not equal `submitted_by`**.
-- Permissions: `financial.audit.submit` (owner, admin, branch_manager, supervisor, cashier, accountant) and `financial.audit.confirm` (owner, admin, branch_manager, accountant).
+- Permissions: `financial.audit.submit` (owner, admin, branch_manager, supervisor, cashier) and `financial.audit.confirm` (owner, admin, branch_manager).

@@ -39,12 +39,17 @@ Organization
     ├── Cashier
     ├── Baker
     ├── Driver
-    ├── Accountant*
     │
     └── Supervisor*
           └── functions/permissions configured by Branch Manager
 ```
 `*` = optional / feature-gated.
+
+There were eight canonical roles at one point, including an Accountant role (architecturally
+present, disabled for MVP 1). It was never reachable from the app — no invite screen ever offered
+it — and was removed entirely (database, docs, code) 2026-09-20 at the owner's request, who did
+not recognize it as part of the project's plan. See `ARCHITECTURE_DECISIONS.md` AD-029. Do not
+reintroduce it without a fresh decision.
 
 1. **Owner** — highest organizational authority.
 2. **Admin** — assists Owner; permission-controlled, not automatically unlimited.
@@ -53,7 +58,6 @@ Organization
 5. **Cashier** — operational, sales/cash-facing.
 6. **Baker** — operational, production-facing.
 7. **Driver** — operational, delivery-facing. Mobile is the Driver's primary and near-exclusive workspace.
-8. **Accountant** — canonical role, architecturally supported, but **disabled/not enabled for MVP 1**. Do not remove it from the role model just because it isn't exposed to customers yet.
 
 ---
 
@@ -68,7 +72,6 @@ Organization
 | **Cashier** | Create/manage tickets, process payments, open/close cash sessions, record transactions | Limited: view relevant tickets, sales info, cash sessions, reports. No Branch Manager configuration authority. |
 | **Baker** | View production schedule, produce assigned batches, record completion/shortages/damage | Limited: view production info/history, relevant product/recipe/inventory info |
 | **Driver** | Primary workspace. View assigned deliveries, update delivery status, confirm pickup/delivery, record outcomes/failures | Limited or none: view assigned deliveries, delivery history |
-| **Accountant** *(disabled in MVP 1)* | Future: financial dashboards, transactions, cash sessions, sales, reports, alerts | Future: financial dashboards/reports, revenue analysis, cash/transaction review, export |
 
 ---
 
@@ -82,7 +85,7 @@ Role → available functions → configurable permissions
 
 A Branch Manager can toggle individual functions on/off per Supervisor (and this mechanism should extend to future granular roles, not just Supervisor).
 
-**The catalog now exists.** An earlier revision of this document said it did not. Live: `permissions` (25 rows) and `role_permissions` (93 grants), read by `has_permission(required_permission text, target_branch_id uuid)`. `roles` carries 8 rows with a `rank` (lower = more privileged), and `private.can_manage_target_role(role_id)` gates who may grant which role.
+**The catalog now exists.** An earlier revision of this document said it did not. Live: `permissions` (25 rows) and `role_permissions` (86 grants), read by `has_permission(required_permission text, target_branch_id uuid)`. `roles` carries 7 rows with a `rank` (lower = more privileged), and `private.can_manage_target_role(role_id)` gates who may grant which role.
 
 ### Role ranks
 
@@ -92,12 +95,11 @@ A Branch Manager can toggle individual functions on/off per Supervisor (and this
 | 2 | `admin` | Admin |
 | 3 | `branch_manager` | Manager *(display name is "Manager" in the DB; the canonical term is Branch Manager)* |
 | 4 | `supervisor` | Supervisor |
-| 8 | `accountant` | Accountant |
 | 9 | `baker` | Baker |
 | 10 | `cashier` | Cashier |
 | 11 | `driver` | Driver |
 
-Ranks 5–7 are deliberately unused, leaving room to insert roles without renumbering.
+Ranks 5–8 are deliberately unused, leaving room to insert roles without renumbering (rank 8 was `accountant`'s, removed 2026-09-20 — see AD-029 — and left open rather than reused).
 
 ### Permission keys (25)
 
@@ -117,7 +119,6 @@ Ranks 5–7 are deliberately unused, leaving room to insert roles without renumb
 | **admin** | everything owner has, **plus** `records.permanent_delete` and `tickets.archive` |
 | **branch_manager** | identical to admin |
 | **supervisor** | branch.view, customers.create/update, financial.audit.submit, financial.expense.create/update, financial.view, reports.view, staff.view, tickets.correct/create/view |
-| **accountant** | financial.audit.confirm/submit, financial.expense.create/update/delete, financial.view, reports.view |
 | **cashier** | customers.create/update, financial.audit.submit, financial.view, reports.view, tickets.create, tickets.view |
 | **baker** | tickets.view |
 | **driver** | customers.create/update, tickets.correct, tickets.create, tickets.view |

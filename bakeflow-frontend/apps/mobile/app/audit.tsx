@@ -40,7 +40,7 @@ function describe(entity: string, action: string): string {
 /**
  * Audit log — the prototype's owner `audit`: the accountability record of who changed what.
  *
- * Read-only, newest first, from `audit_log` (owner/admin/accountant by RLS). Actor names come
+ * Read-only, newest first, from `audit_log` (owner/admin by RLS). Actor names come
  * from the staff directory the same roles can read.
  *
  * PORT-NOTE: the prototype writes a sentence per event ("Corrected production entry · Meat Pie

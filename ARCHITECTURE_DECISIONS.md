@@ -1074,8 +1074,8 @@ Migration: `supabase/migrations/20260914100000_invite_by_role_email_or_phone.sql
 - **Branch performance (Q3):** owners and admins compare every branch; a branch manager sees only the
   branches they manage; nobody else.
 - **Sales by staff and payment method (Q4):** owner, admin and the branch's manager see every salesperson
-  and the method split; supervisors (and accountants) see totals and the method split without per-person
-  figures; cashiers and drivers see only their own sales.
+  and the method split; supervisors (and accountants — see the 2026-09-20 note below) see totals and the
+  method split without per-person figures; cashiers and drivers see only their own sales.
 - **Notifications (Q5):** an in-app history **and** phone push.
 - **Uploads (Q9):** "The only upload that's needed for now is the profile photo." Expo's image picker is
   the one package added for it (asked as part of the Q9 question); `expo-notifications` was added for the
@@ -1129,3 +1129,42 @@ policy tests. Direct SQL deletes on `storage.objects` are blocked by Supabase's 
 trigger; the tests set `storage.allow_delete_query` inside the rolled-back transaction to exercise the
 DELETE policy.
 
+
+## AD-029 — The `accountant` role is removed entirely · APPROVED, IMPLEMENTED 2026-09-20
+
+The owner asked what the "Accountant" role was, having no memory of it being part of the project's
+plan, then: "remove the role accountant from the database, docs, and live app, remove everything
+about that role." It had existed since the earliest role model as "architecturally present,
+disabled/not enabled for MVP 1" (CLAUDE.md, `docs/ROLES-AND-PERMISSIONS.md`) but was never
+reachable from the app — no invite screen ever offered it (confirmed live: zero
+`organization_invites` ever used it) — so nothing user-facing changes.
+
+**What was removed, live, after a 13/13 and a 21/13-assertion rolled-back dry run each:**
+- The `smoke.accountant@bakeflow.test` test account created the day before
+  (`20260919120000_smoke_role_credentials.sql`) — its whole `auth.users` row deleted, cascading
+  its identity, profile, `user_roles` and `branch_assignments` rows.
+- 7 `role_permissions` grants (`financial.audit.confirm/submit`,
+  `financial.expense.create/update/delete`, `financial.view`, `reports.view`).
+- 6 functions and 5 RLS policies that listed `accountant` alongside other roles in a
+  `has_role(...)`/`has_role_in(...)` array — each rewritten with only that one array entry
+  dropped, nothing else changed. `get_sales_breakdown`'s branch-scope check
+  (`has_role(ARRAY['supervisor','accountant'])` → `has_role(ARRAY['supervisor'])`) is the one
+  case where this had live effect — every other array's accountant entry was already a no-op
+  since no one held the role.
+- The `roles` row itself, then `roles_key_check` (a CHECK constraint enumerating every allowed
+  `roles.key`) narrowed to the remaining 7 keys so it cannot be silently reintroduced.
+
+**Not removed:** the ordinary-English word "accountant" in `docs/PROJECT-OVERVIEW.md` and
+`docs/DESIGN-TOKENS.md` ("the product should work for a non-accountant") — that describes the
+target user's lack of bookkeeping background, unrelated to the role.
+
+**Left as historical record, not rewritten:** `IMPLEMENTATION_LOG.md`, `BACKEND_ROADMAP.md`, and
+`BLOCKERS.md` entries written before 2026-09-20 that mention the role — they accurately describe
+what was true when written (CLAUDE.md's evidence rule). `docs/engineering-bible/` chapters that
+enumerate the old eight-role list were not swept; CLAUDE.md already treats them as superseded by
+this document for anything role-related, and doing so for every EB chapter mentioning a role list
+was judged not worth the token cost for a role that was already never reachable — flagged to the
+owner rather than done unasked.
+
+Migration `20260920100000_remove_accountant_role.sql`, applied live. Storage held 0 objects for
+this account (per AD-028's TD-021 fix the day before), so nothing there was affected either.

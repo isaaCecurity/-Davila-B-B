@@ -29,16 +29,12 @@ export const PERSONA_LABEL: Record<Persona, string> = {
   admin: 'Admin',
 };
 
-/**
- * Live `roles.key` → persona. Accountant is architecturally present but disabled in MVP 1
- * (CLAUDE.md), so it lands on the minimal Admin bar rather than a finance-heavy one.
- */
+/** Live `roles.key` → persona. */
 const PERSONA_BY_ROLE: Record<string, Persona> = {
   owner: 'owner',
   admin: 'admin',
   branch_manager: 'manager',
   supervisor: 'supervisor',
-  accountant: 'admin',
   baker: 'baker',
   cashier: 'cashier',
   driver: 'driver',
@@ -50,7 +46,6 @@ const RANK: Record<string, number> = {
   admin: 2,
   branch_manager: 3,
   supervisor: 4,
-  accountant: 8,
   baker: 9,
   cashier: 10,
   driver: 11,

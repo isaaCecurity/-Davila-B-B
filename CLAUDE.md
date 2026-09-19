@@ -45,7 +45,7 @@ These override anything ambiguous or contradictory found elsewhere. If an EB doc
 
 ## Domain vocabulary (canonical)
 
-Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Ticket, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Cashier, Baker, Driver, Accountant (architecturally present, disabled in MVP 1), Supervisor (optional, enabled and configured per-bakery by the Branch Manager — see `docs/ROLES-AND-PERMISSIONS.md`).
+Organization, Branch, Employee, Customer, Product, Product Variant, Ingredient, Recipe (BOM linking a variant to ingredients), Ticket, Invoice, Payment, Production Batch, Stock Movement, Warehouse, Delivery, Cash Session. Roles: Owner, Admin, Branch Manager, Cashier, Baker, Driver, Supervisor (optional, enabled and configured per-bakery by the Branch Manager — see `docs/ROLES-AND-PERMISSIONS.md`). An eighth role, Accountant, was in the original role model but was never reachable from the app and was removed entirely (database, docs, code) 2026-09-20 at the owner's request — see `ARCHITECTURE_DECISIONS.md` AD-029. Do not reintroduce it without a fresh decision.
 
 **"Ticket" is the canonical customer-order entity** — the tables are `tickets` and `ticket_items`, and the permission keys are `tickets.*`. Earlier drafts of these docs called it "Order" and instructed agents to normalize "ticket" to "order"; that is reversed. Normalize the other way: Order means Ticket. Note the historical wart that the live RPC arguments are named `p_order_id` even though they take a `tickets.id` — do not rename them, and do not let the argument name mislead you about the entity.
 
