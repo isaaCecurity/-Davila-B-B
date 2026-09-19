@@ -1,8 +1,9 @@
 import { registerPushToken, unregisterPushToken } from '@bakeflow/api';
 import { getSupabaseClient } from '@bakeflow/auth';
 import { useQueryClient } from '@tanstack/react-query';
+import { isRunningInExpoGo } from 'expo';
 import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
+import type * as NotificationsType from 'expo-notifications';
 import { useRouter, type Href } from 'expo-router';
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
@@ -14,7 +15,21 @@ const SAFE_ROUTE = /^\/(order|product)\/[0-9a-f-]{36}$|^\/(staff|cash|inventory|
 
 let currentToken: string | null = null;
 
-if (Platform.OS !== 'web') {
+/**
+ * `expo-notifications` throws the moment it is imported, on Android, under Expo Go — a module-level
+ * side effect in its own auto-registration code (`DevicePushTokenAutoRegistration.fx.js` calls
+ * `addPushTokenListener()` at load time, which calls Expo's own `warnOfExpoGoPushUsage()`, which
+ * `throw`s on Android there). That crash happens at import time, before any of our code runs, so it
+ * cannot be try/caught — the only fix is to never `require` the module in Expo Go at all. A plain
+ * `import` is hoisted and always evaluated; `require()` behind this runtime check is not.
+ */
+const Notifications: typeof NotificationsType | null =
+  Platform.OS === 'web' || isRunningInExpoGo()
+    ? null
+    : // eslint-disable-next-line @typescript-eslint/no-require-imports -- must be conditional, see comment above; a static `import` is hoisted and would always run.
+      (require('expo-notifications') as typeof NotificationsType);
+
+if (Notifications !== null) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -40,7 +55,9 @@ export async function unregisterCurrentPushToken(): Promise<void> {
 /**
  * P9.9 Q5 phone push. On a phone, once someone is signed in to an organization: ask permission (the
  * system asks once; a refusal is respected), get this device's Expo push token and register it for
- * that organization. A tapped notification opens its screen. Renders nothing; does nothing on web.
+ * that organization. A tapped notification opens its screen. Renders nothing; does nothing on web
+ * or under Expo Go (the library cannot do push there at all — see the `Notifications` guard above
+ * — a development build is required; in-app notifications work everywhere regardless).
  *
  * Needs push credentials in the Expo project (FCM for Android, APNs for iOS) before phones receive
  * anything; until then registration still succeeds and pushes are recorded as failed.
@@ -52,7 +69,7 @@ export function PushBridge(): null {
   const tenantId = useSessionStore((s) => s.activeTenantId);
 
   useEffect(() => {
-    if (Platform.OS === 'web' || userId === null || tenantId === null) return;
+    if (Notifications === null || userId === null || tenantId === null) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -80,7 +97,7 @@ export function PushBridge(): null {
   }, [userId, tenantId]);
 
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Notifications === null) return;
     const received = Notifications.addNotificationReceivedListener(() => {
       void queryClient.invalidateQueries({ predicate: (q) => q.queryKey.includes('notifications') || q.queryKey.includes('notifications-unread') });
     });

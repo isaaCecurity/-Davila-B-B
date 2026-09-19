@@ -7158,3 +7158,36 @@ Live probe: POST /auth/v1/token?grant_type=password for all 7 new emails -> HTTP
 Docs: `SMOKE-TEST.md` "Before you start" now lists all eight emails (same shared password as the
 existing owner account) instead of telling the tester to invite them; a short pointer added at the
 top of `scripts/smoke-signed-in.mjs`. Baseline file appended. No app code changed.
+
+---
+
+## 2026-09-19 — Fixed: expo-notifications crashed the app in Expo Go on Android (TD-023)
+
+Owner ran `npx expo start`, hit `_layout.tsx`/`settings.tsx`/`(tabs)/more.tsx` all reported as
+"missing the required default export", then `TypeError: Cannot read property 'ErrorBoundary' of
+undefined` — the app never rendered.
+
+Root cause: `expo-notifications`'s own `DevicePushTokenAutoRegistration.fx.js` calls
+`addPushTokenListener()` at **module load time** (a `.fx.js` side-effect file), which calls Expo's
+`warnOfExpoGoPushUsage()`, which `throw`s on Android under Expo Go. This happens the instant the
+module is imported — before any of our own code, including our try/catch around
+`getExpoPushTokenAsync`, ever runs. Every file that (transitively) imported `PushBridge.tsx` lost
+its whole module evaluation as a result.
+
+Fix: `features/notifications/PushBridge.tsx` no longer statically imports `expo-notifications`. It
+`require()`s the module at runtime only when `Platform.OS !== 'web' && !isRunningInExpoGo()`
+(`isRunningInExpoGo` from the `expo` package) — a static `import` is hoisted by Metro into an
+unconditional `require`, so this had to become a real conditional `require`, with only a type-only
+import kept for typing. Both effects and the top-level `setNotificationHandler` call now guard on
+`Notifications === null`. In-app notifications, sign-in, and everything else are unaffected; push
+registration silently no-ops in Expo Go, same behavior as the already-documented "missing push
+credentials" case.
+
+```
+npm run typecheck --workspace apps/mobile -> 0 errors
+npm run lint --workspace apps/mobile -> 0 errors, 0 warnings (one eslint-disable added, with reason,
+  for the now-deliberate require())
+npm test -> 81 passed (8 suites)
+```
+
+TD-023 added and closed in the same entry. No backend or migration change.
